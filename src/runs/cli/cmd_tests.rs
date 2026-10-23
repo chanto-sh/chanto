@@ -417,7 +417,7 @@ fn run_options_come_from_the_flags() {
 async fn run_bg_starts_a_run_from_the_command_line() {
     let d = Daemon::start("cli-bg").await;
     let repo = make_repo(&d.home);
-    let (base, _) = mock_server(write_hello()).await;
+    let (base, seen) = mock_server(write_hello()).await;
     let e = format!("{:#}", run_bg(&cli(&["--bg", "run"])).await.unwrap_err());
     assert!(e.contains("usage: chanto run --bg"), "{e}");
     let c = cli(&[
@@ -444,9 +444,22 @@ async fn run_bg_starts_a_run_from_the_command_line() {
     assert_eq!(runs[0].source.path, repo);
     let done = wait_for(&d.m, &runs[0].id, "finished", finished).await;
     assert_eq!(done.state, RunState::Done, "{:?}", done.error);
+    // The scripted turn and nothing else: the Write, then the answer. If the
+    // work isn't on the branch, the run's events say why (a failed Write, or
+    // a "could not commit" warning when git can't, e.g. on a full disk).
+    let events = d.home.store().events(&done.id);
+    assert_eq!(seen.lock().unwrap().len(), 2, "{events:#?}");
+    let shown = std::process::Command::new("git")
+        .args(["show", &format!("{}:hello.txt", done.branch)])
+        .current_dir(&repo)
+        .output()
+        .unwrap();
     assert_eq!(
-        sh(&repo, &["show", &format!("{}:hello.txt", done.branch)]),
-        "hi"
+        String::from_utf8_lossy(&shown.stdout).trim(),
+        "hi",
+        "hello.txt isn't on {}: {}\nrun events: {events:#?}",
+        done.branch,
+        String::from_utf8_lossy(&shown.stderr).trim()
     );
     // `--on` a server nobody added.
     let e = format!(
