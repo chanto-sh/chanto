@@ -1,11 +1,11 @@
 [package]
 name = "chanto"
-version = "0.1.12"
+version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "A coding agent for your terminal that checks its own work"
+description = "A fast, lean coding agent for your terminal"
 homepage = "https://chanto.sh"
 documentation = "https://chanto.sh/docs"
 readme = "README.md"
