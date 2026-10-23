@@ -388,7 +388,7 @@ pub async fn login_chatgpt(
     let mut url = reqwest::Url::parse(OAI_AUTHORIZE)?;
     url.query_pairs_mut()
         .append_pair("client_id", "dynamic_agent_client")
-        .append_pair("agent_name_hint", "chanto")
+        .append_pair("agent_name_hint", "Chanto")
         .append_pair("ext_agent_host_id", &host)
         .append_pair("response_type", "code")
         .append_pair("redirect_uri", &redirect)
