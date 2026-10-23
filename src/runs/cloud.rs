@@ -1323,6 +1323,9 @@ pub async fn runs_cmd(args: &[String]) -> Result<i32> {
 }
 
 #[cfg(test)]
+mod cmd_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::{Arc, Mutex};

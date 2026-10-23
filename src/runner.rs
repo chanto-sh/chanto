@@ -1348,6 +1348,9 @@ pub async fn slash(root: &Path, arg: &str) -> String {
 }
 
 #[cfg(test)]
+mod cli_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

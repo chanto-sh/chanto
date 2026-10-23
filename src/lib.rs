@@ -2770,13 +2770,23 @@ fn start_worktree(cli: &Cli, name: &str) -> Result<std::path::PathBuf> {
 
 /// On exit: remove a worktree with no changes, or say how to take them.
 fn finish_worktree() {
+    // Leave the worktree first: Windows can't remove the current directory.
     if let Some((dir, cwd, hooks)) = HOOK_WORKTREE.get() {
+        let _ = std::env::set_current_dir(cwd);
         hooks::finish_hook_worktree(hooks, cwd, dir);
         return;
     }
     let Some(wt) = WORKTREE.get() else { return };
-    if wt.cleanup_if_unchanged() {
-        eprintln!("No changes in {}; removed it.", wt.branch);
+    let _ = std::env::set_current_dir(&wt.repo);
+    if wt.changes().is_empty() {
+        match wt.remove() {
+            Ok(()) => eprintln!("No changes in {}; removed it.", wt.branch),
+            Err(e) => eprintln!(
+                "No changes in {}, but couldn't remove {}: {e:#}",
+                wt.branch,
+                wt.path.display()
+            ),
+        }
     } else {
         eprintln!(
             "Changes are on branch {} in {}.\n  Review: git -C {} diff {}\n  Take them: commit there, then `git merge {}` in your checkout\n  Discard: git worktree remove --force {} && git branch -D {}",

@@ -1,10 +1,12 @@
 name: ci
-# Pull requests run here once; main runs again after each merge. (Running on
-# every branch push as well would run each pull request twice.)
+# Pull requests run here once, again in the merge queue (against the latest
+# main), and main runs after each merge. (Running on every branch push as
+# well would run each pull request twice.)
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 # A newer push to the same branch cancels the run still going for the last one.
 concurrency:
@@ -28,9 +30,10 @@ jobs:
       # The extension's server is also exercised by the Rust IDE tests.
       - run: npm ci && npm test
         working-directory: ide/vscode
-      - run: cargo build --locked -j 2
+      # macOS runners are the slowest: use all their cores, and let
+      # `cargo test` build the binary rather than a separate `cargo build`.
       - run: cargo check --locked -p chanto-desktop
-      - run: cargo test --locked -j 2 --quiet
+      - run: cargo test --locked --quiet
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
@@ -83,7 +86,6 @@ jobs:
   # Test coverage (cargo-llvm-cov, the compiler's own instrumentation) of the
   # Linux suite, including the chanto binary that tests run as a subprocess.
   # The summary goes on the run page; Codecov comments on pull requests.
-  # Informational for now: nothing fails on a coverage number.
   coverage:
     runs-on: ubuntu-latest
     permissions:
@@ -109,12 +111,16 @@ jobs:
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+      # Product code only: test files would inflate the figure.
       - name: Summary
         run: |
+          cargo llvm-cov report --summary-only \
+            --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' > coverage.txt
+          tail -n 1 coverage.txt
           {
-            echo '### Test coverage'
+            echo '### Test coverage (product code)'
             echo '```'
-            cargo llvm-cov report --summary-only | tail -n 1
+            tail -n 1 coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
@@ -122,6 +128,13 @@ jobs:
           files: lcov.info
           use_oidc: true
           fail_ci_if_error: false
+      # After the upload, so a drop is still reported. OpenSSF silver asks
+      # for 80% line coverage.
+      - name: Coverage floor
+        run: |
+          cargo llvm-cov report --summary-only \
+            --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' \
+            --fail-under-lines 80 > /dev/null
   # Exercise the native sandbox and process-tree tests on Windows.
   windows:
     runs-on: windows-latest
@@ -143,6 +156,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo test --locked -j 2 --quiet -p chanto-proto
+  # chanto-proto's public API against its last crates.io release: wire
+  # types change additively only (see the lint levels in proto/Cargo.toml).
+  semver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+        with:
+          package: chanto-proto
   # The desktop app ships in releases, so make sure it builds on every push.
   desktop-linux:
     runs-on: ubuntu-22.04
@@ -184,8 +206,15 @@ jobs:
           node-version: 22
       - run: python3 -m unittest -v test_chanto_sdk
         working-directory: sdk/python
-      - run: npm install --no-save typescript@5 @types/node@22 && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts
+      - run: npm ci --ignore-scripts && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts
         working-directory: sdk/typescript
+  # The JetBrains plugin keeps Gradle's wrapper jar in the repository; check
+  # it is one of Gradle's published wrappers.
+  gradle-wrapper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
   action:
     runs-on: ubuntu-latest
     steps:

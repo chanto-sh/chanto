@@ -57,6 +57,18 @@ fn extract_toml(s: &str) -> Option<String> {
     for fence in ["```toml", "```"] {
         if let Some(start) = s.find(fence) {
             let after = &s[start + fence.len()..];
+            // The rest of the opening line is the block's language tag, not config.
+            let after = match after.split_once('\n') {
+                Some((tag, rest))
+                    if tag
+                        .trim()
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')) =>
+                {
+                    rest
+                }
+                _ => after,
+            };
             if let Some(end) = after.find("```") {
                 let body = after[..end].trim_matches(|c: char| c == '\n' || c == '\r');
                 if !body.trim().is_empty() {
@@ -226,3 +238,6 @@ pub async fn cli(args: &[String]) -> Result<String> {
         }
     ))
 }
+
+#[cfg(test)]
+mod tests;

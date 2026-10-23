@@ -103,23 +103,27 @@ impl Worktree {
     /// Remove the worktree and its branch if the agent changed nothing.
     /// Returns true if it was removed.
     pub fn cleanup_if_unchanged(&self) -> bool {
-        if !self.changes().is_empty() {
-            return false;
+        self.changes().is_empty() && self.remove().is_ok()
+    }
+
+    /// Remove the worktree and its branch, changes or not. On Windows a
+    /// process that just exited (or a virus scan) can hold a file open for
+    /// a moment, so a failed removal is retried briefly.
+    pub fn remove(&self) -> Result<()> {
+        let path = self.path.display().to_string();
+        let mut tries = 0;
+        loop {
+            match git(&self.repo, &["worktree", "remove", "--force", &path]) {
+                Ok(_) => break,
+                Err(e) if tries >= 10 => return Err(e),
+                Err(_) => {
+                    tries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+            }
         }
-        let ok = git(
-            &self.repo,
-            &[
-                "worktree",
-                "remove",
-                "--force",
-                &self.path.display().to_string(),
-            ],
-        )
-        .is_ok();
-        if ok {
-            let _ = git(&self.repo, &["branch", "-D", &self.branch]);
-        }
-        ok
+        let _ = git(&self.repo, &["branch", "-D", &self.branch]);
+        Ok(())
     }
 }
 

@@ -4,10 +4,9 @@ on:
   push:
     tags: ["v*"]
 
+# Read-only by default; each job asks for the writes it needs.
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build:
@@ -28,6 +27,11 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
+    # Build provenance attestations.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -116,6 +120,9 @@ jobs:
     # The desktop app and editor plugins aren't released yet; only the CLI is.
     needs: build
     runs-on: ubuntu-latest
+    # Creates the GitHub release.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -190,21 +197,26 @@ jobs:
           git push
 
   # crates.io: `cargo install chanto`. chanto-proto (the wire types) is
-  # published first, and only when its version is new. Skipped without the
-  # CARGO_REGISTRY_TOKEN secret (a token scoped to publish-update for both).
+  # published first, and only when its version is new. No stored token:
+  # crates.io trusted publishing swaps this workflow's OIDC identity for a
+  # short-lived one (both crates list chanto-sh/chanto release.yml).
   crates:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - name: Publish when configured
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
+        id: auth
+      - name: Publish
         env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         shell: bash
         run: |
-          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then echo "CARGO_REGISTRY_TOKEN isn't set: skipping crates.io."; exit 0; fi
           set -euo pipefail
           proto=$(sed -n 's/^version = "\(.*\)"$/\1/p' proto/Cargo.toml | head -1)
           code=$(curl -s -o /dev/null -w '%{http_code}' -A 'chanto-release (https://github.com/chanto-sh/chanto)' \
@@ -216,6 +228,10 @@ jobs:
   npm:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
+    # npm trusted publishing (OIDC).
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/npm.yml
     with:
       tag: ${{ github.ref_name }}

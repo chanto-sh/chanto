@@ -1307,6 +1307,9 @@ fn push_branch(run: &super::Run, auth: &[(String, String)]) -> Result<Option<Str
 }
 
 #[cfg(test)]
+mod queue_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use chanto_proto::runs::{GitCredential, ModelAccess};
