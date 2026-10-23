@@ -212,7 +212,7 @@ jobs:
           if [ "$code" != 200 ]; then cargo publish --locked -p chanto-proto; fi
           cargo publish --locked -p chanto
 
-  # npm: see npm.yml (also runnable by hand for an existing release).
+  # npm: see npm.yml.
   npm:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
@@ -220,46 +220,3 @@ jobs:
     with:
       tag: ${{ github.ref_name }}
     secrets: inherit
-
-  # The public download site (chanto.sh) serves releases from R2. `latest`
-  # goes last: until then, installs keep getting the previous release.
-  publish:
-    needs: release
-    if: ${{ !cancelled() && needs.release.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Upload to the download site when configured
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
-        shell: bash
-        run: |
-          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then exit 0; fi
-          set -euo pipefail
-          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
-          # Sign the checksum file so self-update from the download site can
-          # verify it (src/update.rs). Dormant until RELEASE_SIGNING_KEY is set.
-          if [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
-            printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.pem"
-            openssl pkeyutl -sign -inkey "$RUNNER_TEMP/release.pem" -rawin -in dist/SHA256SUMS | base64 -w0 > dist/SHA256SUMS.sig
-            rm -f "$RUNNER_TEMP/release.pem"
-          fi
-          put() { npx --yes wrangler@4 r2 object put "chanto-releases/$1" --file "$2" --remote; }
-          for f in dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sig; do
-            [ -f "$f" ] || continue
-            put "$GITHUB_REF_NAME/$(basename "$f")" "$f"
-          done
-          put install.sh install.sh
-          put install.ps1 install.ps1
-          put CHANGELOG.md CHANGELOG.md
-          # Pre-releases (v1.2.0-rc.1) are uploaded but never become latest.
-          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            printf '%s' "$GITHUB_REF_NAME" > latest
-            put latest latest
-          fi
