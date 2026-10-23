@@ -143,6 +143,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo test --locked -j 2 --quiet -p chanto-proto
+  # chanto-proto's public API against its last crates.io release: wire
+  # types change additively only (see the lint levels in proto/Cargo.toml).
+  semver:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+        with:
+          package: chanto-proto
   # The desktop app ships in releases, so make sure it builds on every push.
   desktop-linux:
     runs-on: ubuntu-22.04
