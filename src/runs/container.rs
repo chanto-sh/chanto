@@ -815,6 +815,9 @@ pub async fn start(
     Ok(c)
 }
 
+#[cfg(all(test, unix))]
+mod engine_tests;
+
 #[cfg(test)]
 mod tests {
     use super::*;

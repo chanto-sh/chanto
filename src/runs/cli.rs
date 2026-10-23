@@ -1422,6 +1422,9 @@ async fn follow(fe: Arc<dyn Frontend>, c: Client, id: String, cancel: Cancellati
 }
 
 #[cfg(test)]
+mod cmd_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
