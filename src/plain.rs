@@ -397,3 +397,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod frontend_tests;
