@@ -186,6 +186,261 @@ impl Region {
     }
 }
 
+impl App {
+    /// The state a session starts with. `run` adds what needs a subprocess or
+    /// a background watcher (the branch, the pull request status).
+    pub(super) fn new(
+        env: Arc<crate::agent::Env>,
+        agent: Arc<AsyncMutex<Agent>>,
+        tx: mpsc::UnboundedSender<AppMsg>,
+        completions: Vec<(String, String)>,
+        keymap: keybindings::Keymap,
+        history: Vec<String>,
+        inline: bool,
+    ) -> App {
+        App {
+            blocks: vec![],
+            input: Input::with_history(history),
+            selection: None,
+            selection_moved: false,
+            last_click: None,
+            click_count: 0,
+            click_toggle: None,
+            row_text: Vec::new(),
+            help: false,
+            scroll: 0,
+            scroll_anchor: None,
+            busy: false,
+            busy_label: None,
+            busy_since: Instant::now(),
+            wait_started: None,
+            stream_chars: 0,
+            open_text: None,
+            stream_state: None,
+            open_think: None,
+            dialog: None,
+            popup: None,
+            todos: vec![],
+            show_todos: true,
+            statuses: vec![],
+            expand_all: false,
+            mode: env.mode(),
+            model: env.model(),
+            ctx_used: 0,
+            ctx_max: env.context_max(),
+            // Nonzero when resuming (`chanto -r`).
+            total_cost_usd: env.accounting.total(),
+            price_unknown: env.accounting.unknown(),
+            tps: 0.0,
+            queue: VecDeque::new(),
+            cancel: None,
+            ctrl_c_at: None,
+            esc_at: None,
+            quit: false,
+            row_map: vec![],
+            transcript_area: Rect::default(),
+            agent,
+            env: env.clone(),
+            tx,
+            completions,
+            files: None,
+            ignored_files: None,
+            hint: None,
+            btw_ask: None,
+            limits: env.rate_limits.lock().unwrap().clone(),
+            limit_warned: Default::default(),
+            spinner_i: 0,
+            branch: None,
+            pr_status: Default::default(),
+            mouse: !inline,
+            pastes: vec![],
+            images: vec![],
+            pending_dialogs: VecDeque::new(),
+            search: None,
+            highlight: None,
+            open_editor: false,
+            edit_proposal: false,
+            status_text: None,
+            vim: false,
+            vim_insert: true,
+            vim_pending: None,
+            chord_x: false,
+            deliver: Deliver::Step,
+            send_now: false,
+            steered: Vec::new(),
+            work_sel: None,
+            viewing: None,
+            work_area: Rect::default(),
+            work_start: 0,
+            agent_view: None,
+            suggestion: None,
+            keymap,
+            replaying: false,
+            vim_undo: vec![],
+            term_title: String::new(),
+            turned: false,
+            term_status: notify::status_enabled(env.config.terminal_status.as_deref(), &|k| {
+                std::env::var(k).ok().filter(|v| !v.is_empty())
+            })
+            .then_some(None),
+            turn_failed: false,
+            voice: Voice::Off,
+            inline: inline.then(InlineView::default),
+            screen_rows: 0,
+            focused: None,
+            notify: notify::channel(env.config.notifications.as_deref()),
+            attention: None,
+            idle_since: None,
+            idle_notified: false,
+            idle_compacted: false,
+            editing_prompt: None,
+            turns_since_recap: 0,
+            recap: None,
+            quiet: env.quiet(),
+            turn_tools: 0,
+            current_tool: None,
+            loop_turn: false,
+        }
+    }
+
+    /// Bracketed paste: into an open answer box, else into the prompt. A
+    /// long paste collapses to a tag and a file path becomes an `@` mention.
+    /// True when image files were attached (the loop skips straight to the
+    /// next frame).
+    pub(super) fn on_paste(&mut self, s: &str) -> bool {
+        let s = normalize_paste(s);
+        if let Some(
+            Dialog::Permission {
+                feedback: Some(fb), ..
+            }
+            | Dialog::Question {
+                typing: Some(fb), ..
+            },
+        ) = &mut self.dialog
+        {
+            fb.insert(&s);
+            return false;
+        }
+        let t = crate::util::unescape_path(s.trim().trim_matches('\'').trim_matches('"'));
+        // Dragged or pasted image files (one or several) become
+        // `[Image #N]` tags, like a clipboard image, instead of
+        // a long path. A dragged screenshot may already be gone
+        // by submit time, so each is copied somewhere durable.
+        if let Some(images) = dropped_images(&s) {
+            for path in images {
+                // Attach the original if it can't be copied.
+                self.images.push(persist_attachment(&path).unwrap_or(path));
+                let n = self.images.len();
+                self.input.insert(&format!("[Image #{n}] "));
+            }
+            self.update_popup();
+            return true;
+        }
+        let is_path = !t.contains('\n') && std::path::Path::new(&t).is_file();
+        let n_lines = s.lines().count();
+        if is_path {
+            self.input.insert(&format!("@{} ", t.replace(' ', "\\ ")));
+        } else if (n_lines > 12 || s.len() > 1500) && self.env.config.collapse_pastes != Some(false)
+        {
+            self.pastes.push(s.clone());
+            self.input.insert(&format!(
+                "[Pasted text #{} +{} lines]",
+                self.pastes.len(),
+                n_lines
+            ));
+        } else {
+            self.input.insert(&s);
+        }
+        self.update_popup();
+        false
+    }
+
+    /// The 100ms tick: background notices, the recorder, attention and idle
+    /// timers, and `/loop`. True when the screen needs a redraw.
+    pub(super) fn on_tick(&mut self) -> bool {
+        let mut dirty = false;
+        if let Some(notice) = crate::update_check::take_notice() {
+            self.note(notice, pal().dim);
+            dirty = true;
+        }
+        // An in-flight `/btw` ask animates its panel's spinner.
+        if self.busy
+            || self.hint.is_some()
+            || self.btw_ask.is_some()
+            || self.blocks.iter().any(|b| b.is_running_tool())
+            || !matches!(self.voice, Voice::Off)
+        {
+            dirty = true;
+        }
+        // Keep the auto-deny countdown ticking while a permission prompt waits.
+        if matches!(
+            &self.dialog,
+            Some(Dialog::Permission {
+                deadline: Some(_),
+                ..
+            })
+        ) {
+            dirty = true;
+        }
+        // Stop on silence after speech, or when the recorder quit on its own.
+        let stop = match &mut self.voice {
+            Voice::Recording(rec, _) => rec.should_stop(),
+            _ => false,
+        };
+        if stop {
+            self.toggle_voice();
+        }
+        self.check_attention();
+        self.idle_tick();
+        let before = self.busy;
+        self.loop_tick();
+        dirty | (self.busy != before)
+    }
+
+    /// A prompt answered elsewhere (in the IDE, or on the phone with
+    /// /remote) closes its dialog here, and the next queued one opens. True
+    /// when the open dialog was closed.
+    pub(super) fn drop_answered_dialogs(&mut self) -> bool {
+        let answered = |d: &Dialog| match d {
+            Dialog::Permission { tx: Some(tx), .. } => tx.is_closed(),
+            Dialog::Question { tx: Some(tx), .. } => tx.is_closed(),
+            _ => false,
+        };
+        let mut closed = false;
+        if self.dialog.as_ref().is_some_and(answered) {
+            self.dialog = None;
+            closed = true;
+        }
+        self.pending_dialogs.retain(|d| !answered(d));
+        if self.dialog.is_none() {
+            self.dialog = self.pending_dialogs.pop_front();
+        }
+        closed
+    }
+
+    /// What came back from $EDITOR: edited proposed content answers the
+    /// permission prompt (unchanged = a plain yes); otherwise it's the prompt.
+    pub(super) fn apply_edit(&mut self, proposal: Option<String>, edited: Result<String>) {
+        match edited {
+            Ok(t) if proposal.is_some() => {
+                let reply = if proposal.as_deref() == Some(t.as_str()) {
+                    PermissionReply::Allow
+                } else {
+                    PermissionReply::AllowEdited(t)
+                };
+                if let Some(Dialog::Permission { tx, .. }) = &mut self.dialog
+                    && let Some(tx) = tx.take()
+                {
+                    let _ = tx.send(reply);
+                }
+                self.dialog = None;
+            }
+            Ok(t) => self.input.set(t.trim_end_matches('\n')),
+            Err(e) => self.hint = Some((format!("Editor failed: {e}"), Instant::now())),
+        }
+    }
+}
+
 pub async fn run(cli: Cli) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<AppMsg>();
     {
@@ -261,109 +516,17 @@ pub async fn run(cli: Cli) -> Result<()> {
     crate::remote::attach_tui(agent.clone(), env.clone(), move |input| {
         remote_tx.send(AppMsg::Remote(input)).is_ok()
     });
-    let mut app = App {
-        blocks: vec![],
-        input: Input::with_history(load_history()),
-        selection: None,
-        selection_moved: false,
-        last_click: None,
-        click_count: 0,
-        click_toggle: None,
-        row_text: Vec::new(),
-        help: false,
-        scroll: 0,
-        scroll_anchor: None,
-        busy: false,
-        busy_label: None,
-        busy_since: Instant::now(),
-        wait_started: None,
-        stream_chars: 0,
-        open_text: None,
-        stream_state: None,
-        open_think: None,
-        dialog: None,
-        popup: None,
-        todos: vec![],
-        show_todos: true,
-        statuses: vec![],
-        expand_all: false,
-        mode: env.mode(),
-        model: env.model(),
-        ctx_used: 0,
-        ctx_max: env.context_max(),
-        // Nonzero when resuming (`chanto -r`).
-        total_cost_usd: env.accounting.total(),
-        price_unknown: env.accounting.unknown(),
-        tps: 0.0,
-        queue: VecDeque::new(),
-        cancel: None,
-        ctrl_c_at: None,
-        esc_at: None,
-        quit: false,
-        row_map: vec![],
-        transcript_area: Rect::default(),
-        agent: agent.clone(),
-        env: env.clone(),
-        tx: tx.clone(),
+    let mut app = App::new(
+        env.clone(),
+        agent.clone(),
+        tx.clone(),
         completions,
-        files: None,
-        ignored_files: None,
-        hint: None,
-        btw_ask: None,
-        limits: env.rate_limits.lock().unwrap().clone(),
-        limit_warned: Default::default(),
-        spinner_i: 0,
-        branch: git_branch(&env.cwd()),
-        pr_status: watch_pr_status(env.cwd()),
-        mouse: !inline,
-        pastes: vec![],
-        images: vec![],
-        pending_dialogs: VecDeque::new(),
-        search: None,
-        highlight: None,
-        open_editor: false,
-        edit_proposal: false,
-        status_text: None,
-        vim: false,
-        vim_insert: true,
-        vim_pending: None,
-        chord_x: false,
-        deliver: Deliver::Step,
-        send_now: false,
-        steered: Vec::new(),
-        work_sel: None,
-        viewing: None,
-        work_area: Rect::default(),
-        work_start: 0,
-        agent_view: None,
-        suggestion: None,
-        keymap: keymap.0,
-        replaying: false,
-        vim_undo: vec![],
-        term_title: String::new(),
-        turned: false,
-        term_status: notify::status_enabled(env.config.terminal_status.as_deref(), &|k| {
-            std::env::var(k).ok().filter(|v| !v.is_empty())
-        })
-        .then_some(None),
-        turn_failed: false,
-        voice: Voice::Off,
-        inline: inline.then(InlineView::default),
-        screen_rows: 0,
-        focused: None,
-        notify: notify::channel(env.config.notifications.as_deref()),
-        attention: None,
-        idle_since: None,
-        idle_notified: false,
-        idle_compacted: false,
-        editing_prompt: None,
-        turns_since_recap: 0,
-        recap: None,
-        quiet: env.quiet(),
-        turn_tools: 0,
-        current_tool: None,
-        loop_turn: false,
-    };
+        keymap.0,
+        load_history(),
+        inline,
+    );
+    app.branch = git_branch(&env.cwd());
+    app.pr_status = watch_pr_status(env.cwd());
     app.refresh_status_line();
     app.on_msg(AppMsg::Reset(if resumed {
         Some("Resumed previous session.".into())
@@ -492,37 +655,9 @@ pub async fn run(cli: Cli) -> Result<()> {
                         app.check_attention();
                     }
                     Some(Ok(TermEvent::Paste(s))) => {
-                        let s = normalize_paste(&s);
-                        if let Some(Dialog::Permission { feedback: Some(fb), .. } | Dialog::Question { typing: Some(fb), .. }) = &mut app.dialog {
-                            fb.insert(&s);
-                        } else {
-                            let t = crate::util::unescape_path(s.trim().trim_matches('\'').trim_matches('"'));
-                            // Dragged or pasted image files (one or several) become
-                            // `[Image #N]` tags, like a clipboard image, instead of
-                            // a long path. A dragged screenshot may already be gone
-                            // by submit time, so each is copied somewhere durable.
-                            if let Some(images) = dropped_images(&s) {
-                                for path in images {
-                                    // Attach the original if it can't be copied.
-                                    app.images.push(persist_attachment(&path).unwrap_or(path));
-                                    let n = app.images.len();
-                                    app.input.insert(&format!("[Image #{n}] "));
-                                }
-                                app.update_popup();
-                                dirty = true;
-                                continue;
-                            }
-                            let is_path = !t.contains('\n') && std::path::Path::new(&t).is_file();
-                            let n_lines = s.lines().count();
-                            if is_path {
-                                app.input.insert(&format!("@{} ", t.replace(' ', "\\ ")));
-                            } else if (n_lines > 12 || s.len() > 1500) && app.env.config.collapse_pastes != Some(false) {
-                                app.pastes.push(s.clone());
-                                app.input.insert(&format!("[Pasted text #{} +{} lines]", app.pastes.len(), n_lines));
-                            } else {
-                                app.input.insert(&s);
-                            }
-                            app.update_popup();
+                        if app.on_paste(&s) {
+                            dirty = true;
+                            continue;
                         }
                     }
                     Some(Ok(TermEvent::Resize(w, h))) => {
@@ -547,53 +682,10 @@ pub async fn run(cli: Cli) -> Result<()> {
             // drawn immediately rather than waiting for the next 100ms tick.
             _ = tokio::time::sleep(frame.saturating_sub(last_draw.elapsed())), if dirty => {}
             _ = tick.tick() => {
-                if let Some(notice) = crate::update_check::take_notice() {
-                    app.note(notice, pal().dim);
-                    dirty = true;
-                }
-                // An in-flight `/btw` ask animates its panel's spinner.
-                if app.busy
-                    || app.hint.is_some()
-                    || app.btw_ask.is_some()
-                    || app.blocks.iter().any(|b| b.is_running_tool())
-                    || !matches!(app.voice, Voice::Off)
-                {
-                    dirty = true;
-                }
-                // Keep the auto-deny countdown ticking while a permission prompt waits.
-                if matches!(&app.dialog, Some(Dialog::Permission { deadline: Some(_), .. })) {
-                    dirty = true;
-                }
-                // Stop on silence after speech, or when the recorder quit on its own.
-                let stop = match &mut app.voice {
-                    Voice::Recording(rec, _) => rec.should_stop(),
-                    _ => false,
-                };
-                if stop {
-                    app.toggle_voice();
-                }
-                app.check_attention();
-                app.idle_tick();
-                let before = app.busy;
-                app.loop_tick();
-                dirty |= app.busy != before;
+                dirty |= app.on_tick();
             }
         }
-        // A prompt answered elsewhere (in the IDE, or on the phone with
-        // /remote) closes its dialog here.
-        let answered = |d: &Dialog| match d {
-            Dialog::Permission { tx: Some(tx), .. } => tx.is_closed(),
-            Dialog::Question { tx: Some(tx), .. } => tx.is_closed(),
-            _ => false,
-        };
-        if app.dialog.as_ref().is_some_and(answered) {
-            app.dialog = None;
-            dirty = true;
-        }
-        app.pending_dialogs.retain(|d| !answered(d));
-        if app.dialog.is_none() {
-            app.dialog = app.pending_dialogs.pop_front();
-        }
+        dirty |= app.drop_answered_dialogs();
         if app.open_editor || app.edit_proposal {
             let proposal = match &app.dialog {
                 Some(Dialog::Permission { req, .. }) if app.edit_proposal => req.proposed.clone(),
@@ -643,24 +735,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 terminal = Some(Terminal::new(CrosstermBackend::new(std::io::stdout()))?);
             }
             events = EventStream::new();
-            match edited {
-                // The edited content answers the prompt (unchanged = a plain yes).
-                Ok(t) if proposal.is_some() => {
-                    let reply = if proposal.as_deref() == Some(t.as_str()) {
-                        PermissionReply::Allow
-                    } else {
-                        PermissionReply::AllowEdited(t)
-                    };
-                    if let Some(Dialog::Permission { tx, .. }) = &mut app.dialog
-                        && let Some(tx) = tx.take()
-                    {
-                        let _ = tx.send(reply);
-                    }
-                    app.dialog = None;
-                }
-                Ok(t) => app.input.set(t.trim_end_matches('\n')),
-                Err(e) => app.hint = Some((format!("Editor failed: {e}"), Instant::now())),
-            }
+            app.apply_edit(proposal, edited);
             dirty = true;
         }
         if app.quit {

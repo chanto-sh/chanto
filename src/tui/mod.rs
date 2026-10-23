@@ -2593,3 +2593,18 @@ mod stream_tests;
 
 #[cfg(test)]
 mod link_tests;
+
+#[cfg(test)]
+mod app_tests;
+
+#[cfg(test)]
+mod keys_tests;
+
+#[cfg(test)]
+mod events_tests;
+
+#[cfg(test)]
+mod draw_tests;
+
+#[cfg(test)]
+mod run_tests;
