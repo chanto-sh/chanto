@@ -623,6 +623,17 @@ fn finished_runs_say_where_their_work_is() {
     assert_eq!(short_id("abc"), "abc");
     assert!(check_url("https://x").is_ok() && check_url("http://localhost:3").is_ok());
     assert!(check_url("ftp://x").is_err());
+    assert!(check_url("http://127.0.0.1:8080").is_ok() && check_url("http://localhost").is_ok());
+    // Plain http only when the host really is this machine.
+    for url in [
+        "http://localhost.evil.com",
+        "http://localhost@evil.com",
+        "http://localhost:x@evil.com",
+        "http://127.0.0.1.nip.io",
+        "http://127.0.0.1@evil.com/",
+    ] {
+        assert!(check_url(url).is_err(), "{url}");
+    }
     let mut in_text = false;
     for ev in [
         json!({"type": "permission_request", "label": "Bash"}),
