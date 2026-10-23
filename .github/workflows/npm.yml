@@ -1,10 +1,11 @@
-# npm: `npm i -g chanto`. One package per platform (@chanto/cli-<os>-<cpu>)
-# holds that platform's binary from a GitHub release; `chanto` picks it
-# through optionalDependencies. The release workflow calls this after each
+# npm: `npm i -g @chanto/cli` (npm refuses the unscoped name `chanto` as too
+# close to `chance`). One package per platform (@chanto/cli-<os>-<cpu>) holds
+# that platform's binary from a GitHub release; @chanto/cli picks it through
+# optionalDependencies. The release workflow calls this after each
 # release; run it by hand to publish an existing release.
 #
 # Skipped without the NPM_TOKEN secret (a granular token that can publish
-# `chanto` and the @chanto scope). Versions already on npm are left alone, so
+# the @chanto scope). Versions already on npm are left alone, so
 # a re-run only publishes what's missing.
 name: npm
 on:
@@ -57,7 +58,7 @@ jobs:
             fi
             (cd "$1" && npm publish --access public --provenance --tag "$dist_tag")
           }
-          # Platform packages first, so `chanto` never points at a missing one.
+          # Platform packages first, so @chanto/cli never points at a missing one.
           for dir in npm/*/; do
             [ "$dir" = npm/chanto/ ] && continue
             publish "${dir%/}"

@@ -47,7 +47,7 @@ for key, (target, os_name, cpu) in TARGETS.items():
             (pkg / "bin" / exe).write_bytes(t.extractfile(member).read())
         (pkg / "bin" / exe).chmod(0o755)
     shutil.copy(here / "../../LICENSE", pkg / "LICENSE")
-    (pkg / "README.md").write_text(f"The `chanto` binary for {os_name} {cpu}. Install [`chanto`](https://www.npmjs.com/package/chanto) instead.\n")
+    (pkg / "README.md").write_text(f"The `chanto` binary for {os_name} {cpu}. Install [`@chanto/cli`](https://www.npmjs.com/package/@chanto/cli) instead.\n")
     (pkg / "package.json").write_text(json.dumps({
         "name": f"@chanto/cli-{key}",
         "version": version,
@@ -63,7 +63,7 @@ shutil.copytree(here / "chanto", main)
 shutil.copy(here / "../../LICENSE", main / "LICENSE")
 shutil.copy(here / "../../README.md", main / "README.md")
 (main / "package.json").write_text(json.dumps({
-    "name": "chanto",
+    "name": "@chanto/cli",
     "version": version,
     "description": "A fast, lean coding agent for your terminal",
     **COMMON,
