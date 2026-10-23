@@ -49,6 +49,13 @@ Homebrew (macOS and Linux):
 brew install chanto-sh/tap/chanto
 ```
 
+npm, or Cargo (builds from source, needs Rust 1.95+):
+
+```sh
+npm i -g @chanto/cli
+cargo install chanto --locked
+```
+
 Windows (PowerShell):
 
 ```powershell

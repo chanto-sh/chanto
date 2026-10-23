@@ -140,18 +140,24 @@ Both verify the archive against the release's `SHA256SUMS` before replacing the
 binary. The shell installer supports curl or wget and requires tar and either
 sha256sum or shasum. Linux binaries use static musl. Windows uses ZIP archives;
 macOS and Linux use `chanto-vX.Y.Z-<target>.tar.gz`. Each `v*` tag publishes them,
-with `SHA256SUMS`, under
-`https://chanto.sh/releases/<version>/`; the
-[download page](https://chanto.sh/download) links them. Releases
-built from the public repository also carry build provenance attestations.
+with `SHA256SUMS`, as a [GitHub release](https://github.com/chanto-sh/chanto/releases);
+`https://chanto.sh/releases/download/<version>/<file>` redirects there, and the
+[download page](https://chanto.sh/download) links them. Release archives also
+carry build provenance attestations (`gh attestation verify <file> -R chanto-sh/chanto`).
 
 To build from a checkout (needs Rust 1.95+), run `./install.sh --from-source`; it
 builds a release binary and installs it like the installer. Cargo can also
-build directly from Git (installs to Cargo's bin directory). Name the `chanto` package explicitly
-because the repository also contains a dependency test package:
+build a release from crates.io (installs to Cargo's bin directory):
 
 ```sh
-cargo install --git https://github.com/chanto-sh/chanto.git --locked chanto
+cargo install chanto --locked
+```
+
+With npm (the package is `@chanto/cli`, which installs the `chanto` command and
+pulls in only your platform's binary):
+
+```sh
+npm i -g @chanto/cli
 ```
 
 With Homebrew (macOS and Linux):
