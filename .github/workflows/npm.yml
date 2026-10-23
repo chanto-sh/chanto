@@ -1,23 +1,20 @@
 # npm: `npm i -g @chanto/cli` (npm refuses the unscoped name `chanto` as too
 # close to `chance`). One package per platform (@chanto/cli-<os>-<cpu>) holds
 # that platform's binary from a GitHub release; @chanto/cli picks it through
-# optionalDependencies. The release workflow calls this after each
-# release; run it by hand to publish an existing release.
+# optionalDependencies. The release workflow calls this after each release;
+# to retry, re-run this job in that release's run.
 #
-# Skipped without the NPM_TOKEN secret (a granular token that can publish
-# the @chanto scope). Versions already on npm are left alone, so
-# a re-run only publishes what's missing.
+# Publishing uses npm trusted publishing: each package on npmjs.com trusts
+# chanto-sh/chanto's release.yml (npm checks the calling workflow, so this
+# file can't be run on its own). An NPM_TOKEN secret, if set, is only a
+# fallback for when npm can't match the workflow. Versions already on npm are
+# left alone, so a re-run only publishes what's missing.
 name: npm
 on:
   workflow_call:
     inputs:
       tag:
         type: string
-        required: true
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to publish, e.g. v0.1.0
         required: true
 
 permissions:
@@ -26,21 +23,23 @@ permissions:
 
 jobs:
   publish:
+    # Forks can't publish as chanto-sh.
+    if: github.repository == 'chanto-sh/chanto'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
-          node-version: 22
+          # Trusted publishing needs npm 11.5.1+, which Node 24 ships.
+          node-version: 24
           registry-url: https://registry.npmjs.org
-      - name: Publish when configured
+      - name: Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.tag }}
         shell: bash
         run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN isn't set: skipping npm."; exit 0; fi
           set -euo pipefail
           [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: $TAG"; exit 1; }
           gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'chanto-*' --dir dist
