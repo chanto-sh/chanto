@@ -25,6 +25,9 @@
 > [!NOTE]
 > **Chanto is in alpha.** Expect rough edges and breaking changes before 1.0.
 > [Issues](https://github.com/chanto-sh/chanto/issues) and feedback are welcome.
+> It's built by one developer with a lot of help from AI coding agents; CI
+> runs the tests on Linux, macOS and Windows with code scanning, and the
+> [security model](docs/security-model.md) explains how it protects you.
 
 > Switching from another agent? Chanto reads the config you already have, so you don't start over.
 
