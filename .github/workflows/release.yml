@@ -4,10 +4,9 @@ on:
   push:
     tags: ["v*"]
 
+# Read-only by default; each job asks for the writes it needs.
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 jobs:
   build:
@@ -28,6 +27,11 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
+    # Build provenance attestations.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -116,6 +120,9 @@ jobs:
     # The desktop app and editor plugins aren't released yet; only the CLI is.
     needs: build
     runs-on: ubuntu-latest
+    # Creates the GitHub release.
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
@@ -221,6 +228,10 @@ jobs:
   npm:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
+    # npm trusted publishing (OIDC).
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/npm.yml
     with:
       tag: ${{ github.ref_name }}
