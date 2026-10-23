@@ -182,7 +182,9 @@ Start-Sleep 60
 "#,
     );
     let mut child = f.command(&req).spawn().unwrap();
-    let deadline = Instant::now() + Duration::from_secs(30);
+    // Two PowerShell starts inside the sandbox; a busy CI runner has taken
+    // longer than 30 seconds.
+    let deadline = Instant::now() + Duration::from_secs(90);
     while !f.0.join("project/ready.txt").exists() && Instant::now() < deadline {
         assert!(
             child.try_wait().unwrap().is_none(),
