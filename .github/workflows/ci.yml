@@ -206,8 +206,15 @@ jobs:
           node-version: 22
       - run: python3 -m unittest -v test_chanto_sdk
         working-directory: sdk/python
-      - run: npm install --no-save typescript@5 @types/node@22 && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts
+      - run: npm ci --ignore-scripts && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts
         working-directory: sdk/typescript
+  # The JetBrains plugin keeps Gradle's wrapper jar in the repository; check
+  # it is one of Gradle's published wrappers.
+  gradle-wrapper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: gradle/actions/wrapper-validation@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
   action:
     runs-on: ubuntu-latest
     steps:

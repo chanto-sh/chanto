@@ -1,0 +1,14 @@
+# Advisories that don't affect Chanto, read by OSV-Scanner and OpenSSF
+# Scorecard. Each says why; cargo-deny keeps its own list in deny.toml.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0429"
+reason = "glib 0.18 comes only through the Linux desktop app's GTK stack (tao, wry, muda); Chanto never uses VariantStrIter. Fixed upstream by moving to gtk 0.20+."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0370"
+reason = "proc-macro-error is unmaintained, not vulnerable; it's a build-time macro of glib-macros in the same desktop GTK stack."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2025-0141"
+reason = "bincode 1.3.3 (via syntect, for syntax highlighting) is unmaintained but complete, not vulnerable; also ignored in deny.toml."

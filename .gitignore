@@ -10,3 +10,6 @@ classifier/sources/gtfobins.jsonl
 
 # Private keys (e.g. the release signing key) never belong in the repo.
 *.pem
+
+# The TypeScript SDK type-check tools (sdk/typescript/package.json).
+sdk/typescript/node_modules/
