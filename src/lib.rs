@@ -2778,8 +2778,15 @@ fn finish_worktree() {
     }
     let Some(wt) = WORKTREE.get() else { return };
     let _ = std::env::set_current_dir(&wt.repo);
-    if wt.cleanup_if_unchanged() {
-        eprintln!("No changes in {}; removed it.", wt.branch);
+    if wt.changes().is_empty() {
+        match wt.remove() {
+            Ok(()) => eprintln!("No changes in {}; removed it.", wt.branch),
+            Err(e) => eprintln!(
+                "No changes in {}, but couldn't remove {}: {e:#}",
+                wt.branch,
+                wt.path.display()
+            ),
+        }
     } else {
         eprintln!(
             "Changes are on branch {} in {}.\n  Review: git -C {} diff {}\n  Take them: commit there, then `git merge {}` in your checkout\n  Discard: git worktree remove --force {} && git branch -D {}",
