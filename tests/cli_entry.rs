@@ -712,3 +712,234 @@ fn print_mode_continues_the_latest_session() {
     assert_eq!(o.code, 0, "{o:?}");
     assert!(!o.stderr.contains("No previous session"), "{o:?}");
 }
+
+// ------------------------------------------------------------ more entry points
+
+#[test]
+fn local_subcommands_print_their_reports() {
+    let s = Sandbox::new();
+    for args in [
+        &["providers"][..],
+        &["mcp", "list"][..],
+        &["memory", "list"][..],
+        &["check-extensions"][..],
+        &["diagnostics"][..],
+        &["insights"][..],
+    ] {
+        let o = s.run(args);
+        assert_eq!(o.code, 0, "{args:?}: {o:?}");
+        assert!(!o.stdout.trim().is_empty(), "{args:?}: {o:?}");
+    }
+    let o = s.run(&["cloud", "status", "--restricted"]);
+    assert_eq!(o.code, 1);
+    assert!(
+        o.stderr.contains("--restricted refuses cloud runs"),
+        "{o:?}"
+    );
+}
+
+#[test]
+fn classify_asks_the_configured_model() {
+    let (base, seen) = model_server(&["mock"], &["{\"decision\": \"allow\"}"]);
+    let s = Sandbox::new();
+    s.use_server(&base);
+    let o = s.run(&[
+        "--classify",
+        "Bash",
+        "{\"command\":\"ls\"}",
+        "list the files",
+    ]);
+    assert_eq!(o.code, 0, "{o:?}");
+    assert!(o.stdout.trim_end().ends_with("s)"), "{o:?}");
+    assert!(seen.lock().unwrap()[0].contains("list the files"));
+}
+
+#[test]
+fn an_explicit_server_picks_its_first_model() {
+    let (base, seen) = model_server(&["served-model"], &["hi"]);
+    let s = Sandbox::new();
+    let o = s.run(&[
+        "-p",
+        "--provider",
+        "openai",
+        "--base-url",
+        &base,
+        "--output-format",
+        "json",
+        "hello",
+    ]);
+    assert_eq!(o.code, 0, "{o:?}");
+    let v: serde_json::Value = serde_json::from_str(o.stdout.trim()).unwrap();
+    assert_eq!(v["model"], "served-model");
+    assert!(seen.lock().unwrap()[0].contains("served-model"));
+    let (empty, _) = model_server(&[], &[]);
+    let o = s.run(&["-p", "--provider", "openai", "--base-url", &empty, "hello"]);
+    assert_eq!(o.code, 1);
+    assert!(o.stderr.contains("No usable models returned by"), "{o:?}");
+}
+
+#[test]
+fn launch_flags_shape_the_session() {
+    let (base, seen) = model_server(&["mock"], &[]);
+    let s = Sandbox::new();
+    s.use_server(&base);
+    s.write("extra.md", "Always answer in haiku.");
+    let o = s.run(&[
+        "--dump-prompt",
+        "--append-system-prompt",
+        "Be brief.",
+        "--append-system-prompt-file",
+        "extra.md",
+    ]);
+    assert_eq!(o.code, 0, "{o:?}");
+    assert!(
+        o.stdout.contains("Be brief.") && o.stdout.contains("Always answer in haiku."),
+        "{o:?}"
+    );
+    let o = s.run(&["--dump-prompt", "--system-prompt", "You are a parrot."]);
+    assert_eq!(o.code, 0, "{o:?}");
+    assert!(o.stdout.starts_with("You are a parrot."), "{o:?}");
+
+    let o = s.run(&[
+        "-p",
+        "--tools",
+        "Read,Nope",
+        "--allowed-tools",
+        "Read,Grep",
+        "--disallowed-tools",
+        "Edit",
+        "--effort",
+        "high",
+        "--max-turns",
+        "3",
+        "--num-ctx",
+        "8192",
+        "--name",
+        "named run",
+        "--no-session-persistence",
+        "--output-format",
+        "json",
+        "hello",
+    ]);
+    assert_eq!(o.code, 0, "{o:?}");
+    assert!(
+        o.stderr.contains("--tools: no built-in tool named Nope"),
+        "{o:?}"
+    );
+    let body: serde_json::Value = serde_json::from_str(&seen.lock().unwrap()[0]).unwrap();
+    let tools: Vec<&str> = body["tools"]
+        .as_array()
+        .map(|t| {
+            t.iter()
+                .filter_map(|t| t["function"]["name"].as_str())
+                .collect()
+        })
+        .unwrap_or_default();
+    assert_eq!(tools, ["Read"], "{body}");
+    // Not persisted: nothing to continue.
+    let o = s.run(&["-p", "--continue", "again"]);
+    assert!(o.stderr.contains("No previous session to resume."), "{o:?}");
+
+    let o = s.run(&[
+        "-p",
+        "--agents",
+        r#"{"poet":{"description":"Writes poems","prompt":"Rhyme everything."}}"#,
+        "--agent",
+        "poet",
+        "a poem",
+    ]);
+    assert_eq!(o.code, 0, "{o:?}");
+    assert!(
+        seen.lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains("Rhyme everything."),
+        "the subagent's prompt is the session's"
+    );
+}
+
+#[test]
+fn config_warnings_are_reported() {
+    let (base, _) = model_server(&["mock"], &[]);
+    let s = Sandbox::new();
+    s.write(
+        "home/config.toml",
+        &format!(
+            "model = \"mock\"\nprovider = \"openai\"\nbase_url = \"{base}\"\napi_key_helper = \"exit 3\"\nkeep_awake = \"sometimes\"\n[[hooks.NotAnEvent]]\ncommand = \"true\"\n"
+        ),
+    );
+    let o = s.run(&["-p", "hello"]);
+    assert_eq!(o.code, 0, "{o:?}");
+    for w in [
+        "api_key_helper failed",
+        "keep_awake = \"sometimes\" isn't one of working, never, always",
+        "Unknown hook event `NotAnEvent`",
+    ] {
+        assert!(o.stderr.contains(w), "missing {w:?}: {o:?}");
+    }
+}
+
+#[test]
+fn resume_finds_a_session_from_another_directory() {
+    let (base, _) = model_server(&["mock"], &[]);
+    let s = Sandbox::new();
+    s.use_server(&base);
+    std::fs::create_dir_all(s.dir.join("elsewhere")).unwrap();
+    let o = s.run(&["-p", "first", "--output-format", "json"]);
+    let id = serde_json::from_str::<serde_json::Value>(o.stdout.trim()).unwrap()["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let o = s.run(&["-p", "--cwd", "elsewhere", "--resume", &id, "second"]);
+    assert_eq!(o.code, 0, "{o:?}");
+    assert!(
+        o.stderr.contains(&format!("Session {id} belongs to ")),
+        "{o:?}"
+    );
+    let o = s.run(&[
+        "-p",
+        "--fork-session",
+        "--resume",
+        &id,
+        "third",
+        "--output-format",
+        "json",
+    ]);
+    assert_eq!(o.code, 0, "{o:?}");
+    let v: serde_json::Value = serde_json::from_str(o.stdout.trim()).unwrap();
+    assert_ne!(v["session_id"], id.as_str(), "a fork is a new session");
+}
+
+#[test]
+fn worktree_sessions_clean_up_when_nothing_changed() {
+    let (base, _) = model_server(&["mock"], &[]);
+    let s = Sandbox::new();
+    s.use_server(&base);
+    s.write(".gitignore", "home/\n");
+    s.write("a.txt", "a\n");
+    let vcs = |args: &[&str]| {
+        let ok = Command::new("git")
+            .args(args)
+            .current_dir(&s.dir)
+            .env("GIT_AUTHOR_NAME", "t")
+            .env("GIT_AUTHOR_EMAIL", "t@example.com")
+            .env("GIT_COMMITTER_NAME", "t")
+            .env("GIT_COMMITTER_EMAIL", "t@example.com")
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(ok, "{args:?}");
+    };
+    vcs(&["init", "-q"]);
+    vcs(&["add", "."]);
+    vcs(&["commit", "-q", "-m", "init"]);
+    let o = s.run(&["--worktree", "wt-test", "-p", "hello"]);
+    assert_eq!(o.code, 0, "{o:?}");
+    assert!(
+        o.stderr.contains("on branch") && o.stderr.contains("(your checkout is untouched)"),
+        "{o:?}"
+    );
+    assert!(o.stderr.contains("No changes in"), "{o:?}");
+}
