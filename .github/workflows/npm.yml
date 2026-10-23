@@ -56,7 +56,18 @@ jobs:
               echo "$name@$version is already on npm"
               return
             fi
-            (cd "$1" && npm publish --access public --provenance --tag "$dist_tag")
+            # A brand-new package can 404 on `npm view` for a few minutes, so
+            # a refusal to republish a version also counts as done.
+            local out
+            if ! out=$(cd "$1" && npm publish --access public --provenance --tag "$dist_tag" 2>&1); then
+              if grep -q 'cannot publish over the previously published' <<<"$out"; then
+                echo "$name@$version is already on npm"
+                return
+              fi
+              echo "$out"
+              return 1
+            fi
+            echo "$out"
           }
           # Platform packages first, so @chanto/cli never points at a missing one.
           for dir in npm/*/; do
