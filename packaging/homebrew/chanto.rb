@@ -1,5 +1,5 @@
 class Chanto < Formula
-  desc "Coding agent for your terminal that checks its own work"
+  desc "Fast, lean coding agent for your terminal"
   homepage "https://chanto.sh"
   version "@VERSION@"
   license "Apache-2.0"

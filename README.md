@@ -5,8 +5,8 @@
 <h1 align="center">Chanto</h1>
 
 <p align="center">
-  A coding agent for your terminal that checks its own work.
-  Works with local or hosted models, including your cloud's:
+  A fast, lean coding agent for your terminal.
+  Any model, local or hosted, including your cloud's:
   Amazon Bedrock, Google Vertex AI and Azure.
 </p>
 
@@ -102,13 +102,13 @@ In a session:
 
 | | |
 |---|---|
-| **Checks its work** | Runs the tests related to its change before saying it's done (the full suite when shared setup changed, or with `--verify-full`), tells failures it caused from ones that were already there, and won't weaken tests to pass |
+| **Fast and lean** | One native binary that starts instantly and stays light on CPU and memory while it works, with fewer tokens per task than most agents ([benchmarks](https://github.com/chanto-sh/benchmarks/blob/main/RESULTS.md)) |
 | **Any model** | Free to start (OpenRouter's free models, Gemini's free tier, or a local model); Ollama, llama.cpp, vLLM and other OpenAI-compatible servers; OpenAI, Anthropic, OpenRouter, DeepSeek and more; your ChatGPT login; Amazon Bedrock, Google Vertex AI and Azure with your cloud credentials |
 | **Safe by default** | Shell commands run in a sandbox on macOS and Linux (on Windows it confines writes only: reads and network aren't restricted), with optional network domain allowlists on macOS and Linux; risky actions need your OK, and auto mode screens commands for you |
 | **Undo** | `/rewind` restores files (including what shell commands changed) and the conversation to any earlier prompt |
 | **Outcome mode** | Agree on what "done" means first, then review results instead of code |
 | **Background runs** | `chanto run --bg "<task>"` (or `&task` in the TUI) works in its own git worktree and branch while you keep going; `chanto runs`, `attach` to answer prompts, `apply` to bring the result over; optional per-run Docker/Podman container for its commands (`[background] isolate = "docker"`, no network or an allowlist, CPU/memory limits) |
-| **Fast and lean** | Starts instantly and uses fewer tokens than most agents |
+| **Checks its work** | Runs the tests related to its change before saying it's done (the full suite when shared setup changed, or with `--verify-full`), tells failures it caused from ones that were already there, and won't weaken tests to pass |
 | **Finds its way in big repos** | `RepoMap` gives a ranked, token-budgeted map of the project's symbols; `SemanticSearch` finds code by meaning through `[embeddings]` (a local Ollama model by default). Both are read-only, so they run without a prompt |
 | **Plays well with others** | MCP, hooks, and Claude Code plugin marketplaces (`chanto plugin`) |
 

@@ -65,7 +65,7 @@ shutil.copy(here / "../../README.md", main / "README.md")
 (main / "package.json").write_text(json.dumps({
     "name": "chanto",
     "version": version,
-    "description": "A coding agent for your terminal that checks its own work",
+    "description": "A fast, lean coding agent for your terminal",
     **COMMON,
     "bin": {"chanto": "bin/chanto.js"},
     "files": ["bin", "LICENSE"],
