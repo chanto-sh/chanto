@@ -1,13 +1,18 @@
 # Blocks a pull request that adds a dependency with a known vulnerability
 # (moderate or worse) or a license that isn't compatible with Apache-2.0.
 name: dependency review
-on: pull_request
+# The merge queue needs every required check to report; there the review
+# (already done on the pull request) is skipped, which counts as passing.
+on:
+  pull_request:
+  merge_group:
 
 permissions:
   contents: read
 
 jobs:
   review:
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

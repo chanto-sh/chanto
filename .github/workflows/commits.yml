@@ -6,9 +6,12 @@
 # - every commit pushed to main, which catches a direct push that bypassed
 #   the pull request flow.
 name: commits
+# In the merge queue only the hook tests run; the PR title was checked on
+# the pull request, and a skipped required check counts as passing.
 on:
   pull_request:
     types: [opened, edited, synchronize, reopened]
+  merge_group:
   push:
     branches: [main]
 
