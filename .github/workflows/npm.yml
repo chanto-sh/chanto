@@ -1,0 +1,65 @@
+# npm: `npm i -g chanto`. One package per platform (@chanto/cli-<os>-<cpu>)
+# holds that platform's binary from a GitHub release; `chanto` picks it
+# through optionalDependencies. The release workflow calls this after each
+# release; run it by hand to publish an existing release.
+#
+# Skipped without the NPM_TOKEN secret (a granular token that can publish
+# `chanto` and the @chanto scope). Versions already on npm are left alone, so
+# a re-run only publishes what's missing.
+name: npm
+on:
+  workflow_call:
+    inputs:
+      tag:
+        type: string
+        required: true
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, e.g. v0.1.0
+        required: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish when configured
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN isn't set: skipping npm."; exit 0; fi
+          set -euo pipefail
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || { echo "not a release tag: $TAG"; exit 1; }
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern 'chanto-*' --dir dist
+          python3 packaging/npm/build.py "$TAG" dist npm
+          # Pre-releases (v1.2.0-rc.1) go to the `next` dist-tag, never `latest`.
+          dist_tag=latest
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || dist_tag=next
+          publish() {
+            local name version
+            name=$(node -p "require('./$1/package.json').name")
+            version=$(node -p "require('./$1/package.json').version")
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version is already on npm"
+              return
+            fi
+            (cd "$1" && npm publish --access public --provenance --tag "$dist_tag")
+          }
+          # Platform packages first, so `chanto` never points at a missing one.
+          for dir in npm/*/; do
+            [ "$dir" = npm/chanto/ ] && continue
+            publish "${dir%/}"
+          done
+          publish npm/chanto

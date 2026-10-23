@@ -212,41 +212,14 @@ jobs:
           if [ "$code" != 200 ]; then cargo publish --locked -p chanto-proto; fi
           cargo publish --locked -p chanto
 
-  # npm: `npm i -g chanto`. One package per platform holds that platform's
-  # binary from this release; `chanto` picks it through optionalDependencies.
-  # Skipped without the NPM_TOKEN secret (a granular token that can publish
-  # `chanto` and the @chanto-sh scope).
+  # npm: see npm.yml (also runnable by hand for an existing release).
   npm:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
-        with:
-          path: dist
-          merge-multiple: true
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
-      - name: Publish when configured
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        shell: bash
-        run: |
-          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN isn't set: skipping npm."; exit 0; fi
-          set -euo pipefail
-          python3 packaging/npm/build.py "$GITHUB_REF_NAME" dist npm
-          # Pre-releases (v1.2.0-rc.1) go to the `next` dist-tag, never `latest`.
-          tag=latest
-          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || tag=next
-          # Platform packages first, so `chanto` never points at a missing one.
-          for dir in npm/*/; do
-            [ "$dir" = npm/chanto/ ] && continue
-            (cd "$dir" && npm publish --access public --provenance --tag "$tag")
-          done
-          (cd npm/chanto && npm publish --access public --provenance --tag "$tag")
+    uses: ./.github/workflows/npm.yml
+    with:
+      tag: ${{ github.ref_name }}
+    secrets: inherit
 
   # The public download site (chanto.sh) serves releases from R2. `latest`
   # goes last: until then, installs keep getting the previous release.

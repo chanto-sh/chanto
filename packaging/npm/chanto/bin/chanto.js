@@ -5,11 +5,11 @@
 const { spawnSync } = require('node:child_process');
 
 const platforms = {
-  'darwin-arm64': '@chanto-sh/chanto-darwin-arm64',
-  'darwin-x64': '@chanto-sh/chanto-darwin-x64',
-  'linux-arm64': '@chanto-sh/chanto-linux-arm64',
-  'linux-x64': '@chanto-sh/chanto-linux-x64',
-  'win32-x64': '@chanto-sh/chanto-win32-x64'
+  'darwin-arm64': '@chanto/cli-darwin-arm64',
+  'darwin-x64': '@chanto/cli-darwin-x64',
+  'linux-arm64': '@chanto/cli-linux-arm64',
+  'linux-x64': '@chanto/cli-linux-x64',
+  'win32-x64': '@chanto/cli-win32-x64'
 };
 const key = `${process.platform}-${process.arch}`;
 const pkg = platforms[key];

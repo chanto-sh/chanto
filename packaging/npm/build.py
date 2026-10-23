@@ -49,7 +49,7 @@ for key, (target, os_name, cpu) in TARGETS.items():
     shutil.copy(here / "../../LICENSE", pkg / "LICENSE")
     (pkg / "README.md").write_text(f"The `chanto` binary for {os_name} {cpu}. Install [`chanto`](https://www.npmjs.com/package/chanto) instead.\n")
     (pkg / "package.json").write_text(json.dumps({
-        "name": f"@chanto-sh/chanto-{key}",
+        "name": f"@chanto/cli-{key}",
         "version": version,
         "description": f"The chanto binary for {os_name} {cpu}",
         **COMMON,
@@ -70,6 +70,6 @@ shutil.copy(here / "../../README.md", main / "README.md")
     "bin": {"chanto": "bin/chanto.js"},
     "files": ["bin", "LICENSE"],
     "engines": {"node": ">=18"},
-    "optionalDependencies": {f"@chanto-sh/chanto-{k}": version for k in TARGETS},
+    "optionalDependencies": {f"@chanto/cli-{k}": version for k in TARGETS},
 }, indent=2) + "\n")
 print("\n".join(sorted(p.name for p in out.iterdir())))
