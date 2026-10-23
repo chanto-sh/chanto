@@ -109,7 +109,7 @@ pub(crate) fn checked_out(p: impl AsRef<Path>) -> String {
 }
 
 /// Every path in the working tree, except `.git`.
-fn tree(dir: &Path) -> Vec<PathBuf> {
+pub(crate) fn tree(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
@@ -128,7 +128,7 @@ fn tree(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn new_run(repo: &Path, base: &str, task: &str) -> NewRun {
+pub(crate) fn new_run(repo: &Path, base: &str, task: &str) -> NewRun {
     NewRun {
         task: task.into(),
         cwd: Some(repo.to_path_buf()),
@@ -141,7 +141,7 @@ fn new_run(repo: &Path, base: &str, task: &str) -> NewRun {
     }
 }
 
-async fn wait_for(m: &Manager, id: &str, what: &str, f: impl Fn(&Run) -> bool) -> Run {
+pub(crate) async fn wait_for(m: &Manager, id: &str, what: &str, f: impl Fn(&Run) -> bool) -> Run {
     for _ in 0..600 {
         let r = m.get(id).unwrap();
         if f(&r) {
@@ -152,11 +152,11 @@ async fn wait_for(m: &Manager, id: &str, what: &str, f: impl Fn(&Run) -> bool) -
     panic!("run {id} never became {what}: {:?}", m.get(id).unwrap());
 }
 
-fn finished(r: &Run) -> bool {
+pub(crate) fn finished(r: &Run) -> bool {
     !r.state.is_active()
 }
 
-fn write_hello() -> Vec<Value> {
+pub(crate) fn write_hello() -> Vec<Value> {
     vec![
         json!({"tool_calls": tc("Write", json!({"file_path": "hello.txt", "content": "hi\n"}))}),
         json!({"content": "Created hello.txt."}),
@@ -297,7 +297,7 @@ async fn apply_cherry_picks_onto_the_current_branch() {
     assert_eq!(sh(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
 }
 
-fn needs_permission() -> Vec<Value> {
+pub(crate) fn needs_permission() -> Vec<Value> {
     vec![
         json!({"tool_calls": tc("Bash", json!({"command": "make build-it"}))}),
         json!({"content": "Finished after the command."}),

@@ -118,97 +118,10 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
         };
-        let line = line.trim().to_string();
-        if line.is_empty() {
-            continue;
-        }
-        if let Some(arg) = line
-            .strip_prefix("/loop")
-            .filter(|a| a.is_empty() || a.starts_with(char::is_whitespace))
-        {
-            match commands::parse_loop(arg) {
-                Err(e) => ui::warn(&e),
-                Ok(commands::LoopCmd::Stop) => ui::line(&ui::dim(if env.scheduler.stop_loop() {
-                    "Loop stopped."
-                } else {
-                    "No loop is running."
-                })),
-                Ok(commands::LoopCmd::Status) => {
-                    ui::line(&ui::dim(&env.scheduler.loop_status().unwrap_or_else(
-                        || format!("No loop is running. {}", commands::LOOP_USAGE),
-                    )))
-                }
-                Ok(commands::LoopCmd::Start { every, prompt }) => {
-                    ui::line(&ui::dim(
-                        &commands::start_loop(&env, every, prompt)
-                            .replace("or esc", "or ctrl+c while it waits"),
-                    ));
-                }
-            }
-            continue;
-        }
-        let prompt = if line.starts_with('/') {
-            match commands::handle(&mut agent, &line).await {
-                Outcome::Show(s) => {
-                    ui::out(&ui::render_markdown(&s));
-                    ui::out("\n");
-                    continue;
-                }
-                Outcome::Prompt(p) => p,
-                Outcome::Run(job) => {
-                    let cancel = tokio_util::sync::CancellationToken::new();
-                    let c2 = cancel.clone();
-                    let sig = tokio::spawn(async move {
-                        let _ = tokio::signal::ctrl_c().await;
-                        c2.cancel();
-                    });
-                    let label = job.label();
-                    match job.run(&mut agent, cancel).await {
-                        Ok(r) => ui::out(&ui::render_markdown(&r)),
-                        Err(e) => ui::error(&format!("{label} failed: {e:#}")),
-                    }
-                    sig.abort();
-                    agent.save_session();
-                    continue;
-                }
-                Outcome::Exit => break,
-                Outcome::Reset(msg) => {
-                    ui::line(&ui::dim(
-                        &msg.unwrap_or_else(|| "(new conversation)".into()),
-                    ));
-                    continue;
-                }
-                Outcome::Nothing => continue,
-            }
-        } else if let Some(cmd) = line.strip_prefix('!') {
-            if env.config.learning.capture() {
-                crate::learn::record(&env.root, "shell", cmd.trim(), "");
-            }
-            crate::shell::snapshot::ensure(&env).await;
-            let out = crate::shell::std_command(&format!(
-                "{}{cmd}",
-                crate::shell::snapshot::prelude(&env)
-            ))
-            .current_dir(env.cwd())
-            .output()?;
-            let text = format!(
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            ui::out(&text);
-            agent.messages.push(crate::llm::Message::user(format!(
-                "<bash-input>{cmd}</bash-input>\n<bash-output>{}</bash-output>",
-                crate::util::truncate(&text, 20_000)
-            )));
-            continue;
-        } else if let Some(note) = line.strip_prefix('#') {
-            if let Outcome::Show(s) = commands::add_memory(&agent, note) {
-                ui::line(&ui::dim(&s));
-            }
-            continue;
-        } else {
-            line
+        let prompt = match handle_line(&env, &mut agent, line.trim()).await? {
+            Next::Continue => continue,
+            Next::Exit => break,
+            Next::Turn(p) => p,
         };
         let (text, images) = commands::expand_mentions(&agent, &prompt).await;
         let cancel = CancellationToken::new();
@@ -250,6 +163,116 @@ pub async fn run(cli: Cli) -> Result<()> {
     }
     env.shutdown().await;
     Ok(())
+}
+
+/// What the loop does after a line.
+#[derive(Debug, PartialEq)]
+enum Next {
+    /// Handled here (a command, `!shell`, `#note`, `/loop`): read the next line.
+    Continue,
+    Exit,
+    /// Send this prompt to the model.
+    Turn(String),
+}
+
+/// Handle one line typed at the prompt (or a scheduled prompt), short of
+/// running a model turn: slash commands, `/loop`, `!shell` and `#memory` run
+/// here; anything else is the prompt for the next turn.
+async fn handle_line(
+    env: &Arc<crate::agent::Env>,
+    agent: &mut crate::agent::Agent,
+    line: &str,
+) -> Result<Next> {
+    if line.is_empty() {
+        return Ok(Next::Continue);
+    }
+    if let Some(arg) = line
+        .strip_prefix("/loop")
+        .filter(|a| a.is_empty() || a.starts_with(char::is_whitespace))
+    {
+        match commands::parse_loop(arg) {
+            Err(e) => ui::warn(&e),
+            Ok(commands::LoopCmd::Stop) => ui::line(&ui::dim(if env.scheduler.stop_loop() {
+                "Loop stopped."
+            } else {
+                "No loop is running."
+            })),
+            Ok(commands::LoopCmd::Status) => {
+                ui::line(&ui::dim(&env.scheduler.loop_status().unwrap_or_else(
+                    || format!("No loop is running. {}", commands::LOOP_USAGE),
+                )))
+            }
+            Ok(commands::LoopCmd::Start { every, prompt }) => {
+                ui::line(&ui::dim(
+                    &commands::start_loop(env, every, prompt)
+                        .replace("or esc", "or ctrl+c while it waits"),
+                ));
+            }
+        }
+        return Ok(Next::Continue);
+    }
+    let prompt = if line.starts_with('/') {
+        match commands::handle(agent, line).await {
+            Outcome::Show(s) => {
+                ui::out(&ui::render_markdown(&s));
+                ui::out("\n");
+                return Ok(Next::Continue);
+            }
+            Outcome::Prompt(p) => p,
+            Outcome::Run(job) => {
+                let cancel = tokio_util::sync::CancellationToken::new();
+                let c2 = cancel.clone();
+                let sig = tokio::spawn(async move {
+                    let _ = tokio::signal::ctrl_c().await;
+                    c2.cancel();
+                });
+                let label = job.label();
+                match job.run(agent, cancel).await {
+                    Ok(r) => ui::out(&ui::render_markdown(&r)),
+                    Err(e) => ui::error(&format!("{label} failed: {e:#}")),
+                }
+                sig.abort();
+                agent.save_session();
+                return Ok(Next::Continue);
+            }
+            Outcome::Exit => return Ok(Next::Exit),
+            Outcome::Reset(msg) => {
+                ui::line(&ui::dim(
+                    &msg.unwrap_or_else(|| "(new conversation)".into()),
+                ));
+                return Ok(Next::Continue);
+            }
+            Outcome::Nothing => return Ok(Next::Continue),
+        }
+    } else if let Some(cmd) = line.strip_prefix('!') {
+        if env.config.learning.capture() {
+            crate::learn::record(&env.root, "shell", cmd.trim(), "");
+        }
+        crate::shell::snapshot::ensure(env).await;
+        let out =
+            crate::shell::std_command(&format!("{}{cmd}", crate::shell::snapshot::prelude(env)))
+                .current_dir(env.cwd())
+                .output()?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        ui::out(&text);
+        agent.messages.push(crate::llm::Message::user(format!(
+            "<bash-input>{cmd}</bash-input>\n<bash-output>{}</bash-output>",
+            crate::util::truncate(&text, 20_000)
+        )));
+        return Ok(Next::Continue);
+    } else if let Some(note) = line.strip_prefix('#') {
+        if let Outcome::Show(s) = commands::add_memory(agent, note) {
+            ui::line(&ui::dim(&s));
+        }
+        return Ok(Next::Continue);
+    } else {
+        line.to_string()
+    };
+    Ok(Next::Turn(prompt))
 }
 
 /// What to run next without the user: background reports (Monitor lines,
@@ -336,3 +359,6 @@ async fn next_scheduled(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
