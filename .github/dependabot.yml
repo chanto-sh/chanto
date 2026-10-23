@@ -1,7 +1,8 @@
 # At most two pull requests per ecosystem a week: minor and patch updates
-# together (auto-merged once CI passes, see workflows/dependabot.yml) and
-# major updates together (left for review). Security updates are grouped
-# the same way.
+# together in the "deps" group (auto-merged once CI passes, see
+# workflows/dependabot.yml) and major updates together (left for review).
+# Security updates are grouped the same way. Group names stay short: they go
+# into the pull request title, which must fit the 72-character commit subject.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -15,7 +16,7 @@ updates:
       include: scope
     open-pull-requests-limit: 5
     groups:
-      minor-and-patch:
+      deps:
         applies-to: version-updates
         update-types: [minor, patch]
       major:
@@ -36,7 +37,7 @@ updates:
       include: scope
     open-pull-requests-limit: 3
     groups:
-      minor-and-patch:
+      deps:
         applies-to: version-updates
         update-types: [minor, patch]
       major:
