@@ -3820,3 +3820,6 @@ mod arg_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod tests;
