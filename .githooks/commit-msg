@@ -1,0 +1,63 @@
+#!/bin/sh
+# Checks a commit message: Conventional Commits format, and no AI attribution
+# (house rule). CI runs this same script on pull request titles, since squash
+# merges use the title as the commit subject.
+#
+#   git config core.hooksPath .githooks     # once per clone
+#   .githooks/commit-msg <message-file>     # what git and CI call
+#
+# Skip a single run with `git commit --no-verify`.
+set -eu
+export LC_ALL=C
+
+msg_file=${1:?usage: commit-msg <message-file>}
+
+# The message as git will record it: without comment lines, and without the
+# diff `git commit -v` appends below the scissors line.
+msg=$(sed -e '/^# -\{24\} >8 -\{24\}$/,$d' -e '/^#/d' "$msg_file")
+subject=$(printf '%s\n' "$msg" | sed -n '1p')
+
+if printf '%s\n' "$msg" | grep -nEi 'co-authored-by:.*(claude|anthropic|openai|gpt|copilot|gemini|cursor|codex|devin)' \
+    || printf '%s\n' "$msg" | grep -nEi '(generated|written|created|made) with .*(claude|copilot|chatgpt|gpt|cursor|codex|gemini|devin)' \
+    || printf '%s\n' "$msg" | grep -nE 'Generated with \[Claude Code\]|🤖'; then
+    echo "error: commit message credits an AI assistant; remove the attribution (house rule)" >&2
+    exit 1
+fi
+
+# Commits git writes itself, and ones `git rebase --autosquash` folds away.
+case "$subject" in
+    "Merge "* | "Revert \""* | "fixup! "* | "squash! "* | "amend! "*) exit 0 ;;
+esac
+
+fail() {
+    printf 'error: %s\n  subject: %s\n' "$1" "$subject" >&2
+    cat >&2 <<'EOF'
+
+Use Conventional Commits:  <type>(<scope>)!: <summary>
+  type   feat fix perf refactor docs test build ci chore revert style
+  scope  optional, lowercase: the area touched (tui, hooks, sandbox, bench...)
+  !      marks a breaking change (or add a `BREAKING CHANGE:` footer)
+  e.g.   fix(sandbox): allow writes to the cargo registry cache
+See CONTRIBUTING.md#commit-messages.
+EOF
+    exit 1
+}
+
+types='feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style'
+printf '%s\n' "$subject" | grep -qE "^($types)(\([a-z0-9][a-z0-9._/-]*\))?!?: [^ ]" \
+    || fail "subject doesn't follow Conventional Commits"
+
+summary=${subject#*: }
+[ ${#subject} -le 72 ] || fail "subject is ${#subject} characters; keep it to 72"
+case "$summary" in
+    *.) fail "drop the trailing period from the summary" ;;
+esac
+case "$summary" in
+    [A-Z][a-z]*) fail "start the summary in lowercase, as an imperative (\"add\", not \"Added\")" ;;
+esac
+
+# A body, if any, is separated from the subject by one blank line.
+second=$(printf '%s\n' "$msg" | sed -n '2p')
+[ -z "$second" ] || fail "leave a blank line between the subject and the body"
+
+exit 0

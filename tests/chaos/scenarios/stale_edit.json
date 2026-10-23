@@ -1,0 +1,6 @@
+[
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "a.txt"}}]},
+ {"tool_calls": [{"name": "Edit", "args": {"file_path": "a.txt", "old_string": "hello", "new_string": "HELLO"}}], "sleep_s": 3},
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "a.txt", "content": "overwritten by the model\n"}}]},
+ {"text": "done."}
+]

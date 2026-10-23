@@ -1,0 +1,5 @@
+[
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "a.txt"}}]},
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "b.txt", "content": "written\n"}}]},
+ {"text": "Wrote b.txt."}
+]

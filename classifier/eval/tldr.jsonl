@@ -1,0 +1,1046 @@
+{"cmd": "x0vncserver -display :0 -passwordfile path/to/file", "risky": 1, "why": "starts a VNC server exposing the display to the network", "source": "tldr-pages linux/x0vncserver"}
+{"cmd": "gfortran path/to/source.f90 -Wall -g -Og -o path/to/output_executable", "risky": 0, "source": "tldr-pages common/gfortran"}
+{"cmd": "rpmspec --query path/to/rpm.spec", "risky": 0, "source": "tldr-pages linux/rpmspec"}
+{"cmd": "mcookie -f path/to/file -m number_of_bytes", "risky": 0, "source": "tldr-pages linux/mcookie"}
+{"cmd": "eslint --fix", "risky": 0, "source": "tldr-pages common/eslint"}
+{"cmd": "go mod download", "risky": 0, "source": "tldr-pages common/go-mod"}
+{"cmd": "terraform providers mirror -platform=linux_amd64 path/to/mirror_directory", "risky": 0, "source": "tldr-pages common/terraform-providers"}
+{"cmd": "head -n count path/to/file", "risky": 0, "source": "tldr-pages linux/head"}
+{"cmd": "md-to-clip --output-directory path/to/directory path/to/page1.md_path/to/page2.md_...", "risky": 0, "source": "tldr-pages common/md-to-clip"}
+{"cmd": "gh issue view issue_number", "risky": 0, "source": "tldr-pages common/gh-issue"}
+{"cmd": "imgcat path/to/file", "risky": 0, "source": "tldr-pages common/imgcat"}
+{"cmd": "rm -i path/to/file1_path/to/file2_...", "risky": 0, "source": "tldr-pages common/rm"}
+{"cmd": "faketime '2020-01-01_12:00:00' program", "risky": 0, "source": "tldr-pages linux/faketime"}
+{"cmd": "timeout 3s sleep 10", "risky": 0, "source": "tldr-pages common/timeout"}
+{"cmd": "busctl introspect service path/to/object", "risky": 0, "source": "tldr-pages linux/busctl"}
+{"cmd": "cat -s path/to/file", "risky": 0, "source": "tldr-pages linux/cat"}
+{"cmd": "prettier --config path/to/config_file path/to/file", "risky": 0, "source": "tldr-pages common/prettier"}
+{"cmd": "</>pattern", "risky": 0, "source": "tldr-pages common/less"}
+{"cmd": "<q><y>", "risky": 0, "source": "tldr-pages linux/links"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "poetry run command", "risky": 0, "source": "tldr-pages common/poetry"}
+{"cmd": "awk 'NR%3==1' path/to/file", "risky": 0, "source": "tldr-pages common/awk"}
+{"cmd": "ed", "risky": 0, "source": "tldr-pages common/ed"}
+{"cmd": "rustdoc src/lib.rs", "risky": 0, "source": "tldr-pages common/rustdoc"}
+{"cmd": "speed-test --verbose", "risky": 0, "source": "tldr-pages common/speed-test"}
+{"cmd": "grub-mkfont -o path/to/output.pf2 --no-hinting --no-bitmap path/to/font.ttf", "risky": 0, "source": "tldr-pages linux/grub-mkfont"}
+{"cmd": "make -B target", "risky": 0, "source": "tldr-pages common/make"}
+{"cmd": "git show --stat commit", "risky": 0, "source": "tldr-pages common/git-show"}
+{"cmd": "fdroidcl search search_pattern", "risky": 0, "source": "tldr-pages common/fdroidcl"}
+{"cmd": "streamlink example.com/stream", "risky": 0, "source": "tldr-pages common/streamlink"}
+{"cmd": "docker compose up --remove-orphans", "risky": 0, "source": "tldr-pages common/docker-compose-up"}
+{"cmd": "<?>pattern", "risky": 0, "source": "tldr-pages common/less"}
+{"cmd": "hyprpicker -h", "risky": 0, "source": "tldr-pages linux/hyprpicker"}
+{"cmd": "<1>|<2>|<3>|<4>|<5>", "risky": 0, "source": "tldr-pages linux/snake4"}
+{"cmd": "git guilt @{3.weeks.ago}", "risky": 0, "source": "tldr-pages common/git-guilt"}
+{"cmd": "jj gerrit upload --quiet", "risky": 1, "why": "uploads changes to Gerrit remote", "source": "tldr-pages common/jj-gerrit"}
+{"cmd": "uv sync --group group_name", "risky": 0, "source": "tldr-pages common/uv-sync"}
+{"cmd": "fswatch path/to/file | xargs -n 1 bash_command", "risky": 0, "source": "tldr-pages common/fswatch"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "git commit -a -m \"message\"", "risky": 0, "source": "tldr-pages common/git-commit"}
+{"cmd": "fdroid build app_id --server", "risky": 0, "source": "tldr-pages common/fdroid"}
+{"cmd": "ahost example.com", "risky": 0, "source": "tldr-pages linux/ahost"}
+{"cmd": "xmllint --valid source_file.xml", "risky": 0, "source": "tldr-pages common/xmllint"}
+{"cmd": "react-native start --no-interactive", "risky": 0, "source": "tldr-pages common/react-native-start"}
+{"cmd": "path/to/factorio --create path/to/save.zip --map-gen-settings path/to/map_gen_settings.json --map-settings path/to/map_settings.json", "risky": 0, "source": "tldr-pages linux/factorio"}
+{"cmd": "<p>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "dotty -el 0|1 path/to/graph.gv", "risky": 0, "source": "tldr-pages common/dotty"}
+{"cmd": "docker run --rm -it image command", "risky": 0, "source": "tldr-pages common/docker-container-run"}
+{"cmd": "zig build run -fwine -Dtarget=x86_64-windows", "risky": 0, "source": "tldr-pages common/zig"}
+{"cmd": "xsltproc --output path/to/output_file.html --stringparam \"name\" \"value\" path/to/stylesheet_file.xslt path/to/xml_file.xml", "risky": 0, "source": "tldr-pages osx/xsltproc"}
+{"cmd": "npm star package_name --otp otp", "risky": 1, "why": "outward action on npm registry with OTP", "source": "tldr-pages common/npm-star"}
+{"cmd": "sort -u path/to/file", "risky": 0, "source": "tldr-pages common/sort"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "mktemp -t example", "risky": 0, "source": "tldr-pages osx/mktemp"}
+{"cmd": "nvidia-smi dmon", "risky": 0, "source": "tldr-pages common/nvidia-smi"}
+{"cmd": "cordova info", "risky": 0, "source": "tldr-pages common/cordova"}
+{"cmd": "ps -o ppid= -p process_id", "risky": 0, "source": "tldr-pages osx/ps"}
+{"cmd": "<q><y>", "risky": 0, "source": "tldr-pages linux/links"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "R -e expr", "risky": 0, "source": "tldr-pages common/r.lang"}
+{"cmd": "cargo clippy -- -W clippy::lint_group", "risky": 0, "source": "tldr-pages common/cargo-clippy"}
+{"cmd": "<w>|<ArrowUp>", "risky": 0, "source": "tldr-pages linux/cuyo"}
+{"cmd": "accelerate launch path/to/script.py --multi_gpu --num_machines 2", "risky": 0, "source": "tldr-pages common/accelerate"}
+{"cmd": "<d>", "risky": 1, "why": "selects a disk partition to delete", "source": "tldr-pages linux/gdisk"}
+{"cmd": "fuser -m path/to/file_or_directory", "risky": 0, "source": "tldr-pages linux/fuser"}
+{"cmd": "echo \"$IFS\"", "risky": 0, "source": "tldr-pages common/ifs"}
+{"cmd": "loadkeys -m en|de|fi|...", "risky": 0, "source": "tldr-pages linux/loadkeys"}
+{"cmd": "awk -F ',' '{print $NF}' path/to/file", "risky": 0, "source": "tldr-pages common/awk"}
+{"cmd": "eslint --init", "risky": 0, "source": "tldr-pages common/eslint"}
+{"cmd": "gosec path/to/package", "risky": 0, "source": "tldr-pages common/gosec"}
+{"cmd": "ranger -r path/to/directory", "risky": 0, "source": "tldr-pages common/ranger"}
+{"cmd": "git rebase --continue", "risky": 0, "source": "tldr-pages common/git-rebase"}
+{"cmd": "tlmgr check all -v", "risky": 0, "source": "tldr-pages common/tlmgr-check"}
+{"cmd": "aws secretsmanager list-secrets --query 'SecretList[*].{Name: Name, ARN: ARN}'", "risky": 1, "why": "accesses cloud secrets store", "source": "tldr-pages common/aws-secretsmanager"}
+{"cmd": "doctl k c ls", "risky": 0, "source": "tldr-pages common/doctl-kubernetes-cluster"}
+{"cmd": "pip install -e .", "risky": 0, "source": "tldr-pages common/pip-install"}
+{"cmd": "grep -rI \"search_pattern\" path/to/directory", "risky": 0, "source": "tldr-pages common/grep"}
+{"cmd": "idevicebackup restore path/to/directory", "risky": 1, "why": "restores backup onto iOS device, overwriting device data", "source": "tldr-pages common/idevicebackup"}
+{"cmd": "rustfmt --check path/to/source.rs", "risky": 0, "source": "tldr-pages common/rustfmt"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "git merge --abort", "risky": 1, "why": "git merge --abort discards in-progress merge resolution", "source": "tldr-pages common/git-merge"}
+{"cmd": "tac -r -s separator path/to/file1_path/to/file2_...", "risky": 0, "source": "tldr-pages common/tac"}
+{"cmd": "sudo lynis update info", "risky": 1, "why": "sudo", "source": "tldr-pages linux/lynis"}
+{"cmd": "light-arionum-cli balance address", "risky": 0, "source": "tldr-pages common/light-arionum-cli"}
+{"cmd": "clang-tidy path/to/file.cpp", "risky": 0, "source": "tldr-pages common/clang-tidy"}
+{"cmd": "skills ls", "risky": 0, "source": "tldr-pages common/skills"}
+{"cmd": "mvn compile", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "prettier --single-quote --trailing-comma none --write path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/prettier"}
+{"cmd": "guacd -b 127.0.0.1 -l 4823", "risky": 0, "source": "tldr-pages common/guacd"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "appman -r package", "risky": 1, "why": "removes a system package", "source": "tldr-pages linux/appman"}
+{"cmd": "soffice --convert-to pdf *.doc", "risky": 0, "source": "tldr-pages common/soffice"}
+{"cmd": "chmod g-x,o-x path/to/file", "risky": 0, "source": "tldr-pages common/chmod"}
+{"cmd": "spottopgm first_col_first_row_last_col_last_row path/to/file.spot > path/to/output.pgm", "risky": 0, "source": "tldr-pages common/spottopgm"}
+{"cmd": "mysides add $(basename $(pwd)) file:///$(pwd)", "risky": 1, "why": "modifies Finder sidebar (global user state)", "source": "tldr-pages osx/mysides"}
+{"cmd": "VBoxManage showvminfo name|uuid", "risky": 0, "source": "tldr-pages common/vboxmanage"}
+{"cmd": "docker rmi --no-prune image", "risky": 1, "why": "removes a docker image outside the project", "source": "tldr-pages common/docker-image-rm"}
+{"cmd": "pacman-key -f \"uid|name|email\"", "risky": 0, "source": "tldr-pages linux/pacman-key"}
+{"cmd": "gedit --encoding UTF-8 path/to/file", "risky": 0, "source": "tldr-pages linux/gedit"}
+{"cmd": "inference-snap chat", "risky": 0, "source": "tldr-pages linux/inference-snap"}
+{"cmd": "kaggle k files kernel_name", "risky": 0, "source": "tldr-pages common/kaggle-kernels"}
+{"cmd": "select /dev/sdX", "risky": 1, "why": "selects raw disk device for partitioning", "source": "tldr-pages linux/parted.interactive"}
+{"cmd": "cp -vra path/to/source_directory path/to/target_directory", "risky": 0, "source": "tldr-pages common/cp"}
+{"cmd": "mvn package -D skipTests", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "<:>%s/regex/replacement/g<Enter>", "risky": 0, "source": "tldr-pages common/vim"}
+{"cmd": "docker compose logs --since timestamp", "risky": 0, "source": "tldr-pages common/docker-compose-logs"}
+{"cmd": "<x>", "risky": 1, "why": "exports a key", "source": "tldr-pages linux/alsamixer"}
+{"cmd": "wine reg delete 'HKEY_CURRENT_USER\\path\\to\\key'", "risky": 1, "why": "deletes registry key outside project", "source": "tldr-pages linux/wine-reg-delete"}
+{"cmd": "kpackagetool6 -t package_type -u path/to/directory", "risky": 1, "why": "updates an installed system package", "source": "tldr-pages linux/kpackagetool6"}
+{"cmd": "</>something<Enter>", "risky": 0, "source": "tldr-pages linux/more"}
+{"cmd": "tldr rpcdump.py", "risky": 0, "source": "tldr-pages common/impacket-rpcdump"}
+{"cmd": "sudo trip example.com --protocol udp --source-port 5000", "risky": 1, "why": "sudo", "source": "tldr-pages common/trip"}
+{"cmd": "uv sync", "risky": 0, "source": "tldr-pages common/uv"}
+{"cmd": "yara -m path/to/rule.yar path/to/file", "risky": 0, "source": "tldr-pages common/yara"}
+{"cmd": "terraform destroy -compact-warnings", "risky": 1, "why": "terraform destroy", "source": "tldr-pages common/terraform-destroy"}
+{"cmd": "tldr pamsplit", "risky": 0, "source": "tldr-pages common/pnmsplit"}
+{"cmd": "rails console -s", "risky": 0, "source": "tldr-pages common/rails-console"}
+{"cmd": "wc -w path/to/file", "risky": 0, "source": "tldr-pages osx/wc"}
+{"cmd": "<x>", "risky": 0, "source": "tldr-pages linux/alsamixer"}
+{"cmd": "zsh path/to/script.zsh", "risky": 0, "source": "tldr-pages common/zsh"}
+{"cmd": "npm x --quiet command argument1_argument2_...", "risky": 0, "source": "tldr-pages common/npm-exec"}
+{"cmd": "jstack /usr/bin/java file.core", "risky": 0, "source": "tldr-pages common/jstack"}
+{"cmd": "mado --help", "risky": 0, "source": "tldr-pages common/mado"}
+{"cmd": "export -p", "risky": 1, "why": "prints all exported env vars (may include secrets)", "source": "tldr-pages linux/export"}
+{"cmd": "head -n -count path/to/file", "risky": 0, "source": "tldr-pages linux/head"}
+{"cmd": "telegram-desktop -autostart", "risky": 0, "source": "tldr-pages common/telegram-desktop"}
+{"cmd": "calibre-server", "risky": 0, "source": "tldr-pages common/calibre-server"}
+{"cmd": "docker cp container_name:path/to/file_or_directory_in_container path/to/file_or_directory_on_host", "risky": 0, "source": "tldr-pages common/docker-container-cp"}
+{"cmd": "<F1>", "risky": 0, "source": "tldr-pages common/wuzz"}
+{"cmd": "<:>diffupdate", "risky": 0, "source": "tldr-pages common/vimdiff"}
+{"cmd": "git clone path/to/file.bundle", "risky": 0, "source": "tldr-pages common/git-bundle"}
+{"cmd": "zizmor -v", "risky": 0, "source": "tldr-pages common/zizmor"}
+{"cmd": "<:>wq<Enter>", "risky": 0, "source": "tldr-pages common/hx"}
+{"cmd": "git fetch", "risky": 0, "source": "tldr-pages common/git-fetch"}
+{"cmd": "ruff check --watch", "risky": 0, "source": "tldr-pages common/ruff-check"}
+{"cmd": "qjoypad --force-tray", "risky": 0, "source": "tldr-pages linux/qjoypad"}
+{"cmd": "eslint path/to/file1.js_path/to/file2.js_...", "risky": 0, "source": "tldr-pages common/eslint"}
+{"cmd": "shopt", "risky": 0, "source": "tldr-pages common/shopt"}
+{"cmd": "xbacklight", "risky": 0, "source": "tldr-pages linux/xbacklight"}
+{"cmd": "echo_'Files.list(Paths.get(\"/etc\")).forEach(System.out::println);' | jbang -", "risky": 0, "source": "tldr-pages common/jbang"}
+{"cmd": "command | sed -n '1p'", "risky": 0, "source": "tldr-pages osx/sed"}
+{"cmd": "git commit", "risky": 0, "source": "tldr-pages common/git-commit"}
+{"cmd": "mv -n path/to/source path/to/target", "risky": 0, "source": "tldr-pages common/mv"}
+{"cmd": "docker buildx inspect builder_name", "risky": 0, "source": "tldr-pages common/docker-buildx-inspect"}
+{"cmd": "webstorm diff path/to/file1_path/to/file2_path/to/optional_file3", "risky": 0, "source": "tldr-pages common/webstorm"}
+{"cmd": "nl -b p'FooBar[0-9]' path/to/file", "risky": 0, "source": "tldr-pages linux/nl"}
+{"cmd": "<F1>", "risky": 0, "source": "tldr-pages common/wuzz"}
+{"cmd": "uv sync", "risky": 0, "source": "tldr-pages common/uv"}
+{"cmd": "jj op diff -f from_op -t to_op", "risky": 0, "source": "tldr-pages common/jj-operation"}
+{"cmd": "<s>|<ArrowDown>", "risky": 0, "source": "tldr-pages linux/cuyo"}
+{"cmd": "carthage bootstrap", "risky": 0, "source": "tldr-pages osx/carthage"}
+{"cmd": "linode-cli domains records-create domain_id --type A|AAAA|CNAME|MX|... --name subdomain --target target_value", "risky": 1, "why": "creates DNS record", "source": "tldr-pages common/linode-cli-domains"}
+{"cmd": "gh pr view -w", "risky": 0, "source": "tldr-pages common/gh-pr-view"}
+{"cmd": "jj config u --user name", "risky": 1, "why": "changes user-level jj config", "source": "tldr-pages common/jj-config"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "steamcmd +login username +logout +quit", "risky": 1, "why": "logs in/clears cached credentials", "source": "tldr-pages common/steamcmd"}
+{"cmd": "ruff check path/to/file_or_directory1_path/to/file_or_directory2_...", "risky": 0, "source": "tldr-pages common/ruff-check"}
+{"cmd": "toolbox rmi -f image_name", "risky": 1, "why": "force-removes image and its containers", "source": "tldr-pages linux/toolbox-rmi"}
+{"cmd": "pkgutil --files com.microsoft.Word", "risky": 0, "source": "tldr-pages osx/pkgutil"}
+{"cmd": "az acr delete -n registry_name -g resource_group -y", "risky": 1, "why": "deletes cloud container registry", "source": "tldr-pages common/az-acr"}
+{"cmd": "git status -s", "risky": 0, "source": "tldr-pages common/git-status"}
+{"cmd": "go test", "risky": 0, "source": "tldr-pages common/go"}
+{"cmd": "go test -v -bench .", "risky": 0, "source": "tldr-pages common/go-test"}
+{"cmd": "<v>", "risky": 0, "source": "tldr-pages common/less"}
+{"cmd": "csvformat -M \"\\r\\n\" data.csv", "risky": 0, "source": "tldr-pages common/csvformat"}
+{"cmd": "npm shrinkwrap --production", "risky": 0, "source": "tldr-pages common/npm-shrinkwrap"}
+{"cmd": "fsck /dev/sdX", "risky": 1, "why": "fsck on a raw disk device", "source": "tldr-pages osx/fsck"}
+{"cmd": "nkf -m --overwrite path/to/file.txt", "risky": 0, "source": "tldr-pages common/nkf"}
+{"cmd": "<Space>|<ArrowUp>", "risky": 0, "source": "tldr-pages common/bastet"}
+{"cmd": "cat $(which unzipsfx) path/to/archive.zip > filename && chmod 755 filename", "risky": 0, "source": "tldr-pages linux/unzipsfx"}
+{"cmd": "cf bind-service app_name service_name", "risky": 1, "why": "binds cloud service to app", "source": "tldr-pages common/cf"}
+{"cmd": "</>something<Enter>", "risky": 0, "source": "tldr-pages linux/more"}
+{"cmd": "tail -F path/to/file", "risky": 0, "source": "tldr-pages osx/tail"}
+{"cmd": "git add -A", "risky": 0, "source": "tldr-pages common/git"}
+{"cmd": "whereis -s gcc -m git", "risky": 0, "source": "tldr-pages linux/whereis"}
+{"cmd": "systemctl switch-root path/to/new_root /sbin/init", "risky": 1, "why": "systemctl switch-root changes system root", "source": "tldr-pages linux/systemctl-switch-root"}
+{"cmd": "echo $#", "risky": 0, "source": "tldr-pages common/$"}
+{"cmd": "aws cloudwatch list-metrics", "risky": 0, "source": "tldr-pages common/aws-cloudwatch"}
+{"cmd": "pkgctl auth login", "risky": 1, "why": "authenticates/stores credentials", "source": "tldr-pages linux/pkgctl-auth"}
+{"cmd": "sudo importctl pull-tar url path/to/directory", "risky": 1, "why": "sudo, downloads system image", "source": "tldr-pages linux/importctl"}
+{"cmd": "owut check", "risky": 0, "source": "tldr-pages linux/owut"}
+{"cmd": "g++ --version", "risky": 0, "source": "tldr-pages common/g++"}
+{"cmd": "trunk fmt", "risky": 0, "source": "tldr-pages common/trunk.io"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "ng t --coverage", "risky": 0, "source": "tldr-pages common/ng-test"}
+{"cmd": "sleep seconds", "risky": 0, "source": "tldr-pages linux/sleep"}
+{"cmd": "sudo sgdisk -Z /dev/sdX", "risky": 1, "why": "sudo, wipes partition tables", "source": "tldr-pages common/sgdisk"}
+{"cmd": "jj squash -f revsets -t revset", "risky": 0, "source": "tldr-pages common/jj-squash"}
+{"cmd": "linode-cli nodebalancers delete nodebalancer_id", "risky": 1, "why": "deletes cloud NodeBalancer", "source": "tldr-pages common/linode-cli-nodebalancers"}
+{"cmd": "git switch -t remote_name/branch", "risky": 0, "source": "tldr-pages common/git-switch"}
+{"cmd": "wol -i ip_address mac_address", "risky": 1, "why": "sends Wake-on-LAN packet to a remote device", "source": "tldr-pages linux/wol"}
+{"cmd": "du -sh path/to/directory", "risky": 0, "source": "tldr-pages osx/du"}
+{"cmd": "tldr du", "risky": 0, "source": "tldr-pages linux/gnudu"}
+{"cmd": "terraform fmt", "risky": 0, "source": "tldr-pages common/terraform"}
+{"cmd": "command | sed 's/apple/mango/g'", "risky": 0, "source": "tldr-pages osx/sed"}
+{"cmd": "wami --list-topics search_string", "risky": 0, "source": "tldr-pages linux/wami"}
+{"cmd": "knockd -c path/to/file.configuration", "risky": 1, "why": "starts port-knocking daemon (network/firewall)", "source": "tldr-pages linux/knockd"}
+{"cmd": "expr expression1 \\| expression2", "risky": 0, "source": "tldr-pages common/expr"}
+{"cmd": "pytest -k expression", "risky": 0, "source": "tldr-pages common/pytest"}
+{"cmd": "sox --norm path/to/input_audio path/to/output_audio", "risky": 0, "source": "tldr-pages common/sox"}
+{"cmd": "sc_wartsdump path/to/file1.warts_path/to/file2.warts_...", "risky": 0, "source": "tldr-pages common/sc_wartsdump"}
+{"cmd": "diff path/to/old_file path/to/new_file", "risky": 0, "source": "tldr-pages common/diff"}
+{"cmd": "ibmcloud login -a api_endpoint", "risky": 1, "why": "cloud login / credentials", "source": "tldr-pages common/ibmcloud-login"}
+{"cmd": "docker context create context_name --docker \"host=tcp://remote-host:2375\"", "risky": 1, "why": "creates docker context pointing at remote host", "source": "tldr-pages common/docker-context"}
+{"cmd": "uv sync --only-dev", "risky": 0, "source": "tldr-pages common/uv-sync"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "path/to/factorio -h", "risky": 0, "source": "tldr-pages linux/factorio"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "git show --oneline -s commit", "risky": 0, "source": "tldr-pages common/git-show"}
+{"cmd": "tldr setarch", "risky": 0, "source": "tldr-pages linux/x86_64"}
+{"cmd": "xkcdpass -i", "risky": 0, "source": "tldr-pages common/xkcdpass"}
+{"cmd": "sleep seconds", "risky": 0, "source": "tldr-pages linux/sleep"}
+{"cmd": "tar czf path/to/target.tar.gz -C path/to/directory .", "risky": 0, "source": "tldr-pages common/tar"}
+{"cmd": "latexpand -o path/to/output.tex path/to/file.tex", "risky": 0, "source": "tldr-pages common/latexpand"}
+{"cmd": "ps -r", "risky": 0, "source": "tldr-pages osx/ps"}
+{"cmd": "bun test path/to/file.test.ts", "risky": 0, "source": "tldr-pages common/bun-test"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "jpegtopnm -v", "risky": 0, "source": "tldr-pages common/jpegtopnm"}
+{"cmd": "i3", "risky": 0, "source": "tldr-pages common/i3"}
+{"cmd": "twine upload --config-file configuration_file dist/*", "risky": 1, "why": "publishes package to PyPI", "source": "tldr-pages common/twine"}
+{"cmd": "gxl2gv -o output.gv input.gxl", "risky": 0, "source": "tldr-pages common/gxl2gv"}
+{"cmd": "sudo blockdev --getpbsz /dev/sdXY", "risky": 1, "why": "sudo", "source": "tldr-pages linux/blockdev"}
+{"cmd": "notmuch tag -custom_tag \"search_term\"", "risky": 1, "why": "modifies tags on user's mail database", "source": "tldr-pages common/notmuch"}
+{"cmd": "git blame commit~ path/to/file", "risky": 0, "source": "tldr-pages common/git-blame"}
+{"cmd": "vet server mcp", "risky": 0, "source": "tldr-pages common/vet"}
+{"cmd": "path/to/PalServer.sh -publicip=ip_address -publicport=port", "risky": 1, "why": "starts a publicly exposed game server", "source": "tldr-pages linux/palworld"}
+{"cmd": "mh_lint path/to/file.m", "risky": 0, "source": "tldr-pages common/mh_lint"}
+{"cmd": "<Enter><~><.>", "risky": 0, "source": "tldr-pages linux/cu"}
+{"cmd": "export VARIABLE=value", "risky": 0, "source": "tldr-pages linux/export"}
+{"cmd": "poetry update", "risky": 1, "why": "updates all dependencies beyond lockfile", "source": "tldr-pages common/poetry"}
+{"cmd": "shortcuts view \"Count_holidays\"", "risky": 0, "source": "tldr-pages osx/shortcuts"}
+{"cmd": "diff -w path/to/old_file path/to/new_file", "risky": 0, "source": "tldr-pages common/diff"}
+{"cmd": "xargs -a path/to/file command", "risky": 0, "source": "tldr-pages common/xargs"}
+{"cmd": "meteor build path/to/directory", "risky": 0, "source": "tldr-pages common/meteor"}
+{"cmd": "mypy -m module_name", "risky": 0, "source": "tldr-pages common/mypy"}
+{"cmd": "numbat -N", "risky": 0, "source": "tldr-pages common/numbat"}
+{"cmd": "npm audit fix", "risky": 1, "why": "npm audit fix changes dependency versions", "source": "tldr-pages common/npm-audit"}
+{"cmd": "gt create branch_name", "risky": 0, "source": "tldr-pages common/gt"}
+{"cmd": "phpmd", "risky": 0, "source": "tldr-pages common/phpmd"}
+{"cmd": "tar xf path/to/source.tar --wildcards \"*.html\"", "risky": 0, "source": "tldr-pages common/tar"}
+{"cmd": "sed -i '/^[[:space:]]*$/d' path/to/file", "risky": 0, "source": "tldr-pages linux/sed"}
+{"cmd": "<h>", "risky": 0, "source": "tldr-pages osx/nettop"}
+{"cmd": "ppmtopjxl path/to/image.ppm > path/to/output.pjxl", "risky": 0, "source": "tldr-pages common/ppmtopjxl"}
+{"cmd": "lsof -c process_or_command_name", "risky": 0, "source": "tldr-pages common/lsof"}
+{"cmd": "evince file1.pdf_file2.pdf_...", "risky": 0, "source": "tldr-pages linux/evince"}
+{"cmd": "q -d ',' \"SELECT * from path/to/file\"", "risky": 0, "source": "tldr-pages common/q"}
+{"cmd": "path/to/server_linux -password password", "risky": 0, "source": "tldr-pages linux/natural-selection-2"}
+{"cmd": "ppmrainbow color1_color2_... > path/to/output_file.ppm", "risky": 0, "source": "tldr-pages common/ppmrainbow"}
+{"cmd": "git stash", "risky": 0, "source": "tldr-pages common/git-stash"}
+{"cmd": "winemaker --mfc path/to/source_directory", "risky": 0, "source": "tldr-pages linux/winemaker"}
+{"cmd": "diff -r -q path/to/old_directory path/to/new_directory", "risky": 0, "source": "tldr-pages common/diff"}
+{"cmd": "mypy --config-file path/to/config_file", "risky": 0, "source": "tldr-pages common/mypy"}
+{"cmd": "gzip -c path/to/file > path/to/compressed_file.gz", "risky": 0, "source": "tldr-pages common/gzip"}
+{"cmd": "fruits=(apple_orange_pear_banana); select word in ${fruits[@]}; do echo $word; done", "risky": 0, "source": "tldr-pages common/select"}
+{"cmd": "cat_path/to/file.json | jq '.[] | select((.key1==\"value1\") and .key2==\"value2\")'", "risky": 0, "source": "tldr-pages common/jq"}
+{"cmd": "hg status -a", "risky": 0, "source": "tldr-pages common/hg-status"}
+{"cmd": "jpegtran -f horizontal|vertical path/to/image.jpg > path/to/output.jpg", "risky": 0, "source": "tldr-pages linux/jpegtran"}
+{"cmd": "git worktree move path/to/worktree new/path", "risky": 0, "source": "tldr-pages common/git-worktree"}
+{"cmd": "exec -a name command_-with_-flags", "risky": 0, "source": "tldr-pages linux/exec"}
+{"cmd": "pueue group", "risky": 0, "source": "tldr-pages common/pueue-group"}
+{"cmd": "./path/to/binary -z", "risky": 0, "source": "tldr-pages linux/unzipsfx"}
+{"cmd": "lavat -c green -k red", "risky": 0, "source": "tldr-pages common/lavat"}
+{"cmd": "koji build target path/to/src.rpm --scratch", "risky": 1, "why": "submits build to remote koji server", "source": "tldr-pages linux/koji-build"}
+{"cmd": "objdump -t path/to/binary", "risky": 0, "source": "tldr-pages common/objdump"}
+{"cmd": "<n>", "risky": 0, "source": "tldr-pages linux/nsxiv"}
+{"cmd": "echo $RANDOM", "risky": 0, "source": "tldr-pages common/$"}
+{"cmd": "rsql --url \"sqlite://db.sqlite\" --format json", "risky": 0, "source": "tldr-pages common/rsql"}
+{"cmd": "Example();", "risky": 0, "source": "tldr-pages common/yacas"}
+{"cmd": "find . -name \"*.cpp\" | uncrustify -F - --no-backup", "risky": 0, "source": "tldr-pages common/uncrustify"}
+{"cmd": "prettier path/to/file", "risky": 0, "source": "tldr-pages common/prettier"}
+{"cmd": "<Space>|<b>", "risky": 0, "source": "tldr-pages common/less"}
+{"cmd": "ps aux | grep string", "risky": 0, "source": "tldr-pages osx/ps"}
+{"cmd": "systemctl mask service_name", "risky": 1, "why": "systemctl mask changes system services", "source": "tldr-pages linux/systemctl-mask"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "path/to/ArkAscendedServer TheIsland_WP?ServerPVE=true", "risky": 0, "source": "tldr-pages linux/ark-survival-ascended"}
+{"cmd": "find path/to/directory -name '*.py' -not -path '*/site-packages/*'", "risky": 0, "source": "tldr-pages common/find"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "git force-clone -b branch_name remote_repository_location path/to/directory", "risky": 1, "why": "force-clone may wipe existing directory", "source": "tldr-pages common/git-force-clone"}
+{"cmd": "hut git|hg create name", "risky": 1, "why": "creates public remote repository", "source": "tldr-pages common/hut"}
+{"cmd": "hg push -B bookmark", "risky": 1, "why": "hg push", "source": "tldr-pages common/hg-push"}
+{"cmd": "openclaw update --channel stable|beta|dev", "risky": 1, "why": "updates globally installed tool", "source": "tldr-pages common/openclaw-update"}
+{"cmd": "sudo rpmconf -a -c", "risky": 1, "why": "sudo", "source": "tldr-pages linux/rpmconf"}
+{"cmd": "cwebp path/to/image_file -o path/to/output.webp -q 0", "risky": 0, "source": "tldr-pages common/cwebp"}
+{"cmd": "dircolors", "risky": 0, "source": "tldr-pages common/dircolors"}
+{"cmd": "path/to/server_linux -name 'server_name'", "risky": 0, "source": "tldr-pages linux/natural-selection-2"}
+{"cmd": "aws secretsmanager describe-secret --secret-id name|arn", "risky": 1, "why": "reads secrets manager metadata", "source": "tldr-pages common/aws-secretsmanager"}
+{"cmd": "bru run --env environment_name --env-var variable_name=variable_value", "risky": 1, "why": "runs API requests that may write remotely", "source": "tldr-pages common/bru"}
+{"cmd": "find path/to/directory -name '*.ext'", "risky": 0, "source": "tldr-pages common/find"}
+{"cmd": "<w>", "risky": 0, "source": "tldr-pages linux/gdisk"}
+{"cmd": "pyinfra target_ip_address exec -- command_name_and_arguments", "risky": 1, "why": "executes commands on remote host via SSH", "source": "tldr-pages common/pyinfra"}
+{"cmd": "sudo eclean-kernel -a -n 2", "risky": 1, "why": "sudo kernel removal", "source": "tldr-pages linux/eclean-kernel"}
+{"cmd": "paclog --version", "risky": 0, "source": "tldr-pages linux/paclog"}
+{"cmd": "ls -dlZ path/to/file_or_directory", "risky": 0, "source": "tldr-pages linux/restorecon"}
+{"cmd": "<Ctrl Shift t>", "risky": 0, "source": "tldr-pages linux/yakuake"}
+{"cmd": "pve-firewall c", "risky": 0, "source": "tldr-pages linux/pve-firewall"}
+{"cmd": "wacli contacts tags add phone_number@s.whatsapp.net tag --store path/to/store", "risky": 1, "why": "modifies WhatsApp contact tags", "source": "tldr-pages common/wacli-contacts-tags-add"}
+{"cmd": "docker compose logs", "risky": 0, "source": "tldr-pages common/docker-compose-logs"}
+{"cmd": "tsc --allowJs --checkJs --noEmit src/**/*.js", "risky": 0, "source": "tldr-pages common/tsc"}
+{"cmd": "minidlna -d -v", "risky": 0, "source": "tldr-pages common/minidlna"}
+{"cmd": "du -h path/to/directory", "risky": 0, "source": "tldr-pages osx/du"}
+{"cmd": "say \"I_like_to_ride_my_bike.\"", "risky": 0, "source": "tldr-pages osx/say"}
+{"cmd": "xcodes runtimes --include-betas", "risky": 0, "source": "tldr-pages osx/xcodes-runtimes"}
+{"cmd": "nice", "risky": 0, "source": "tldr-pages common/nice"}
+{"cmd": "make -j parallel_jobs CC=\"distcc gcc\"", "risky": 0, "source": "tldr-pages common/distcc"}
+{"cmd": "go run file.go", "risky": 0, "source": "tldr-pages common/go"}
+{"cmd": "rpm -q --changelog package", "risky": 0, "source": "tldr-pages linux/rpm"}
+{"cmd": "git fetch -t", "risky": 0, "source": "tldr-pages common/git-tag"}
+{"cmd": "cec-ctl --list-devices", "risky": 0, "source": "tldr-pages linux/cec-ctl"}
+{"cmd": "jj diff --git", "risky": 0, "source": "tldr-pages common/jj-diff"}
+{"cmd": "docsify generate path/to/directory", "risky": 0, "source": "tldr-pages common/docsify"}
+{"cmd": "tail -f path/to/file", "risky": 0, "source": "tldr-pages osx/tail"}
+{"cmd": "dotnet path/to/application.dll", "risky": 0, "source": "tldr-pages common/dotnet"}
+{"cmd": "cargo fmt --check", "risky": 0, "source": "tldr-pages common/cargo-fmt"}
+{"cmd": ",s/regex/replacement/g", "risky": 0, "source": "tldr-pages common/ed"}
+{"cmd": "lsof +D path/to/directory", "risky": 0, "source": "tldr-pages common/lsof"}
+{"cmd": "git merge branch_name1_branch_name2_...", "risky": 0, "source": "tldr-pages common/git-merge"}
+{"cmd": "sudo ufw enable", "risky": 1, "why": "sudo, firewall change", "source": "tldr-pages linux/ufw-enable"}
+{"cmd": "hexedit -s path/to/file", "risky": 0, "source": "tldr-pages common/hexedit"}
+{"cmd": "go vet -json", "risky": 0, "source": "tldr-pages common/go-vet"}
+{"cmd": "gh run view -j job_number", "risky": 0, "source": "tldr-pages common/gh-run"}
+{"cmd": "git instaweb --start -p 1234", "risky": 0, "source": "tldr-pages common/git-instaweb"}
+{"cmd": "uv run --isolated path/to/script.py", "risky": 0, "source": "tldr-pages common/uv-run"}
+{"cmd": "sleep --help", "risky": 0, "source": "tldr-pages linux/sleep"}
+{"cmd": "linode-cli tickets reply ticket_id --description \"The_content_of_your_reply\"", "risky": 1, "why": "posts reply to support ticket", "source": "tldr-pages common/linode-cli-tickets"}
+{"cmd": "grep -o \"search_pattern\" path/to/file", "risky": 0, "source": "tldr-pages common/grep"}
+{"cmd": "<Esc><u>", "risky": 0, "source": "tldr-pages common/vim"}
+{"cmd": "sudo strace -p process_id -T -s 32", "risky": 1, "why": "sudo strace on a process", "source": "tldr-pages linux/strace"}
+{"cmd": "az storage entity query --filter query_filter -t table_name --account-name storage_account_name --account-key storage_account_key", "risky": 1, "why": "uses storage account key against cloud storage", "source": "tldr-pages common/az-storage-entity"}
+{"cmd": "pdfimages -png path/to/file.pdf filename_prefix", "risky": 0, "source": "tldr-pages common/pdfimages"}
+{"cmd": "ippeveprinter -s speed \"service_name\"", "risky": 0, "source": "tldr-pages common/ippeveprinter"}
+{"cmd": "pgmramp -tb > path/to/output.pgm", "risky": 0, "source": "tldr-pages common/pgmramp"}
+{"cmd": "awk '($10 >= min_value && $10 <= max_value)' path/to/file", "risky": 0, "source": "tldr-pages common/awk"}
+{"cmd": "tldr qm disk", "risky": 0, "source": "tldr-pages linux/qm-unlink"}
+{"cmd": "eselect kernel list", "risky": 0, "source": "tldr-pages linux/eselect-kernel"}
+{"cmd": "<h>|<j>|<k>|<l>|<ArrowLeft>|<ArrowDown>|<ArrowUp>|<ArrowRight>", "risky": 0, "source": "tldr-pages common/gomoku"}
+{"cmd": "printf \"var1:_%s\\tvar2:_%s\\n\" \"$VAR1\" \"$VAR2\"", "risky": 0, "source": "tldr-pages common/printf"}
+{"cmd": "command | sed -E 's/(apple)/\\U\\1/g'", "risky": 0, "source": "tldr-pages osx/sed"}
+{"cmd": "command <<< string", "risky": 0, "source": "tldr-pages common/less-than"}
+{"cmd": "gh pr checks pr_number --required", "risky": 0, "source": "tldr-pages common/gh-pr-checks"}
+{"cmd": "head path/to/file1_path/to/file2_...", "risky": 0, "source": "tldr-pages linux/head"}
+{"cmd": "echo ${array_name[@]}", "risky": 0, "source": "tldr-pages common/$"}
+{"cmd": "fswebcam filename", "risky": 1, "why": "captures webcam image", "source": "tldr-pages common/fswebcam"}
+{"cmd": "du -ch */*.jpg", "risky": 0, "source": "tldr-pages osx/du"}
+{"cmd": "mypy -c \"code\"", "risky": 0, "source": "tldr-pages common/mypy"}
+{"cmd": "v4l2-ctl -A", "risky": 0, "source": "tldr-pages linux/v4l2-ctl"}
+{"cmd": "go vet", "risky": 0, "source": "tldr-pages common/go-vet"}
+{"cmd": "<Esc>", "risky": 0, "source": "tldr-pages linux/alsamixer"}
+{"cmd": "tldr linode-cli volumes", "risky": 0, "source": "tldr-pages common/linode-cli"}
+{"cmd": "<q><y>", "risky": 0, "source": "tldr-pages linux/links"}
+{"cmd": "<q><y>", "risky": 0, "source": "tldr-pages linux/links"}
+{"cmd": "picgo set uploader", "risky": 0, "source": "tldr-pages common/picgo"}
+{"cmd": "slim xray --target image:tag", "risky": 0, "source": "tldr-pages common/slim"}
+{"cmd": "git status", "risky": 0, "source": "tldr-pages common/git"}
+{"cmd": "pbmtoppa path/to/image.pbm > path/to/output.ppa", "risky": 0, "source": "tldr-pages common/pbmtoppa"}
+{"cmd": "grep -Hn --color=always \"search_pattern\" path/to/file", "risky": 0, "source": "tldr-pages common/grep"}
+{"cmd": "ptghci", "risky": 0, "source": "tldr-pages common/ptghci"}
+{"cmd": "du -ah path/to/directory", "risky": 0, "source": "tldr-pages osx/du"}
+{"cmd": "ip st show dev network_interface group offload subgroup l3_stats|cpu_hit|hw_stats_info", "risky": 0, "source": "tldr-pages linux/ip-stats"}
+{"cmd": "wc -m path/to/file", "risky": 0, "source": "tldr-pages osx/wc"}
+{"cmd": "sort -o path/to/output_file path/to/input_file", "risky": 0, "source": "tldr-pages common/sort"}
+{"cmd": "git switch -m branch_name", "risky": 0, "source": "tldr-pages common/git-switch"}
+{"cmd": "command", "risky": 1, "why": "arbitrary SQL command in usql, may write", "source": "tldr-pages common/usql"}
+{"cmd": "touch -d \"last_year|5_hours|next_thursday|nov_14|...\" path/to/file", "risky": 0, "source": "tldr-pages common/touch"}
+{"cmd": "wacli messages context message_id --json --store path/to/store", "risky": 0, "source": "tldr-pages common/wacli-messages-context"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "tar -cf path/to/compressed_file.tar.bz2 -I \"pbzip2 -option1_-option2_...\" path/to/file", "risky": 0, "source": "tldr-pages common/pbzip2"}
+{"cmd": "script.ps1", "risky": 0, "source": "tldr-pages common/evil-winrm"}
+{"cmd": "(IFS=\":\"; echo \"one:two:three\")", "risky": 0, "source": "tldr-pages common/ifs"}
+{"cmd": "docker exec -it container_name sh", "risky": 0, "source": "tldr-pages common/docker"}
+{"cmd": "mvn clean -P profile package", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "wine net start service_name", "risky": 0, "source": "tldr-pages linux/wine-net"}
+{"cmd": "sudo l2ping -d seconds mac_address", "risky": 1, "why": "sudo", "source": "tldr-pages common/l2ping"}
+{"cmd": "git pull", "risky": 0, "source": "tldr-pages common/git"}
+{"cmd": "[!a-z]", "risky": 0, "source": "tldr-pages common/glob"}
+{"cmd": "makepasswd --string characters", "risky": 0, "source": "tldr-pages common/makepasswd"}
+{"cmd": "go generate", "risky": 0, "source": "tldr-pages common/go-generate"}
+{"cmd": "zig translate-c -lc path/to/file.c", "risky": 0, "source": "tldr-pages common/zig"}
+{"cmd": "<x>|<z>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "echo -e \"red\\ngreen\\nblue\" | dmenu", "risky": 0, "source": "tldr-pages linux/dmenu"}
+{"cmd": "go vet path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/go-vet"}
+{"cmd": "path/to/cs2 -dedicated +map de_dust2 -ip 1.2.3.4 -port 27015", "risky": 0, "source": "tldr-pages linux/counter-strike-2"}
+{"cmd": "git worktree add path/to/directory branch", "risky": 0, "source": "tldr-pages common/git-worktree"}
+{"cmd": "<p>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "wal -i image.png -n", "risky": 0, "source": "tldr-pages common/wal"}
+{"cmd": "</>regex", "risky": 0, "source": "tldr-pages common/zmore"}
+{"cmd": "git commit -F path/to/commit_message_file", "risky": 0, "source": "tldr-pages common/git-commit"}
+{"cmd": "ls ~username", "risky": 0, "source": "tldr-pages common/~"}
+{"cmd": "sleep 1d 3h", "risky": 0, "source": "tldr-pages linux/sleep"}
+{"cmd": "vala --help", "risky": 0, "source": "tldr-pages common/vala"}
+{"cmd": "dotnet test path/to/project_or_solution", "risky": 0, "source": "tldr-pages common/dotnet-test"}
+{"cmd": "git add -i", "risky": 0, "source": "tldr-pages common/git-add"}
+{"cmd": "cp -r path/to/source_directory path/to/target_directory", "risky": 0, "source": "tldr-pages common/cp"}
+{"cmd": "<S>", "risky": 0, "source": "tldr-pages common/nudoku"}
+{"cmd": "goku --version", "risky": 0, "source": "tldr-pages osx/goku"}
+{"cmd": "lambo new --node app_name", "risky": 0, "source": "tldr-pages common/lambo-new"}
+{"cmd": "gh issue view issue_number -w", "risky": 0, "source": "tldr-pages common/gh-issue"}
+{"cmd": "fossil ci -M path/to/commit_message_file", "risky": 1, "why": "fossil commit may autosync to remote", "source": "tldr-pages common/fossil-commit"}
+{"cmd": "cargo generate-lockfile", "risky": 0, "source": "tldr-pages common/cargo-generate-lockfile"}
+{"cmd": "xfce4-terminal --tab --command \"command1\" --tab --command \"command2\"", "risky": 0, "source": "tldr-pages linux/xfce4-terminal"}
+{"cmd": "bun test --watch", "risky": 0, "source": "tldr-pages common/bun-test"}
+{"cmd": "bun i", "risky": 0, "source": "tldr-pages common/bun"}
+{"cmd": "mvn dependency:copy-dependencies", "risky": 0, "source": "tldr-pages common/mvn-dependency"}
+{"cmd": "type -p command", "risky": 0, "source": "tldr-pages common/type"}
+{"cmd": "open tel:123", "risky": 1, "why": "opens tel: URI to place a call", "source": "tldr-pages common/open.fish"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "mv original_filename new_filename", "risky": 1, "why": "renames file on remote server", "source": "tldr-pages linux/lftp"}
+{"cmd": "sudo cec-ctl -m", "risky": 1, "why": "sudo", "source": "tldr-pages linux/cec-ctl"}
+{"cmd": "zerotier-idtool generate path/to/identity.secret path/to/identity.public", "risky": 0, "source": "tldr-pages common/zerotier-idtool"}
+{"cmd": "vagrant suspend", "risky": 0, "source": "tldr-pages common/vagrant"}
+{"cmd": "pbmtoescp2 -c 0|1 path/to/image.pbm > path/to/output.escp2", "risky": 0, "source": "tldr-pages common/pbmtoescp2"}
+{"cmd": "mvn install", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "apk fix package", "risky": 1, "why": "reinstalls system package", "source": "tldr-pages linux/apk"}
+{"cmd": "systemctl import-environment variable", "risky": 1, "why": "modifies systemd environment", "source": "tldr-pages linux/systemctl-import-environment"}
+{"cmd": "IFS=$' \\t\\n'", "risky": 0, "source": "tldr-pages common/ifs"}
+{"cmd": "<p>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "eval $(ssh-agent)", "risky": 0, "source": "tldr-pages common/ssh-agent"}
+{"cmd": "stdbuf -e 0 command", "risky": 0, "source": "tldr-pages common/stdbuf"}
+{"cmd": "hunspell path/to/file", "risky": 0, "source": "tldr-pages common/hunspell"}
+{"cmd": "pip list --user", "risky": 0, "source": "tldr-pages common/pip-list"}
+{"cmd": "unzip -l path/to/archive.zip", "risky": 0, "source": "tldr-pages common/unzip"}
+{"cmd": "pamstretch -x xn -y yn path/to/image.pam > path/to/output.pam", "risky": 0, "source": "tldr-pages common/pamstretch"}
+{"cmd": "rtmpdump -r rtmp://example.com/path/to/video -a app_name -y path/to/video -o file.ext", "risky": 0, "source": "tldr-pages common/rtmpdump"}
+{"cmd": "git log --before \"2017-01-29\" --after \"2017-01-17\"", "risky": 0, "source": "tldr-pages common/git-log"}
+{"cmd": "nxc mssql 192.168.178.2 -u username -p password --get-file C:\\path\\to\\remote_file path/to/local_file", "risky": 1, "why": "uses credentials to pull files from remote MSSQL server", "source": "tldr-pages common/nxc-mssql"}
+{"cmd": "<p>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "ls -1", "risky": 0, "source": "tldr-pages common/ls"}
+{"cmd": "gcloud topic topic_name", "risky": 0, "source": "tldr-pages common/gcloud-topic"}
+{"cmd": "printf \"\\u20AC_%.2f\\n\" 123.4", "risky": 0, "source": "tldr-pages common/printf"}
+{"cmd": "ykman openpgp reset", "risky": 1, "why": "factory resets YubiKey OpenPGP", "source": "tldr-pages common/ykman-openpgp"}
+{"cmd": "deno", "risky": 0, "source": "tldr-pages common/deno"}
+{"cmd": "sudo groupadd -r group_name", "risky": 1, "why": "sudo groupadd", "source": "tldr-pages linux/groupadd"}
+{"cmd": "chmod u+rw path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/chmod"}
+{"cmd": "gh api --hostname github.example.com endpoint", "risky": 0, "source": "tldr-pages common/gh-api"}
+{"cmd": "npm v package dependencies", "risky": 0, "source": "tldr-pages common/npm-view"}
+{"cmd": "container build -t image_name path/to/directory", "risky": 0, "source": "tldr-pages osx/container"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "peludna-prognoza \"city\"", "risky": 0, "source": "tldr-pages common/peludna-prognoza"}
+{"cmd": "shellcheck -a path/to/script.sh", "risky": 0, "source": "tldr-pages common/shellcheck"}
+{"cmd": "tldr ftp", "risky": 0, "source": "tldr-pages osx/gftp"}
+{"cmd": "mvn install -U", "risky": 0, "source": "tldr-pages common/mvn-install"}
+{"cmd": "<m>", "risky": 0, "source": "tldr-pages linux/warpd"}
+{"cmd": "transmission-show -m path/to/file.torrent", "risky": 0, "source": "tldr-pages common/transmission-show"}
+{"cmd": "ls -a", "risky": 0, "source": "tldr-pages common/ls"}
+{"cmd": "MallocStackLogging=YES leaks process_name", "risky": 0, "source": "tldr-pages osx/leaks"}
+{"cmd": "sudo lxc-stop container_name", "risky": 1, "why": "sudo", "source": "tldr-pages linux/lxc-stop"}
+{"cmd": "gofmt -w path/to/source.go", "risky": 0, "source": "tldr-pages common/gofmt"}
+{"cmd": "mvn package", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "mv -f path/to/source path/to/target", "risky": 0, "source": "tldr-pages common/mv"}
+{"cmd": "phpspec run --fake", "risky": 0, "source": "tldr-pages common/phpspec"}
+{"cmd": "<j>", "risky": 0, "source": "tldr-pages linux/warpd"}
+{"cmd": "conda search package_name -i", "risky": 0, "source": "tldr-pages common/conda-search"}
+{"cmd": "hg root --cwd path/to/directory", "risky": 0, "source": "tldr-pages common/hg-root"}
+{"cmd": "pgmtolispm path/to/input.pgm > path/to/output.lispm", "risky": 0, "source": "tldr-pages common/pgmtolispm"}
+{"cmd": "npm ci", "risky": 0, "source": "tldr-pages common/npm-ci"}
+{"cmd": "get -R path/to/remote_directory", "risky": 0, "source": "tldr-pages common/sftp"}
+{"cmd": "gpclient launch-gui", "risky": 1, "why": "launches VPN client (network settings)", "source": "tldr-pages linux/gpclient"}
+{"cmd": "docker compose up --build", "risky": 0, "source": "tldr-pages common/docker-compose"}
+{"cmd": "which -a executable", "risky": 0, "source": "tldr-pages common/which"}
+{"cmd": "tldr sudo", "risky": 0, "source": "tldr-pages common/sudoedit"}
+{"cmd": "<q>|<w>|<e>|<a>|<s>|<d>", "risky": 0, "source": "tldr-pages common/blockout2"}
+{"cmd": "echo ${!variable}", "risky": 0, "source": "tldr-pages common/{"}
+{"cmd": "git clone --recursive remote_repository_location", "risky": 0, "source": "tldr-pages common/git-clone"}
+{"cmd": "clang-tidy -checks=* -list-checks", "risky": 0, "source": "tldr-pages common/clang-tidy"}
+{"cmd": "matlab -nosplash", "risky": 0, "source": "tldr-pages common/matlab"}
+{"cmd": "mirrord diagnose", "risky": 0, "source": "tldr-pages common/mirrord"}
+{"cmd": "lazygit -cd", "risky": 0, "source": "tldr-pages common/lazygit"}
+{"cmd": "mvn idea:workspace", "risky": 0, "source": "tldr-pages common/mvn-idea"}
+{"cmd": "<p>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "make target variable=new_value", "risky": 0, "source": "tldr-pages common/make"}
+{"cmd": "sslscan example.com", "risky": 0, "source": "tldr-pages common/sslscan"}
+{"cmd": "<r>", "risky": 0, "source": "tldr-pages linux/zathura"}
+{"cmd": "cat -n path/to/file", "risky": 0, "source": "tldr-pages osx/cat"}
+{"cmd": "pystun3 --stun-host stun.1und1.de", "risky": 0, "source": "tldr-pages common/pystun3"}
+{"cmd": "tldr tty", "risky": 0, "source": "tldr-pages osx/gtty"}
+{"cmd": "xbps-install -Su", "risky": 1, "why": "system-wide package update", "source": "tldr-pages linux/xbps-install"}
+{"cmd": "dunstctl close-all", "risky": 0, "source": "tldr-pages common/dunstctl"}
+{"cmd": "gdalinfo -json path/to/input.tif", "risky": 0, "source": "tldr-pages common/gdalinfo"}
+{"cmd": "tail -n +8 path/to/file", "risky": 0, "source": "tldr-pages osx/tail"}
+{"cmd": "sattach --input-filter task_number", "risky": 0, "source": "tldr-pages linux/sattach"}
+{"cmd": "betty play Spotify", "risky": 0, "source": "tldr-pages common/betty"}
+{"cmd": "gh search issues \"search_phrase\"", "risky": 0, "source": "tldr-pages common/gh-search"}
+{"cmd": "jj config g name", "risky": 0, "source": "tldr-pages common/jj-config"}
+{"cmd": "pg_restore -c -d db_name archive_file.dump", "risky": 1, "why": "pg_restore -c drops and recreates database objects", "source": "tldr-pages common/pg_restore"}
+{"cmd": "<w>", "risky": 0, "source": "tldr-pages linux/gdisk"}
+{"cmd": "git status --show-stash", "risky": 0, "source": "tldr-pages common/git-status"}
+{"cmd": "prettier --write \"**/*.{js,jsx,ts,tsx}\"", "risky": 0, "source": "tldr-pages common/prettier"}
+{"cmd": "path/to/ShooterGameServer TheIsland?DifficultyOffset=1.0", "risky": 0, "source": "tldr-pages linux/ark-survival-evolved"}
+{"cmd": "git pull remote_name", "risky": 0, "source": "tldr-pages common/git-pull"}
+{"cmd": "path/to/ArkAscendedServer TheIsland_WP -port=7777 -WinLiveMaxPlayers=1..70", "risky": 0, "source": "tldr-pages linux/ark-survival-ascended"}
+{"cmd": "wol mac_address", "risky": 1, "why": "sends Wake-on-LAN packet to a network device", "source": "tldr-pages linux/wol"}
+{"cmd": "ps auxww", "risky": 0, "source": "tldr-pages osx/ps"}
+{"cmd": "make -C path/to/directory", "risky": 0, "source": "tldr-pages common/make"}
+{"cmd": "flake8 --exclude substring1,glob2 path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/flake8"}
+{"cmd": "syncthing cli config devices pause --all", "risky": 1, "why": "pauses all syncthing devices; changes system sync state", "source": "tldr-pages common/syncthing"}
+{"cmd": "biome check --write path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/biome"}
+{"cmd": "nice -niceness_value command", "risky": 0, "source": "tldr-pages common/nice"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "whatweb -i targets_file", "risky": 1, "why": "scans external target websites", "source": "tldr-pages common/whatweb"}
+{"cmd": "nasm -hf", "risky": 0, "source": "tldr-pages common/nasm"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "sudo arp -s address mac_address", "risky": 1, "why": "sudo; modifies ARP table", "source": "tldr-pages common/arp"}
+{"cmd": "mvn exec:java -D exec.mainClass=\"com.example.Main\" -D exec.args=\"argument1_argument2_...\"", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "bzip3 -v path/to/compressed_files.bz3", "risky": 0, "source": "tldr-pages common/bzip3"}
+{"cmd": "git stash -u", "risky": 0, "source": "tldr-pages common/git-stash"}
+{"cmd": "sudo badblocks /dev/sdX", "risky": 1, "why": "sudo on raw disk device", "source": "tldr-pages common/badblocks"}
+{"cmd": "git lfs track", "risky": 0, "source": "tldr-pages common/git-lfs"}
+{"cmd": "<:>add path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/cmus"}
+{"cmd": "<:>help<Enter>", "risky": 0, "source": "tldr-pages common/vim"}
+{"cmd": "mkdir -p path/to/directory1_path/to/directory2_...", "risky": 0, "source": "tldr-pages common/mkdir"}
+{"cmd": "cargo rustc -- rustc_options", "risky": 0, "source": "tldr-pages common/cargo-rustc"}
+{"cmd": "git stash pop", "risky": 0, "source": "tldr-pages common/git-stash"}
+{"cmd": "lstopo-no-graphics -p", "risky": 0, "source": "tldr-pages linux/lstopo-no-graphics"}
+{"cmd": "mv -i path/to/source path/to/target", "risky": 0, "source": "tldr-pages common/mv"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "gv2gml -?", "risky": 0, "source": "tldr-pages common/gv2gml"}
+{"cmd": "gcov -f path/to/file.cpp", "risky": 0, "source": "tldr-pages linux/gcov"}
+{"cmd": "haproxy -f path/to/haproxy.cfg -sf process_id", "risky": 1, "why": "reloads haproxy, signals existing process", "source": "tldr-pages common/haproxy"}
+{"cmd": "diff -y path/to/old_file path/to/new_file", "risky": 0, "source": "tldr-pages common/diff"}
+{"cmd": "path/to/ShooterGameServer TheIsland?ServerPVE=true", "risky": 0, "source": "tldr-pages linux/ark-survival-evolved"}
+{"cmd": "export VARIABLE=value", "risky": 0, "source": "tldr-pages linux/export"}
+{"cmd": "crictl ps -a", "risky": 0, "source": "tldr-pages common/crictl"}
+{"cmd": "firebase open", "risky": 0, "source": "tldr-pages common/firebase"}
+{"cmd": "command1 | systemd-run -P command2 | command3", "risky": 1, "why": "systemd-run launches transient systemd unit", "source": "tldr-pages linux/systemd-run"}
+{"cmd": "mvn generate-sources", "risky": 0, "source": "tldr-pages common/mvn-generate-sources"}
+{"cmd": "<ArrowUp>|<ArrowDown>", "risky": 0, "source": "tldr-pages linux/links"}
+{"cmd": "mqtt_check.py --help", "risky": 0, "source": "tldr-pages common/mqtt_check.py"}
+{"cmd": "chmod u+x path/to/file", "risky": 0, "source": "tldr-pages common/chmod"}
+{"cmd": "aws glue start-trigger --name trigger_name", "risky": 1, "why": "starts AWS Glue trigger (cloud resource)", "source": "tldr-pages common/aws-glue"}
+{"cmd": "cd -", "risky": 0, "source": "tldr-pages common/cd"}
+{"cmd": "pamflip -r90|180|270 path/to/input.pam > path/to/output.pam", "risky": 0, "source": "tldr-pages common/pamflip"}
+{"cmd": "gdalwarp -te min_x min_y max_x max_y -te_srs EPSG:4326 path/to/input.tif path/to/output.tif", "risky": 0, "source": "tldr-pages common/gdalwarp"}
+{"cmd": "distrobox-upgrade -a", "risky": 1, "why": "upgrades packages in all containers (system state)", "source": "tldr-pages linux/distrobox-upgrade"}
+{"cmd": "find path/to/directory -path '*/path/*/*.ext' -or -name '*pattern*'", "risky": 0, "source": "tldr-pages common/find"}
+{"cmd": "bshell --domain domain", "risky": 0, "source": "tldr-pages common/bshell"}
+{"cmd": "sfdk check -s +suite", "risky": 0, "source": "tldr-pages common/sfdk-check"}
+{"cmd": "brew tap username/repository_name git_clone_url", "risky": 1, "why": "brew tap modifies global package manager", "source": "tldr-pages common/brew-tap"}
+{"cmd": "ps -o ppid= -p process_id", "risky": 0, "source": "tldr-pages osx/ps"}
+{"cmd": "git fetch --deepen 2", "risky": 0, "source": "tldr-pages common/git-fetch"}
+{"cmd": "rustup default nightly", "risky": 1, "why": "changes global default rust toolchain", "source": "tldr-pages common/rustup"}
+{"cmd": "echo $VARIABLE", "risky": 0, "source": "tldr-pages common/$"}
+{"cmd": "sdk install sdk_name sdk_version", "risky": 1, "why": "global SDK install", "source": "tldr-pages common/sdk"}
+{"cmd": "chflags hidden path/to/file", "risky": 0, "source": "tldr-pages osx/chflags"}
+{"cmd": "rpi-imager --cli path/to/image.zip /dev/sdX", "risky": 1, "why": "writes image to raw block device", "source": "tldr-pages common/rpi-imager"}
+{"cmd": "nix flake show templates", "risky": 0, "source": "tldr-pages common/nix-flake-show"}
+{"cmd": "export PATH=$PATH:path/to/append", "risky": 0, "source": "tldr-pages linux/export"}
+{"cmd": "<q>|<n>", "risky": 0, "source": "tldr-pages common/moon-buggy"}
+{"cmd": "phing -Dproperty=value task_name", "risky": 0, "source": "tldr-pages common/phing"}
+{"cmd": "git pull path/to/file.bundle branch_name", "risky": 0, "source": "tldr-pages common/git-bundle"}
+{"cmd": "rename 's/\\s+/_/g' *.txt", "risky": 0, "source": "tldr-pages common/rename"}
+{"cmd": "time command", "risky": 0, "source": "tldr-pages common/time"}
+{"cmd": "unflatten path/to/input1.gv_path/to/input2.gv_... > path/to/output.gv", "risky": 0, "source": "tldr-pages common/unflatten"}
+{"cmd": "elasticsearch-certutil password", "risky": 1, "why": "generates keystore passwords (secrets)", "source": "tldr-pages common/elasticsearch-certutil"}
+{"cmd": "yarac --fail-on-warnings path/to/rule.yar path/to/rule.bin", "risky": 0, "source": "tldr-pages common/yarac"}
+{"cmd": "sudo virsh edit domain", "risky": 1, "why": "sudo; edits VM domain config", "source": "tldr-pages common/virsh"}
+{"cmd": "ghcup set ghc version", "risky": 1, "why": "changes global GHC toolchain", "source": "tldr-pages common/ghcup"}
+{"cmd": "caffeinate -u -t 3600", "risky": 0, "source": "tldr-pages osx/caffeinate"}
+{"cmd": "bru run file.bru", "risky": 1, "why": "executes API request file, may send writes to remote", "source": "tldr-pages common/bru"}
+{"cmd": "<m>", "risky": 0, "source": "tldr-pages linux/warpd"}
+{"cmd": "accelerate env", "risky": 0, "source": "tldr-pages common/accelerate"}
+{"cmd": "monodevelop --perf-log", "risky": 0, "source": "tldr-pages common/monodevelop"}
+{"cmd": "kool run script", "risky": 0, "source": "tldr-pages common/kool"}
+{"cmd": "<:><n><ArrowUp>|<ArrowDown>", "risky": 0, "source": "tldr-pages common/most"}
+{"cmd": "systemctl list-machines pattern", "risky": 0, "source": "tldr-pages linux/systemctl-list-machines"}
+{"cmd": "sudo lvm", "risky": 1, "why": "sudo LVM shell", "source": "tldr-pages linux/lvm"}
+{"cmd": "<ArrowLeft>|<ArrowRight>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "git clean -f -x", "risky": 1, "why": "git clean -fx deletes untracked/ignored files", "source": "tldr-pages common/git-clean"}
+{"cmd": "<r>", "risky": 0, "source": "tldr-pages linux/zathura"}
+{"cmd": "mvn compile -D skipTests", "risky": 0, "source": "tldr-pages common/mvn-compile"}
+{"cmd": "sudo rusnapshot -c path/to/config.toml --id snapshot_id -r", "risky": 1, "why": "sudo snapshot restore", "source": "tldr-pages linux/rusnapshot"}
+{"cmd": "github-label-sync --access-token token --allow-added-labels repository_name", "risky": 1, "why": "modifies remote GitHub repo labels with token", "source": "tldr-pages common/github-label-sync"}
+{"cmd": "searchsploit sudo 1.8.27", "risky": 0, "source": "tldr-pages common/searchsploit"}
+{"cmd": "git rebase -i HEAD~5", "risky": 0, "source": "tldr-pages common/git-rebase"}
+{"cmd": "touch path/to/file{a..z}", "risky": 0, "source": "tldr-pages common/touch"}
+{"cmd": "caffeinate -m", "risky": 0, "source": "tldr-pages osx/caffeinate"}
+{"cmd": "<h>", "risky": 0, "source": "tldr-pages osx/nettop"}
+{"cmd": "<F11>", "risky": 0, "source": "tldr-pages linux/yakuake"}
+{"cmd": "sudo virsh snapshot-delete \"vm_name\" \"snapshot_name\"", "risky": 1, "why": "sudo; deletes VM snapshot", "source": "tldr-pages common/virsh-snapshot-delete"}
+{"cmd": "mvn install -D maven.test.skip=true", "risky": 0, "source": "tldr-pages common/mvn-install"}
+{"cmd": "pnmpaste -and|nand|or|nor|xor|xnor x y path/to/image1.pnm path/to/image2.pnm > path/to/output.pnm", "risky": 0, "source": "tldr-pages common/pnmpaste"}
+{"cmd": "tar caf path/to/target.tar.xz path/to/file1_path/to/file2_...", "risky": 0, "source": "tldr-pages common/tar"}
+{"cmd": "docker images", "risky": 0, "source": "tldr-pages common/docker"}
+{"cmd": "typos --hidden path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/typos"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "cdrecord -tao dev=/dev/optical_drive -data file.iso", "risky": 1, "why": "burns data to optical drive device", "source": "tldr-pages linux/cdrecord"}
+{"cmd": "<Esc>", "risky": 0, "source": "tldr-pages linux/alsamixer"}
+{"cmd": "cargo fmt", "risky": 0, "source": "tldr-pages common/cargo-fmt"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "wc -c path/to/file", "risky": 0, "source": "tldr-pages osx/wc"}
+{"cmd": "warpd --normal", "risky": 0, "source": "tldr-pages linux/warpd"}
+{"cmd": "gst-launch-1.0 videotestsrc ! video/x-raw,width=640,height=480 ! videoconvert_!_autovideosink", "risky": 0, "source": "tldr-pages common/gst-launch-1.0-capsfilter"}
+{"cmd": "git merge -e branch_name", "risky": 0, "source": "tldr-pages common/git-merge"}
+{"cmd": "cargo clippy --workspace", "risky": 0, "source": "tldr-pages common/cargo-clippy"}
+{"cmd": "tsc --init", "risky": 0, "source": "tldr-pages common/tsc"}
+{"cmd": "wc -c path/to/file", "risky": 0, "source": "tldr-pages osx/wc"}
+{"cmd": "hcitool lp", "risky": 0, "source": "tldr-pages linux/hcitool"}
+{"cmd": "command | nms -a -c", "risky": 0, "source": "tldr-pages common/nms"}
+{"cmd": "<c>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "git check-ref-format --normalize refs/head/refname", "risky": 0, "source": "tldr-pages common/git-check-ref-format"}
+{"cmd": "hsd-cli block height_or_hash", "risky": 0, "source": "tldr-pages common/hsd-cli"}
+{"cmd": "git blame -e path/to/file", "risky": 0, "source": "tldr-pages common/git-blame"}
+{"cmd": "pamixer --set-volume 75", "risky": 0, "source": "tldr-pages common/pamixer"}
+{"cmd": "oxipng --strip all path/to/file.png", "risky": 0, "source": "tldr-pages common/oxipng"}
+{"cmd": "chfn -o new_office_room_number username", "risky": 1, "why": "changes user account info (system state)", "source": "tldr-pages linux/chfn"}
+{"cmd": "mvn site", "risky": 0, "source": "tldr-pages common/mvn-site"}
+{"cmd": "rubocop --show-cops", "risky": 0, "source": "tldr-pages common/rubocop"}
+{"cmd": "lsof -i :port", "risky": 0, "source": "tldr-pages common/lsof"}
+{"cmd": "cargo fmt -- rustfmt_args", "risky": 0, "source": "tldr-pages common/cargo-fmt"}
+{"cmd": "slideshow -s width height path/to/presentation.rkt", "risky": 0, "source": "tldr-pages common/slideshow"}
+{"cmd": "pulumi version -h", "risky": 0, "source": "tldr-pages common/pulumi-version"}
+{"cmd": "diff -u path/to/old_file path/to/new_file", "risky": 0, "source": "tldr-pages common/diff"}
+{"cmd": "gst-launch-1.0 uridecodebin uri=https://example.com/path/to/file ! sink", "risky": 0, "source": "tldr-pages common/gst-launch-1.0-uridecodebin"}
+{"cmd": "<l>|<a>", "risky": 0, "source": "tldr-pages common/moon-buggy"}
+{"cmd": "cat path/to/nginx-dump.conf | gixy-next -", "risky": 0, "source": "tldr-pages common/gixy-next"}
+{"cmd": "magento maintenance:disable", "risky": 1, "why": "magento maintenance mode change on possibly live site", "source": "tldr-pages common/magento"}
+{"cmd": "firejail --shutdown=7777", "risky": 1, "why": "shuts down a running sandbox process", "source": "tldr-pages linux/firejail"}
+{"cmd": "magick convert -background none path/to/image1.png_path/to/image2.png_... -append|+append path/to/output_image.png", "risky": 0, "source": "tldr-pages common/magick"}
+{"cmd": "todo.sh pri item_no priority", "risky": 0, "source": "tldr-pages common/todo.sh"}
+{"cmd": "pulumi stack hist", "risky": 0, "source": "tldr-pages common/pulumi-stack-history"}
+{"cmd": "brew leaves -r", "risky": 0, "source": "tldr-pages common/brew-leaves"}
+{"cmd": "<Enter><~><.>", "risky": 0, "source": "tldr-pages linux/cu"}
+{"cmd": "sudo grub-install --target x86_64-efi --efi-directory path/to/efi_directory --bootloader-id GRUB", "risky": 1, "why": "sudo grub-install modifies bootloader", "source": "tldr-pages linux/grub-install"}
+{"cmd": "gh pr status", "risky": 0, "source": "tldr-pages common/gh"}
+{"cmd": "<ArrowLeft>|<ArrowRight>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "devpod provider list-available", "risky": 0, "source": "tldr-pages common/devpod"}
+{"cmd": "pueue status -g group_name", "risky": 0, "source": "tldr-pages common/pueue-status"}
+{"cmd": "<<>|<>>", "risky": 0, "source": "tldr-pages common/scim"}
+{"cmd": "d2 -s true path/to/input_file.d2 path/to/output_file.ext", "risky": 0, "source": "tldr-pages common/d2"}
+{"cmd": "<f>", "risky": 0, "source": "tldr-pages linux/mpg123"}
+{"cmd": "git pull -r", "risky": 0, "source": "tldr-pages common/git-pull"}
+{"cmd": "gh pr view", "risky": 0, "source": "tldr-pages common/gh-pr-view"}
+{"cmd": "mount -m path/to/device_file path/to/target_directory", "risky": 1, "why": "mounts a device (system state)", "source": "tldr-pages linux/mount"}
+{"cmd": "mv -v path/to/source path/to/target", "risky": 0, "source": "tldr-pages common/mv"}
+{"cmd": "sudo ufw deny port", "risky": 1, "why": "sudo ufw firewall change", "source": "tldr-pages linux/ufw-deny"}
+{"cmd": "go build -o path/to/binary path/to/source.go", "risky": 0, "source": "tldr-pages common/go-build"}
+{"cmd": "pnmremap -ma path/to/palette_file.ppm -fs path/to/input.pnm > path/to/output.pnm", "risky": 0, "source": "tldr-pages common/pnmremap"}
+{"cmd": "git blame -w -C -C -C path/to/file", "risky": 0, "source": "tldr-pages common/git-blame"}
+{"cmd": "ghost install", "risky": 1, "why": "ghost install sets up service/downloads", "source": "tldr-pages common/ghost"}
+{"cmd": "dolt merge --no-ff -m \"message\" branch_name", "risky": 0, "source": "tldr-pages common/dolt-merge"}
+{"cmd": "ember new my_new_app", "risky": 0, "source": "tldr-pages common/ember"}
+{"cmd": "mplayer path/to/file1_path/to/file2_...", "risky": 0, "source": "tldr-pages common/mplayer"}
+{"cmd": "tailscale up --accept-routes", "risky": 1, "why": "tailscale up changes network routing", "source": "tldr-pages common/tailscale-up"}
+{"cmd": "tldr fprintd-verify", "risky": 0, "source": "tldr-pages linux/fprintd"}
+{"cmd": "pg path/to/file", "risky": 0, "source": "tldr-pages linux/pg"}
+{"cmd": "go test -v -bench . -benchtime 50s", "risky": 0, "source": "tldr-pages common/go-test"}
+{"cmd": "winedbg --gdb path/to/program.exe", "risky": 0, "source": "tldr-pages linux/winedbg"}
+{"cmd": "sudo dnf in https://rpms.remirepo.net/enterprise/remi-release-8.rpm", "risky": 1, "why": "sudo installs RPM repo", "source": "tldr-pages linux/dnf-install"}
+{"cmd": "head path/to/file", "risky": 0, "source": "tldr-pages osx/head"}
+{"cmd": "npm root", "risky": 0, "source": "tldr-pages common/npm-root"}
+{"cmd": "<a>|<b>|<c>|...", "risky": 0, "source": "tldr-pages common/hangman"}
+{"cmd": "mv path/to/source1_path/to/source2_... path/to/existing_directory", "risky": 0, "source": "tldr-pages common/mv"}
+{"cmd": "sort -n path/to/file", "risky": 0, "source": "tldr-pages common/sort"}
+{"cmd": "cat path/to/file1 | join - path/to/file2", "risky": 0, "source": "tldr-pages common/join"}
+{"cmd": "sudo blkid", "risky": 1, "why": "sudo", "source": "tldr-pages linux/blkid"}
+{"cmd": "tldr mpirun", "risky": 0, "source": "tldr-pages common/mpiexec"}
+{"cmd": "docker compose down --rmi all", "risky": 1, "why": "docker compose down --rmi all deletes images", "source": "tldr-pages common/docker-compose-down"}
+{"cmd": "meson init", "risky": 0, "source": "tldr-pages common/meson"}
+{"cmd": "bun upgrade", "risky": 1, "why": "global bun upgrade", "source": "tldr-pages common/bun"}
+{"cmd": "<p>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "<ArrowUp>|<ArrowDown>|<ArrowLeft>|<ArrowRight>", "risky": 0, "source": "tldr-pages linux/snake4"}
+{"cmd": "sed -i.orig '1,5d' path/to/file", "risky": 0, "source": "tldr-pages linux/sed"}
+{"cmd": "go build -o path/to/binary path/to/package", "risky": 0, "source": "tldr-pages common/go-build"}
+{"cmd": "sort -r path/to/file", "risky": 0, "source": "tldr-pages common/sort"}
+{"cmd": "head -c count path/to/file", "risky": 0, "source": "tldr-pages linux/head"}
+{"cmd": "head -c -count path/to/file", "risky": 0, "source": "tldr-pages linux/head"}
+{"cmd": "vso remove package1_package2_...", "risky": 1, "why": "removes system packages", "source": "tldr-pages linux/vso"}
+{"cmd": "gh run view -j job_number --log", "risky": 0, "source": "tldr-pages common/gh-run"}
+{"cmd": "ps k size", "risky": 0, "source": "tldr-pages common/ps"}
+{"cmd": "uv run -w package command", "risky": 1, "why": "uv run --with adds package by name", "source": "tldr-pages common/uv-run"}
+{"cmd": "aws ssm start-session --target \"instance_id\"", "risky": 1, "why": "aws ssm session on remote instance", "source": "tldr-pages common/aws-ssm"}
+{"cmd": "magick montage path/to/image1.jpg_path/to/image2.jpg_... -geometry +0+0 path/to/montage.jpg", "risky": 0, "source": "tldr-pages common/magick-montage"}
+{"cmd": "docker search -f \"\\{\\{.Name\\}\\}: \\{\\{.Description\\}\\}\" keyword", "risky": 0, "source": "tldr-pages common/docker-search"}
+{"cmd": "limine-install", "risky": 1, "why": "installs bootloader", "source": "tldr-pages linux/limine"}
+{"cmd": "pg_restore -d db_name archive_file.dump", "risky": 1, "why": "pg_restore writes to database", "source": "tldr-pages common/pg_restore"}
+{"cmd": "az group create -n name -l location", "risky": 1, "why": "creates Azure resource group", "source": "tldr-pages common/az-group"}
+{"cmd": "git fetch -p", "risky": 0, "source": "tldr-pages common/git-fetch"}
+{"cmd": "git commit --amend", "risky": 0, "source": "tldr-pages common/git-commit"}
+{"cmd": "docker exec -i -d container_name command", "risky": 0, "source": "tldr-pages common/docker-container-exec"}
+{"cmd": "gdbus monitor --session", "risky": 0, "source": "tldr-pages linux/gdbus"}
+{"cmd": "telinit 0", "risky": 1, "why": "powers off machine", "source": "tldr-pages linux/telinit"}
+{"cmd": "docker ps -a", "risky": 0, "source": "tldr-pages common/docker"}
+{"cmd": "tar xvf path/to/source.tar.ext", "risky": 0, "source": "tldr-pages common/tar"}
+{"cmd": "lsof -u username", "risky": 0, "source": "tldr-pages common/lsof"}
+{"cmd": "<c>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "edquota -u $(whoami)", "risky": 1, "why": "edits user disk quota (system)", "source": "tldr-pages linux/edquota"}
+{"cmd": "pbmtext \"Hello_World!\" > path/to/output.pbm", "risky": 0, "source": "tldr-pages common/pbmtext"}
+{"cmd": "git add -p path/to/file", "risky": 0, "source": "tldr-pages common/git-add"}
+{"cmd": "gh pr view 123", "risky": 0, "source": "tldr-pages common/gh-pr-view"}
+{"cmd": "tldr which", "risky": 0, "source": "tldr-pages osx/gwhich"}
+{"cmd": "</>something", "risky": 0, "source": "tldr-pages common/cmus"}
+{"cmd": "nginx -c configuration_file", "risky": 1, "why": "starts nginx server with custom config (system service)", "source": "tldr-pages common/nginx"}
+{"cmd": "mvn site -pl module_name", "risky": 0, "source": "tldr-pages common/mvn-site"}
+{"cmd": "printf \"%s\\n\" string1_string2_...", "risky": 0, "source": "tldr-pages common/printf"}
+{"cmd": "repren -n --rename --literal --from 'find_string' --to 'replacement_string' *.png", "risky": 0, "source": "tldr-pages common/repren"}
+{"cmd": "wordgrinder", "risky": 0, "source": "tldr-pages common/wordgrinder"}
+{"cmd": "path/to/ShooterGameServer TheIsland", "risky": 0, "source": "tldr-pages linux/ark-survival-evolved"}
+{"cmd": "hello", "risky": 0, "source": "tldr-pages common/hello"}
+{"cmd": "git switch branch_name", "risky": 0, "source": "tldr-pages common/git-switch"}
+{"cmd": "cargo clippy", "risky": 0, "source": "tldr-pages common/cargo-clippy"}
+{"cmd": "mvn package -D skipTests", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "go vet -c=n", "risky": 0, "source": "tldr-pages common/go-vet"}
+{"cmd": "kubectl label po pod_name key=value", "risky": 1, "why": "kubectl label writes to cluster", "source": "tldr-pages common/kubectl-label"}
+{"cmd": "magick import -window root -display remote_host:screen.display path/to/output.png", "risky": 1, "why": "captures remote X server screen", "source": "tldr-pages common/magick-import"}
+{"cmd": "mvn compile", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "echo ${{{HOME}work}}", "risky": 0, "source": "tldr-pages common/{"}
+{"cmd": "mvn idea:module", "risky": 0, "source": "tldr-pages common/mvn-idea"}
+{"cmd": "apachectl start", "risky": 1, "why": "starts apache launchd service", "source": "tldr-pages osx/apachectl"}
+{"cmd": "wineboot", "risky": 0, "source": "tldr-pages linux/wineboot"}
+{"cmd": "sslstrip --listen=8080", "risky": 1, "why": "sslstrip MITM traffic interception", "source": "tldr-pages linux/sslstrip"}
+{"cmd": "pvesm st", "risky": 0, "source": "tldr-pages linux/pvesm"}
+{"cmd": "path/to/TerrariaServer", "risky": 0, "source": "tldr-pages linux/terraria"}
+{"cmd": "<Alt_q>|<Ctrl_c>", "risky": 0, "source": "tldr-pages linux/finch"}
+{"cmd": "%past", "risky": 0, "source": "tldr-pages common/ptghci"}
+{"cmd": "<b>", "risky": 0, "source": "tldr-pages linux/mpg123"}
+{"cmd": "go test -v ./...", "risky": 0, "source": "tldr-pages common/go-test"}
+{"cmd": "nimble install", "risky": 1, "why": "nimble install (global package install)", "source": "tldr-pages common/nimble"}
+{"cmd": "<o>", "risky": 0, "source": "tldr-pages common/tuir"}
+{"cmd": "mvn package -U", "risky": 0, "source": "tldr-pages common/mvn-package"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "bundle exec middleman build", "risky": 0, "source": "tldr-pages common/middleman"}
+{"cmd": "sublist3r --domain domain_name --bruteforce", "risky": 1, "why": "subdomain brute-force recon against external domain", "source": "tldr-pages common/sublist3r"}
+{"cmd": "git fetch remote_name", "risky": 0, "source": "tldr-pages common/git-fetch"}
+{"cmd": "gallery-dl --chapter-filter \"10_<=_chapter_<_20\" --option \"lang=language_code\" \"url\"", "risky": 0, "source": "tldr-pages common/gallery-dl"}
+{"cmd": "du -h -d n path/to/directory", "risky": 0, "source": "tldr-pages osx/du"}
+{"cmd": "traefik --ConfigFile config_file.toml", "risky": 1, "why": "starts traefik server with custom config", "source": "tldr-pages common/traefik"}
+{"cmd": "npm run", "risky": 0, "source": "tldr-pages common/npm-run"}
+{"cmd": "tail -n count -s seconds -f path/to/file", "risky": 0, "source": "tldr-pages osx/tail"}
+{"cmd": "touch -c -r path/to/reference_file path/to/file1_path/to/file2_...", "risky": 0, "source": "tldr-pages common/touch"}
+{"cmd": "git blame -L start_line,end_line path/to/file", "risky": 0, "source": "tldr-pages common/git-blame"}
+{"cmd": "printf \"\\e[1;34m%.3d\\e[0m\\n\" 42", "risky": 0, "source": "tldr-pages common/printf"}
+{"cmd": "systemctl show", "risky": 0, "source": "tldr-pages linux/systemctl-show"}
+{"cmd": "putty -ssh username@hostname_or_ip -P port", "risky": 1, "why": "ssh to remote host", "source": "tldr-pages common/putty"}
+{"cmd": "tsc @args.txt", "risky": 0, "source": "tldr-pages common/tsc"}
+{"cmd": "echo ${variable:-default}", "risky": 0, "source": "tldr-pages common/{"}
+{"cmd": "openssl req -new -x509 -key path/to/private.key -out path/to/certificate.crt -days 365", "risky": 0, "source": "tldr-pages common/openssl"}
+{"cmd": "make -j 4 target", "risky": 0, "source": "tldr-pages common/make"}
+{"cmd": "var-dump-server", "risky": 0, "source": "tldr-pages common/var-dump-server"}
+{"cmd": "command ls", "risky": 0, "source": "tldr-pages common/command"}
+{"cmd": "aws quicksight list-dashboards --aws-account-id aws_account_id", "risky": 0, "source": "tldr-pages common/aws-quicksight"}
+{"cmd": "grep -F \"exact_string\" path/to/file", "risky": 0, "source": "tldr-pages common/grep"}
+{"cmd": "uuidd -t", "risky": 0, "source": "tldr-pages linux/uuidd"}
+{"cmd": "racket -l module_name -m arguments", "risky": 0, "source": "tldr-pages common/racket"}
+{"cmd": "./rmlint.sh", "risky": 1, "why": "deletes duplicate files, possibly outside project", "source": "tldr-pages common/rmlint"}
+{"cmd": "path/to/PalServer.sh -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS", "risky": 0, "source": "tldr-pages linux/palworld"}
+{"cmd": "sudo eclean-kernel -n 2", "risky": 1, "why": "sudo, removes kernels", "source": "tldr-pages linux/eclean-kernel"}
+{"cmd": "tar czf path/to/target.tar.gz path/to/file1_path/to/file2_...", "risky": 0, "source": "tldr-pages common/tar"}
+{"cmd": "guacd -C my-cert.crt -K my-key.pem", "risky": 0, "source": "tldr-pages common/guacd"}
+{"cmd": "help2man executable -o path/to/file", "risky": 0, "source": "tldr-pages common/help2man"}
+{"cmd": "slim build image:tag", "risky": 0, "source": "tldr-pages common/slim"}
+{"cmd": "unzip -c path/to/archive1.zip_path/to/archive2.zip_...", "risky": 0, "source": "tldr-pages common/unzip"}
+{"cmd": "npm team destroy organization:team", "risky": 1, "why": "deletes npm org team", "source": "tldr-pages common/npm-team"}
+{"cmd": "<ArrowUp>|<ArrowDown>", "risky": 0, "source": "tldr-pages linux/links"}
+{"cmd": "go test", "risky": 0, "source": "tldr-pages common/go"}
+{"cmd": "pulumi login -l", "risky": 1, "why": "changes global pulumi login state", "source": "tldr-pages common/pulumi"}
+{"cmd": "git blame commit path/to/file", "risky": 0, "source": "tldr-pages common/git-blame"}
+{"cmd": "lsfd -i4|-i6", "risky": 0, "source": "tldr-pages linux/lsfd"}
+{"cmd": "zdiff path/to/file1.gz path/to/file2.gz", "risky": 0, "source": "tldr-pages common/zdiff"}
+{"cmd": "2to3 -o path/to/python3_directory -W -n path/to/python2_directory", "risky": 0, "source": "tldr-pages common/2to3"}
+{"cmd": "eww daemon", "risky": 0, "source": "tldr-pages linux/eww"}
+{"cmd": "<Esc>|<q>", "risky": 0, "source": "tldr-pages linux/neo"}
+{"cmd": "cat_path/to/file.json | jq '. +|- {\"key1\":_\"value1\",_\"key2\":_\"value2\",_...}'", "risky": 0, "source": "tldr-pages common/jq"}
+{"cmd": "gitmoji --remove", "risky": 0, "source": "tldr-pages common/gitmoji"}
+{"cmd": "nh os switch path/to/flake", "risky": 1, "why": "switches system NixOS config", "source": "tldr-pages common/nh"}
+{"cmd": "mons -o", "risky": 1, "why": "changes system display config", "source": "tldr-pages linux/mons"}
+{"cmd": "pmount", "risky": 0, "source": "tldr-pages linux/pmount"}
+{"cmd": "split -b 512 path/to/file", "risky": 0, "source": "tldr-pages osx/split"}
+{"cmd": "docker compose up --timestamps", "risky": 0, "source": "tldr-pages common/docker-compose-up"}
+{"cmd": "tldr od", "risky": 0, "source": "tldr-pages osx/god"}
+{"cmd": "</>search_pattern<Enter>", "risky": 0, "source": "tldr-pages common/vim"}
+{"cmd": "wc -l path/to/file", "risky": 0, "source": "tldr-pages osx/wc"}
+{"cmd": "dog example.com MX @1.1.1.1", "risky": 0, "source": "tldr-pages common/dog"}
+{"cmd": "npm hook ls", "risky": 0, "source": "tldr-pages common/npm-hook"}
+{"cmd": "path/to/ArkAscendedServer TheIsland_WP?SessionName=session_name?ServerPassword=server_password?ServerAdminPassword=admin_password", "risky": 1, "why": "starts a network game server with passwords on command line", "source": "tldr-pages linux/ark-survival-ascended"}
+{"cmd": "eix --license license", "risky": 0, "source": "tldr-pages linux/eix"}
+{"cmd": "ls -F", "risky": 0, "source": "tldr-pages common/ls"}
+{"cmd": "goobook dump_contacts", "risky": 1, "why": "dumps personal contacts", "source": "tldr-pages linux/goobook"}
+{"cmd": "ps auxww", "risky": 0, "source": "tldr-pages osx/ps"}
+{"cmd": "pipewire-pulse -c path/to/pipewire-pulse.conf", "risky": 1, "why": "starts a system audio daemon", "source": "tldr-pages linux/pipewire-pulse"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "opencode stats --models 5", "risky": 0, "source": "tldr-pages common/opencode-stats"}
+{"cmd": "mariadb -S path/to/socket_name", "risky": 1, "why": "opens interactive database session (can write)", "source": "tldr-pages common/mariadb"}
+{"cmd": "<z><a>", "risky": 0, "source": "tldr-pages common/vimdiff"}
+{"cmd": "OPTIND=1", "risky": 0, "source": "tldr-pages common/getopts"}
+{"cmd": "sed -i bak 's/apple/mango/g' path/to/file", "risky": 0, "source": "tldr-pages osx/sed"}
+{"cmd": "docker images", "risky": 0, "source": "tldr-pages common/docker"}
+{"cmd": "ls -d */", "risky": 0, "source": "tldr-pages common/ls"}
+{"cmd": "pinta", "risky": 0, "source": "tldr-pages common/pinta"}
+{"cmd": "chmod o=g path/to/file", "risky": 0, "source": "tldr-pages common/chmod"}
+{"cmd": "mvn install -D skipTests", "risky": 0, "source": "tldr-pages common/mvn-install"}
+{"cmd": "supervisorctl status process_name", "risky": 0, "source": "tldr-pages common/supervisorctl"}
+{"cmd": "nomad job run path/to/file.nomad", "risky": 1, "why": "runs a job on a nomad cluster (deploy)", "source": "tldr-pages common/nomad"}
+{"cmd": "ln -s path/to/file_or_directory path/to/symlink", "risky": 0, "source": "tldr-pages common/ln"}
+{"cmd": "tar tvf path/to/source.tar", "risky": 0, "source": "tldr-pages common/tar"}
+{"cmd": "pbmtomacp path/to/image.pbm > path/to/output.macp", "risky": 0, "source": "tldr-pages common/pbmtomacp"}
+{"cmd": "fastmod --accept-all --print-changed-files --fixed-strings exact_string replacement", "risky": 0, "source": "tldr-pages common/fastmod"}
+{"cmd": "agetty -i -", "risky": 1, "why": "runs system login getty", "source": "tldr-pages linux/agetty"}
+{"cmd": "sudo chown -R user path/to/directory", "risky": 1, "why": "sudo chown", "source": "tldr-pages common/chown"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "ruff check --select rule_code --add-noqa", "risky": 0, "source": "tldr-pages common/ruff-check"}
+{"cmd": "tail -5 path/to/file", "risky": 0, "source": "tldr-pages common/tail"}
+{"cmd": "trash-empty 10", "risky": 1, "why": "permanently deletes trash files outside project", "source": "tldr-pages linux/trash"}
+{"cmd": "pacrepairdb package_name", "risky": 1, "why": "modifies system package database", "source": "tldr-pages linux/pacrepairdb"}
+{"cmd": "particle project create", "risky": 0, "source": "tldr-pages common/particle"}
+{"cmd": "go mod init module_name", "risky": 0, "source": "tldr-pages common/go"}
+{"cmd": "hyprcursor-util -c path/to/theme_directory", "risky": 0, "source": "tldr-pages linux/hyprcursor-util"}
+{"cmd": "export -n VARIABLE", "risky": 0, "source": "tldr-pages linux/export"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "light -A 20", "risky": 1, "why": "changes system backlight setting", "source": "tldr-pages linux/light"}
+{"cmd": "sudo bclm persist", "risky": 1, "why": "sudo, changes system charge limit", "source": "tldr-pages osx/bclm"}
+{"cmd": "duckdb data_source.ext -c \"_SELECT_*_FROM_file_\"", "risky": 0, "source": "tldr-pages common/duckdb"}
+{"cmd": "make -e target", "risky": 0, "source": "tldr-pages common/make"}
+{"cmd": "pbmtoescp2 -f path/to/image.pbm > path/to/output.escp2", "risky": 0, "source": "tldr-pages common/pbmtoescp2"}
+{"cmd": "<a>|<d>|<ArrowLeft>|<ArrowRight>", "risky": 0, "source": "tldr-pages linux/cuyo"}
+{"cmd": "truffle help subcommand", "risky": 0, "source": "tldr-pages common/truffle"}
+{"cmd": "pidof bash", "risky": 0, "source": "tldr-pages linux/pidof"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "find path/to/directory -type d -iname '*lib*'", "risky": 0, "source": "tldr-pages common/find"}
+{"cmd": "Set-NodeVersion node_version", "risky": 0, "source": "tldr-pages common/set-nodeversion"}
+{"cmd": "ark -b -o path/to/directory path/to/archive", "risky": 0, "source": "tldr-pages linux/ark"}
+{"cmd": "poetry sync --with test|docs|...", "risky": 0, "source": "tldr-pages common/poetry-sync"}
+{"cmd": "gh pr checks pr_number --watch", "risky": 0, "source": "tldr-pages common/gh-pr-checks"}
+{"cmd": "docker compose -f path/to/compose_file stop", "risky": 0, "source": "tldr-pages common/docker-compose-stop"}
+{"cmd": "cage -h", "risky": 0, "source": "tldr-pages linux/cage"}
+{"cmd": "mvn dependency:add -Dgav=group_id:artifact_id:version", "risky": 1, "why": "adds a new maven dependency", "source": "tldr-pages common/mvn-dependency"}
+{"cmd": "rdesktop -u username -p password -f host:port", "risky": 1, "why": "remote desktop connection with password", "source": "tldr-pages linux/rdesktop"}
+{"cmd": "<h>", "risky": 0, "source": "tldr-pages osx/nettop"}
+{"cmd": "bundle exec command arguments", "risky": 0, "source": "tldr-pages common/bundle"}
+{"cmd": "koboldcpp --port port", "risky": 0, "source": "tldr-pages common/koboldcpp"}
+{"cmd": "khal calendar", "risky": 1, "why": "reads personal calendar data outside project", "source": "tldr-pages common/khal"}
+{"cmd": "<ArrowLeft>|<ArrowRight>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "touch path/to/file{1..10}", "risky": 0, "source": "tldr-pages common/touch"}
+{"cmd": "gh pr checks", "risky": 0, "source": "tldr-pages common/gh-pr-checks"}
+{"cmd": "hledger acc type:A", "risky": 0, "source": "tldr-pages common/hledger-accounts"}
+{"cmd": "path/to/ShooterGameServer TheIsland -automanagedmods", "risky": 1, "why": "starts game server that downloads and installs mods", "source": "tldr-pages linux/ark-survival-evolved"}
+{"cmd": "<:>q!<Enter>", "risky": 0, "source": "tldr-pages common/hx"}
+{"cmd": "msgcat -t UTF-8 input.po -o output.po", "risky": 0, "source": "tldr-pages common/msgcat"}
+{"cmd": "npm whoami --registry registry_url", "risky": 0, "source": "tldr-pages common/npm-whoami"}
+{"cmd": "git rebase --skip", "risky": 1, "why": "skips a commit during rebase, dropping its changes", "source": "tldr-pages common/git-rebase"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "<h>", "risky": 0, "source": "tldr-pages osx/nettop"}
+{"cmd": "brew bundle dump", "risky": 0, "source": "tldr-pages common/brew-bundle"}
+{"cmd": "echo \"Hello_World\"", "risky": 0, "source": "tldr-pages common/echo"}
+{"cmd": "gh pr view 123 -c", "risky": 0, "source": "tldr-pages common/gh-pr-view"}
+{"cmd": "go test -cover", "risky": 0, "source": "tldr-pages common/go-test"}
+{"cmd": "go test -v", "risky": 0, "source": "tldr-pages common/go-test"}
+{"cmd": "path/to/factorio --start-server path/to/save_file.zip", "risky": 1, "why": "starts a network game server", "source": "tldr-pages linux/factorio"}
+{"cmd": "as path/to/file.s", "risky": 0, "source": "tldr-pages osx/as"}
+{"cmd": "sudo liquidctl initialize all", "risky": 1, "why": "sudo, initializes hardware devices", "source": "tldr-pages common/liquidctl"}
+{"cmd": "command | base64 -d", "risky": 0, "source": "tldr-pages osx/base64"}
+{"cmd": "path/to/goldeneye.py -h", "risky": 0, "source": "tldr-pages linux/goldeneye.py"}
+{"cmd": "<ArrowDown>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "sass --watch inputfile.scss|inputfile.sass:outputfile.css", "risky": 0, "source": "tldr-pages common/sass"}
+{"cmd": "command | sed -f path/to/script_file.sed", "risky": 0, "source": "tldr-pages osx/sed"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "todoist a \"task_name\"", "risky": 1, "why": "adds a task to external todoist service", "source": "tldr-pages common/todoist"}
+{"cmd": "echo {1..3} {a..c}{dir1,dir2,dir3}", "risky": 0, "source": "tldr-pages common/{"}
+{"cmd": "sudo semanage user -l -C", "risky": 1, "why": "sudo", "source": "tldr-pages linux/semanage-user"}
+{"cmd": "systemctl service-log-target service_name syslog", "risky": 1, "why": "changes systemd service log target", "source": "tldr-pages linux/systemctl-service-log-target"}
+{"cmd": "docker compose up -d", "risky": 0, "source": "tldr-pages common/docker-compose"}
+{"cmd": "wc -l path/to/file", "risky": 0, "source": "tldr-pages osx/wc"}
+{"cmd": "<F6>", "risky": 0, "source": "tldr-pages common/ptpython"}
+{"cmd": "docker exec -d container_name command", "risky": 0, "source": "tldr-pages common/docker-container-exec"}
+{"cmd": "path/to/ArkAscendedServer TheIsland_WP", "risky": 1, "why": "starts a network game server", "source": "tldr-pages linux/ark-survival-ascended"}
+{"cmd": "caffeinate -i make", "risky": 0, "source": "tldr-pages osx/caffeinate"}
+{"cmd": "<k>", "risky": 0, "source": "tldr-pages linux/warpd"}
+{"cmd": "<o>", "risky": 0, "source": "tldr-pages common/tuir"}
+{"cmd": "qm des 100", "risky": 1, "why": "destroys a virtual machine", "source": "tldr-pages linux/qm-destroy"}
+{"cmd": "tailscale funnel 3000", "risky": 1, "why": "exposes local server to the public internet", "source": "tldr-pages common/tailscale-funnel"}
+{"cmd": "docker ps", "risky": 0, "source": "tldr-pages common/docker-container"}
+{"cmd": "ln -sf /path/to/new_file path/to/symlink", "risky": 0, "source": "tldr-pages common/ln"}
+{"cmd": "ps aux | grep [s]tring", "risky": 0, "source": "tldr-pages common/ps"}
+{"cmd": "git log --stat", "risky": 0, "source": "tldr-pages common/git-log"}
+{"cmd": "fprintd-enroll username", "risky": 1, "why": "enrolls fingerprint, system auth state", "source": "tldr-pages linux/fprintd-enroll"}
+{"cmd": "pamcut -cropl value -cropr value -cropt value -cropb value path/to/image.ppm > path/to/output.ppm", "risky": 0, "source": "tldr-pages common/pamcut"}
+{"cmd": "torsocks --shell", "risky": 1, "why": "spawns Tor-routed shell, network settings", "source": "tldr-pages linux/torsocks"}
+{"cmd": "owut list", "risky": 0, "source": "tldr-pages linux/owut"}
+{"cmd": "</>search_pattern<Enter>", "risky": 0, "source": "tldr-pages common/vim"}
+{"cmd": "<G>|<g>", "risky": 0, "source": "tldr-pages common/less"}
+{"cmd": "qmmp", "risky": 0, "source": "tldr-pages common/qmmp"}
+{"cmd": "command | sed 's/apple/mango/g'", "risky": 0, "source": "tldr-pages osx/sed"}
+{"cmd": "footclient -a app_id", "risky": 0, "source": "tldr-pages common/footclient"}
+{"cmd": "./path/to/binary -t", "risky": 0, "source": "tldr-pages linux/unzipsfx"}
+{"cmd": "<:>blist<Enter>", "risky": 0, "source": "tldr-pages linux/zathura"}
+{"cmd": "git worktree add path/to/directory -b new_branch", "risky": 0, "source": "tldr-pages common/git-worktree"}
+{"cmd": "nix-env -q", "risky": 0, "source": "tldr-pages common/nix-env"}
+{"cmd": "calcurse-caldav --init=keep-remote", "risky": 1, "why": "deletes all local calendar items (outside project)", "source": "tldr-pages linux/calcurse"}
+{"cmd": "aws ce get-cost-forecast --time-period start_date/end_date --granularity granularity --metric metric", "risky": 0, "source": "tldr-pages common/aws-ce"}
+{"cmd": "<r>sel", "risky": 1, "why": "deletes selected files in file manager", "source": "tldr-pages common/clifm"}
+{"cmd": "csvgrep -c 3,4 -r regex data.csv", "risky": 0, "source": "tldr-pages common/csvgrep"}
+{"cmd": "<[><c>", "risky": 0, "source": "tldr-pages common/vimdiff"}
+{"cmd": "gh api --silent endpoint", "risky": 0, "source": "tldr-pages common/gh-api"}
+{"cmd": "tldr uniq", "risky": 0, "source": "tldr-pages osx/guniq"}
+{"cmd": "micromamba install scipy_pandas", "risky": 1, "why": "installs new packages by name", "source": "tldr-pages common/micromamba"}
+{"cmd": "mvn idea:idea", "risky": 0, "source": "tldr-pages common/mvn-idea"}
+{"cmd": "edgepaint path/to/layout1.gv_path/to/layout2.gv_... > path/to/output.gv", "risky": 0, "source": "tldr-pages common/edgepaint"}
+{"cmd": "cdk diff stack_name", "risky": 0, "source": "tldr-pages common/cdk"}
+{"cmd": "ipcalc 192.168.0.1", "risky": 0, "source": "tldr-pages common/ipcalc"}
+{"cmd": "node", "risky": 0, "source": "tldr-pages common/node"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "printf \"hex=%x_octal=%o_scientific=%e\\n\" 0xFF 0377 100000", "risky": 0, "source": "tldr-pages common/printf"}
+{"cmd": "sudo tlmgr remove --no-depends package", "risky": 1, "why": "sudo, removes system package", "source": "tldr-pages common/tlmgr-remove"}
+{"cmd": "bun link package_name", "risky": 1, "why": "links an external package into the project", "source": "tldr-pages common/bun-link"}
+{"cmd": "pytest --sw", "risky": 0, "source": "tldr-pages common/pytest"}
+{"cmd": "<Space>|<j>", "risky": 0, "source": "tldr-pages common/moon-buggy"}
+{"cmd": "pip install -r path/to/requirements.txt", "risky": 0, "source": "tldr-pages common/pip-install"}
+{"cmd": "sort path/to/file | uniq -s 5", "risky": 0, "source": "tldr-pages common/uniq"}
+{"cmd": "bun publish --registry registry", "risky": 1, "why": "publishes package", "source": "tldr-pages common/bun-publish"}
+{"cmd": "dotnet test", "risky": 0, "source": "tldr-pages common/dotnet-test"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "pod outdated", "risky": 0, "source": "tldr-pages osx/pod"}
+{"cmd": "mysqld --port=port", "risky": 0, "source": "tldr-pages common/mysqld"}
+{"cmd": "mashtree --numcpus 12 *.fastq.gz *.fasta > mashtree.dnd", "risky": 0, "source": "tldr-pages linux/mashtree"}
+{"cmd": "atom -a path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/atom"}
+{"cmd": "texconfig rehash", "risky": 1, "why": "modifies system TeX database", "source": "tldr-pages common/texconfig"}
+{"cmd": "export -f FUNCTION_NAME", "risky": 0, "source": "tldr-pages linux/export"}
+{"cmd": "wc -m path/to/file", "risky": 0, "source": "tldr-pages osx/wc"}
+{"cmd": "php-cs-fixer describe rule", "risky": 0, "source": "tldr-pages common/php-cs-fixer"}
+{"cmd": "tcsh", "risky": 0, "source": "tldr-pages common/tcsh"}
+{"cmd": "<p>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "rg pattern", "risky": 0, "source": "tldr-pages common/rg"}
+{"cmd": "rm torrent_id", "risky": 1, "why": "removes torrent from daemon", "source": "tldr-pages common/deluge-console"}
+{"cmd": "slurmdbd -n value", "risky": 1, "why": "starts system daemon with changed priority", "source": "tldr-pages linux/slurmdbd"}
+{"cmd": "<h>|<j>|<k>|<l>|<ArrowKeys>", "risky": 0, "source": "tldr-pages linux/zathura"}
+{"cmd": "sails lift", "risky": 0, "source": "tldr-pages common/sails"}
+{"cmd": "babel path/to/input_directory", "risky": 0, "source": "tldr-pages common/babel"}
+{"cmd": "command | ts -i \"%H:%M:%.S\"", "risky": 0, "source": "tldr-pages common/ts"}
+{"cmd": "<Esc><u>", "risky": 0, "source": "tldr-pages common/vim"}
+{"cmd": "nvtop -f", "risky": 0, "source": "tldr-pages linux/nvtop"}
+{"cmd": "exec 3>path/to/file", "risky": 0, "source": "tldr-pages common/greater-than"}
+{"cmd": "handbrakecli -i input.avi -o output.mkv -e x264 -q 20 -B 160", "risky": 0, "source": "tldr-pages common/handbrakecli"}
+{"cmd": "docker compose down --remove-orphans", "risky": 0, "source": "tldr-pages common/docker-compose-down"}
+{"cmd": "zig c++ path/to/file.cpp", "risky": 0, "source": "tldr-pages common/zig"}
+{"cmd": "du -ah path/to/directory", "risky": 0, "source": "tldr-pages osx/du"}
+{"cmd": "cat_path/to/file.json | jq --arg_\"name1\"_\"value1\"_--arg_\"name2\"_\"value2\"_... '._+_$ARGS.named'", "risky": 0, "source": "tldr-pages common/jq"}
+{"cmd": "<ArrowRight>", "risky": 0, "source": "tldr-pages linux/rtorrent"}
+{"cmd": "cowsay -f art \"hello,_world\"", "risky": 0, "source": "tldr-pages common/cowsay"}
+{"cmd": "path/to/cs2 -dedicated +map de_dust2", "risky": 0, "source": "tldr-pages linux/counter-strike-2"}
+{"cmd": "rkdeveloptool ul path/to/bootloader.bin", "risky": 1, "why": "flashes device bootloader", "source": "tldr-pages common/rkdeveloptool"}
+{"cmd": "sops -d --extract '[\"an_array\"][1]' path/to/file.enc.json", "risky": 1, "why": "decrypts secrets file", "source": "tldr-pages common/sops"}
+{"cmd": "gofmt -e path/to/source.go", "risky": 0, "source": "tldr-pages common/gofmt"}
+{"cmd": "ls ~-", "risky": 0, "source": "tldr-pages common/~"}
+{"cmd": "ls -la", "risky": 0, "source": "tldr-pages common/ls"}
+{"cmd": "<ArrowLeft>|<ArrowRight>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "go build -race -o path/to/executable path/to/main_package", "risky": 0, "source": "tldr-pages common/go-build"}
+{"cmd": "xidel https://example.org -f \"css('a')\" --css title", "risky": 0, "source": "tldr-pages common/xidel"}
+{"cmd": "borg create --help", "risky": 0, "source": "tldr-pages common/borg"}
+{"cmd": "export KUBECONFIG=\"path/to/kubeconfig1.yaml:path/to/kubeconfig2.yaml\"", "risky": 0, "source": "tldr-pages common/kubectl-config"}
+{"cmd": "zig build run", "risky": 0, "source": "tldr-pages common/zig"}
+{"cmd": "reindexdb database_name -j number_of_jobs", "risky": 1, "why": "database maintenance write", "source": "tldr-pages common/reindexdb"}
+{"cmd": "zig build", "risky": 0, "source": "tldr-pages common/zig"}
+{"cmd": "git log -p path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/git-log"}
+{"cmd": "<e>", "risky": 0, "source": "tldr-pages common/scim"}
+{"cmd": "cargo remove --target target dependency", "risky": 0, "source": "tldr-pages common/cargo-remove"}
+{"cmd": "yazi --cwd-file path/to/cwd_file", "risky": 0, "source": "tldr-pages common/yazi"}
+{"cmd": "mypy -h", "risky": 0, "source": "tldr-pages common/mypy"}
+{"cmd": "git submodule", "risky": 0, "source": "tldr-pages common/git-submodule"}
+{"cmd": "tc q s dev eth0", "risky": 0, "source": "tldr-pages linux/tc"}
+{"cmd": "defaults write com.apple.Dock expose-animation-duration -float 0.1", "risky": 1, "why": "defaults write changes system settings", "source": "tldr-pages osx/defaults"}
+{"cmd": "mvn clean", "risky": 0, "source": "tldr-pages common/mvn"}
+{"cmd": "path/to/ShooterGameServer TheIsland -ActiveEvent=Summer", "risky": 0, "source": "tldr-pages linux/ark-survival-evolved"}
+{"cmd": "archlinux-java fix", "risky": 1, "why": "changes system default Java configuration", "source": "tldr-pages linux/archlinux-java"}
+{"cmd": "pypy -c \"expression\"", "risky": 0, "source": "tldr-pages common/pypy"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "lsd -lS", "risky": 0, "source": "tldr-pages common/lsd"}
+{"cmd": "bun test", "risky": 0, "source": "tldr-pages common/bun"}
+{"cmd": "git lfs track '*.bin'", "risky": 0, "source": "tldr-pages common/git-lfs"}
+{"cmd": "openstack network delete network_id_or_name", "risky": 1, "why": "deletes cloud network resource", "source": "tldr-pages common/openstack-network"}
+{"cmd": "<Esc><Z><Z>|<Esc><:>x<Enter>|<Esc><:>wq<Enter>", "risky": 0, "source": "tldr-pages common/vim"}
+{"cmd": "xmllint --dtdvalid url source_file.xml", "risky": 0, "source": "tldr-pages common/xmllint"}
+{"cmd": "sudo btrfs sc status path/to/btrfs_mount", "risky": 1, "why": "sudo", "source": "tldr-pages linux/btrfs-scrub"}
+{"cmd": "protonvpn connect", "risky": 1, "why": "connects VPN, changes network settings", "source": "tldr-pages linux/protonvpn"}
+{"cmd": "git log -i --grep search_string", "risky": 0, "source": "tldr-pages common/git-log"}
+{"cmd": "curl https://example.com", "risky": 0, "source": "tldr-pages common/curl"}
+{"cmd": "<Space>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "pueue parallel max_number_of_parallel_tasks", "risky": 0, "source": "tldr-pages common/pueue-parallel"}
+{"cmd": "caffeinate -d", "risky": 0, "source": "tldr-pages osx/caffeinate"}
+{"cmd": "conda run -n environment_name command", "risky": 0, "source": "tldr-pages common/conda-run"}
+{"cmd": "gpg -d doc.txt.gpg", "risky": 1, "why": "decrypts gpg-encrypted file", "source": "tldr-pages common/gpg"}
+{"cmd": "xinput enable device_id", "risky": 1, "why": "changes system input device state", "source": "tldr-pages linux/xinput"}
+{"cmd": "csv2tsv -c'field_delimiter' path/to/input_csv", "risky": 0, "source": "tldr-pages common/csv2tsv"}
+{"cmd": "awk '{s+=$1} END {print s}' path/to/file", "risky": 0, "source": "tldr-pages common/awk"}
+{"cmd": "<q>", "risky": 0, "source": "tldr-pages linux/yetris"}
+{"cmd": "git status -v", "risky": 0, "source": "tldr-pages common/git-status"}
+{"cmd": "monolith url -j", "risky": 0, "source": "tldr-pages common/monolith"}
+{"cmd": "mypy -p package_name", "risky": 0, "source": "tldr-pages common/mypy"}
+{"cmd": "<?>", "risky": 0, "source": "tldr-pages osx/top"}
+{"cmd": "scp path/to/local_file remote_username@remote_host:path/to/remote_directory", "risky": 1, "why": "scp upload to remote host", "source": "tldr-pages common/scp"}
+{"cmd": "http -F https://example.com 'User-Agent:_Mozilla/5.0'_'Accept-Encoding:_gzip'", "risky": 0, "source": "tldr-pages common/http"}
+{"cmd": "logrotate path/to/logrotate.conf --state /dev/null", "risky": 1, "why": "logrotate may rotate/delete system logs", "source": "tldr-pages linux/logrotate"}
+{"cmd": "head -n n path/to/file", "risky": 0, "source": "tldr-pages osx/head"}
+{"cmd": "sudo iw dev wlanX set freq freq_in_mhz", "risky": 1, "why": "sudo, changes Wi-Fi device settings", "source": "tldr-pages linux/iw-dev"}
+{"cmd": "docker compose logs --until timestamp", "risky": 0, "source": "tldr-pages common/docker-compose-logs"}
+{"cmd": "poetry remove package -G group_name", "risky": 0, "source": "tldr-pages common/poetry-remove"}
+{"cmd": "<E>", "risky": 0, "source": "tldr-pages common/scim"}
+{"cmd": "black -q path/to/file_or_directory", "risky": 0, "source": "tldr-pages common/black"}
+{"cmd": "equery depends package", "risky": 0, "source": "tldr-pages linux/equery"}
+{"cmd": "lsof -p process_id", "risky": 0, "source": "tldr-pages common/lsof"}
+{"cmd": "lastcomm --command command", "risky": 0, "source": "tldr-pages common/lastcomm"}
+{"cmd": "mvn dependency:analyze", "risky": 0, "source": "tldr-pages common/mvn-dependency"}
+{"cmd": "cd path/to/directory", "risky": 0, "source": "tldr-pages common/cd"}
+{"cmd": "install-tl -profile path/to/texlive.profile", "risky": 1, "why": "system-wide TeX Live install", "source": "tldr-pages common/install-tl"}
+{"cmd": "</>pattern", "risky": 0, "source": "tldr-pages common/less"}
+{"cmd": "sudo semanage login -m -s selinux_user linux_username", "risky": 1, "why": "sudo, modifies SELinux login mapping", "source": "tldr-pages linux/semanage-login"}
+{"cmd": "pants package path/to/directory:target-name", "risky": 0, "source": "tldr-pages common/pants"}
+{"cmd": "go build -o executable file.go", "risky": 0, "source": "tldr-pages common/go"}
+{"cmd": "tail -n count -s seconds -f path/to/file", "risky": 0, "source": "tldr-pages osx/tail"}
+{"cmd": "docker images -q", "risky": 0, "source": "tldr-pages common/docker-image-ls"}
+{"cmd": "limine-entry-tool --remove-os \"os_name|machine_id\"", "risky": 1, "why": "removes bootloader OS entry", "source": "tldr-pages linux/limine-entry-tool"}
+{"cmd": "<u>", "risky": 0, "source": "tldr-pages common/rtv"}
+{"cmd": "tldr nc", "risky": 0, "source": "tldr-pages common/netcat"}
+{"cmd": "path/to/server_linux -limit 2..24", "risky": 0, "source": "tldr-pages linux/natural-selection-2"}
+{"cmd": "ppmtoterm path/to/input.ppm > path/to/output.txt", "risky": 0, "source": "tldr-pages common/ppmtoterm"}
+{"cmd": "git blame path/to/file", "risky": 0, "source": "tldr-pages common/git-blame"}
+{"cmd": "gh pr checks pr_number", "risky": 0, "source": "tldr-pages common/gh-pr-checks"}
+{"cmd": "incus image list local:", "risky": 0, "source": "tldr-pages common/incus"}
+{"cmd": "<Tab>", "risky": 0, "source": "tldr-pages common/tuitube"}
+{"cmd": "tail -c count path/to/file", "risky": 0, "source": "tldr-pages common/tail"}
+{"cmd": "eslint -c path/to/config_file path/to/file1.js_path/to/file2.js_...", "risky": 0, "source": "tldr-pages common/eslint"}
+{"cmd": "exec 3<path/to/file", "risky": 0, "source": "tldr-pages common/less-than"}
+{"cmd": "PS3=\"Select_a_file:_\"; select file in *; do echo $file; done", "risky": 0, "source": "tldr-pages common/select"}
+{"cmd": "ls -ltr", "risky": 0, "source": "tldr-pages common/ls"}
+{"cmd": "sprof path/to/library.so", "risky": 0, "source": "tldr-pages linux/sprof"}
+{"cmd": "jekyll serve --verbose", "risky": 0, "source": "tldr-pages common/jekyll"}
+{"cmd": "last username -i", "risky": 0, "source": "tldr-pages linux/last"}
+{"cmd": "git fetch origin main:main", "risky": 0, "source": "tldr-pages common/git-fetch"}
+{"cmd": "cp --parents source/path/to/file path/to/target_file", "risky": 0, "source": "tldr-pages common/cp"}
+{"cmd": "mksquashfs path/to/file_or_directory1_path/to/file_or_directory2_... filesystem.squashfs -comp gzip|lzo|lz4|xz|zstd|lzma", "risky": 0, "source": "tldr-pages linux/mksquashfs"}
+{"cmd": "git rebase -i target_base_branch_or_commit_hash", "risky": 0, "source": "tldr-pages common/git-rebase"}
+{"cmd": "gsutil mv gs://bucket_name/old_object_name gs://bucket_name/new_object_name", "risky": 1, "why": "moves objects in cloud storage bucket", "source": "tldr-pages common/gsutil"}
+{"cmd": "sudo cephadm shell", "risky": 1, "why": "sudo", "source": "tldr-pages linux/cephadm"}
+{"cmd": "mv path/to/source path/to/target", "risky": 0, "source": "tldr-pages common/mv"}
+{"cmd": "gdal2tiles.py --zoom 2-5 path/to/input.tif path/to/output_directory", "risky": 0, "source": "tldr-pages common/gdal2tiles.py"}
+{"cmd": "xgettext -o path/to/output_file path/to/input_file", "risky": 0, "source": "tldr-pages common/xgettext"}
+{"cmd": "a2ping --below path/to/file", "risky": 0, "source": "tldr-pages common/a2ping"}
+{"cmd": "du -ch *.jpg", "risky": 0, "source": "tldr-pages common/du"}
+{"cmd": "kool status", "risky": 0, "source": "tldr-pages common/kool"}
+{"cmd": "<Enter>", "risky": 0, "source": "tldr-pages linux/nsxiv"}
+{"cmd": "qtchooser --install version_name path/to/qmake", "risky": 1, "why": "registers Qt version in global qtchooser config", "source": "tldr-pages linux/qtchooser"}
+{"cmd": "ifdata -e eth0", "risky": 0, "source": "tldr-pages common/ifdata"}
+{"cmd": "rustdoc src/lib.rs --crate-name name", "risky": 0, "source": "tldr-pages common/rustdoc"}
+{"cmd": "path/to/PalServer.sh -port=8211 -players=1..32", "risky": 0, "source": "tldr-pages linux/palworld"}
+{"cmd": "octez-client originate contract alias transferring 0 from alias|address running path/to/source_file.tz --init \"initial_storage\" --burn_cap 1", "risky": 1, "why": "deploys smart contract to blockchain", "source": "tldr-pages common/octez-client"}
+{"cmd": "cal", "risky": 0, "source": "tldr-pages osx/cal"}
+{"cmd": "dijkstra source_node_file", "risky": 0, "source": "tldr-pages common/dijkstra"}
+{"cmd": "az feedback", "risky": 1, "why": "sends feedback to external service", "source": "tldr-pages common/az-feedback"}
+{"cmd": "<n>", "risky": 1, "why": "creates disk partition", "source": "tldr-pages linux/nsxiv"}

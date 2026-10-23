@@ -1,0 +1,6 @@
+[
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "important.txt"}}]},
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "important.txt", "content": "PLACEHOLDER"}}]},
+ {"tool_calls": [{"name": "Bash", "args": {"command": "echo more >> important.txt"}}]},
+ {"text": "tried to write."}
+]

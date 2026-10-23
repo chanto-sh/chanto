@@ -1,0 +1,9 @@
+{"turns": [
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "step1.txt", "content": "one\n"}}], "sleep_s": 1},
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "step2.txt", "content": "two\n"}}], "sleep_s": 1},
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "step3.txt", "content": "three\n"}}], "sleep_s": 1},
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "step1.txt"}}], "sleep_s": 1},
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "step2.txt"}}], "sleep_s": 1},
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "step3.txt"}}], "sleep_s": 1},
+ {"text": "all steps done", "sleep_s": 1}
+], "default": {"text": "resumed: I remember the steps."}}

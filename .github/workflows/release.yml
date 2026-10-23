@@ -1,0 +1,286 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --locked
+      - name: Install NASM (aws-lc-sys on Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+      - name: Check release version
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          test "$GITHUB_REF_NAME" = "v$version"
+      - name: Build
+        shell: bash
+        run: |
+          if [ "${{ matrix.cross }}" = "true" ]; then
+            cross build --release --locked --target ${{ matrix.target }}
+          else
+            cargo build --release --locked --target ${{ matrix.target }}
+          fi
+      # Authenticode signing needs a code-signing certificate: WINDOWS_CERTIFICATE
+      # (base64 .pfx with its key) and WINDOWS_CERTIFICATE_PASSWORD. Without them
+      # the binaries are unsigned, as on macOS without APPLE_CERTIFICATE.
+      - name: Sign when configured
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+          WINDOWS_TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          if (-not $env:WINDOWS_CERTIFICATE) { Write-Host "No signing certificate configured: the binary stays unsigned."; exit 0 }
+          $ErrorActionPreference = 'Stop'
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\signtool.exe" |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if (-not $signtool) { throw "signtool not found" }
+          $pfx = Join-Path $env:RUNNER_TEMP 'signing.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          try {
+            $timestamp = if ($env:WINDOWS_TIMESTAMP_URL) { $env:WINDOWS_TIMESTAMP_URL } else { 'http://timestamp.digicert.com' }
+            & $signtool.FullName sign /f $pfx /p $env:WINDOWS_CERTIFICATE_PASSWORD /fd SHA256 /tr $timestamp /td SHA256 `
+              "target/${{ matrix.target }}/release/chanto.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed" }
+            & $signtool.FullName verify /pa /v "target/${{ matrix.target }}/release/chanto.exe"
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed" }
+          } finally {
+            Remove-Item -Force $pfx -ErrorAction SilentlyContinue
+          }
+      - name: Package
+        shell: bash
+        run: |
+          name="chanto-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          bin="chanto"
+          case "${{ matrix.target }}" in *windows*) bin="chanto.exe";; esac
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/$bin" README.md "dist/$name/"
+          case "${{ matrix.target }}" in
+            *windows*) (cd dist && 7z a "$name.zip" "$name") ;;
+            *) tar -C dist -czf "dist/$name.tar.gz" "$name" ;;
+          esac
+      # GitHub only stores attestations for public (or organization) repositories.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+
+  release:
+    # The desktop app and editor plugins aren't released yet; only the CLI is.
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          merge-multiple: true
+      # dist/ holds the CLI archives; SHA256SUMS covers all of them.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+          # Sign the checksum file so self-update can verify it (see src/update.rs
+          # RELEASE_PUBKEY_B64). Dormant until the RELEASE_SIGNING_KEY secret is set.
+          if [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
+            printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.pem"
+            openssl pkeyutl -sign -inkey "$RUNNER_TEMP/release.pem" -rawin -in dist/SHA256SUMS | base64 -w0 > dist/SHA256SUMS.sig
+            rm -f "$RUNNER_TEMP/release.pem"
+          fi
+          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
+          [ -f dist/SHA256SUMS.sig ] && assets+=(dist/SHA256SUMS.sig)
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+
+  homebrew:
+    needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Render formula
+        run: |
+          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+          python3 packaging/homebrew/render.py "$GITHUB_REF_NAME" dist/SHA256SUMS chanto.rb
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: homebrew-formula
+          path: chanto.rb
+      # Pushes the formula to chanto-sh/homebrew-tap with a deploy key that can
+      # write to that repository only.
+      # Skipped when the secret isn't set, e.g. in a fork.
+      - name: Update tap when configured
+        env:
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        shell: bash
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then exit 0; fi
+          key="$RUNNER_TEMP/tap_key"
+          ( umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$key" )
+          # github.com's published ed25519 host key, pinned rather than trusted
+          # on first use.
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$RUNNER_TEMP/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts -o StrictHostKeyChecking=yes"
+          git clone --depth 1 git@github.com:chanto-sh/homebrew-tap.git tap
+          mkdir -p tap/Formula
+          cp chanto.rb tap/Formula/chanto.rb
+          cd tap
+          git config user.name 'chanto releases'
+          git config user.email 'releases@users.noreply.github.com'
+          git add Formula/chanto.rb
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore(formula): update chanto to ${GITHUB_REF_NAME}"
+          git push
+
+  # crates.io: `cargo install chanto`. chanto-proto (the wire types) is
+  # published first, and only when its version is new. Skipped without the
+  # CARGO_REGISTRY_TOKEN secret (a token scoped to publish-update for both).
+  crates:
+    needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Publish when configured
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then echo "CARGO_REGISTRY_TOKEN isn't set: skipping crates.io."; exit 0; fi
+          set -euo pipefail
+          proto=$(sed -n 's/^version = "\(.*\)"$/\1/p' proto/Cargo.toml | head -1)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -A 'chanto-release (https://github.com/chanto-sh/chanto)' \
+            "https://crates.io/api/v1/crates/chanto-proto/$proto")
+          if [ "$code" != 200 ]; then cargo publish --locked -p chanto-proto; fi
+          cargo publish --locked -p chanto
+
+  # npm: `npm i -g chanto`. One package per platform holds that platform's
+  # binary from this release; `chanto` picks it through optionalDependencies.
+  # Skipped without the NPM_TOKEN secret (a granular token that can publish
+  # `chanto` and the @chanto-sh scope).
+  npm:
+    needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      - name: Publish when configured
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          if [ -z "$NODE_AUTH_TOKEN" ]; then echo "NPM_TOKEN isn't set: skipping npm."; exit 0; fi
+          set -euo pipefail
+          python3 packaging/npm/build.py "$GITHUB_REF_NAME" dist npm
+          # Pre-releases (v1.2.0-rc.1) go to the `next` dist-tag, never `latest`.
+          tag=latest
+          [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || tag=next
+          # Platform packages first, so `chanto` never points at a missing one.
+          for dir in npm/*/; do
+            [ "$dir" = npm/chanto/ ] && continue
+            (cd "$dir" && npm publish --access public --provenance --tag "$tag")
+          done
+          (cd npm/chanto && npm publish --access public --provenance --tag "$tag")
+
+  # The public download site (chanto.sh) serves releases from R2. `latest`
+  # goes last: until then, installs keep getting the previous release.
+  publish:
+    needs: release
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload to the download site when configured
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then exit 0; fi
+          set -euo pipefail
+          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+          # Sign the checksum file so self-update from the download site can
+          # verify it (src/update.rs). Dormant until RELEASE_SIGNING_KEY is set.
+          if [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
+            printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.pem"
+            openssl pkeyutl -sign -inkey "$RUNNER_TEMP/release.pem" -rawin -in dist/SHA256SUMS | base64 -w0 > dist/SHA256SUMS.sig
+            rm -f "$RUNNER_TEMP/release.pem"
+          fi
+          put() { npx --yes wrangler@4 r2 object put "chanto-releases/$1" --file "$2" --remote; }
+          for f in dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sig; do
+            [ -f "$f" ] || continue
+            put "$GITHUB_REF_NAME/$(basename "$f")" "$f"
+          done
+          put install.sh install.sh
+          put install.ps1 install.ps1
+          put CHANGELOG.md CHANGELOG.md
+          # Pre-releases (v1.2.0-rc.1) are uploaded but never become latest.
+          if [[ "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            printf '%s' "$GITHUB_REF_NAME" > latest
+            put latest latest
+          fi

@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="theme-color" content="#0d1017"><title>chanto</title><link rel="icon" href="/logo.svg" type="image/svg+xml"><link rel="stylesheet" href="/style.css"><script type="module" src="/app.js"></script></head>
+<body>
+<aside aria-label="Sessions">
+<h1>chanto</h1>
+<p id="project-line">Project: <strong id="project"></strong> <button id="open-project" type="button" aria-label="Change project folder" title="Open a different project folder">Change</button></p>
+<button id="new">New session</button>
+<div class="side-section">
+<div class="side-head"><h2>Sessions</h2><button id="refresh" type="button" aria-label="Refresh sessions" title="Refresh sessions">↻</button></div>
+<ul id="sessions"></ul>
+</div>
+<div class="side-section" id="runs-section">
+<div class="side-head"><h2>Runs</h2><button id="refresh-runs" type="button" aria-label="Refresh runs" title="Refresh runs">↻</button></div>
+<ul id="runs" aria-label="Background runs"></ul>
+</div>
+<footer id="sidebar-foot"><p id="status" role="status">Connecting…</p></footer>
+</aside>
+<main>
+<header><div id="session-head"><h2 id="session-name">New session</h2></div><div id="controls"><label><span class="control-label">Mode</span><select id="mode"><option value="default">Default</option><option value="acceptEdits">Accept edits</option><option value="plan">Plan</option><option value="auto">Auto</option><option value="bypassPermissions">Bypass permissions</option></select></label><form id="model-form"><label><span class="control-label">Model</span><input id="model" placeholder="Configured default" list="models"></label><datalist id="models"></datalist><button id="apply-model">Apply</button></form><button id="list-models">List models</button></div></header>
+<div id="run-bar" hidden><p id="run-info"></p><div><button id="run-stop">Stop</button><button id="run-resume">Resume</button><button id="run-apply">Apply</button><button id="run-pr">Open PR</button><button id="run-close">Close</button></div></div>
+<div id="error" role="alert" hidden><p id="error-text"></p><button id="error-action" type="button" hidden></button><button id="error-close" type="button" aria-label="Dismiss error" title="Dismiss">×</button></div>
+<section id="welcome" aria-labelledby="welcome-title">
+<span id="welcome-mark" aria-hidden="true"><img src="/logo.svg" alt="" width="44" height="44"></span>
+<h2 id="welcome-title">What should we work on?</h2>
+<p id="welcome-sub">Ask a question, describe a change, or start from a suggestion.</p>
+<div id="suggestions">
+<button type="button" data-prompt="Give me a tour of this codebase: its main modules, entry points and conventions.">Explain this codebase</button>
+<button type="button" data-prompt="Find and fix a bug in this project.">Find a bug</button>
+<button type="button" data-prompt="Add tests for the code we just changed.">Write tests</button>
+<button type="button" data-prompt="Review my uncommitted changes and tell me what to fix.">Review my changes</button>
+</div>
+</section>
+<div id="chat-wrap"><section id="chat" aria-label="Conversation" tabindex="0"></section><button id="jump-latest" type="button" hidden>↓ Latest</button></div><ul id="todos" aria-label="Todo list"></ul>
+<ul id="queue" aria-label="Queued messages" hidden></ul>
+<form id="composer"><label for="prompt">Message</label><textarea id="prompt" rows="2" placeholder="Ask chanto…"></textarea><div><span class="composer-hint">Enter to send · Shift+Enter for a new line</span><button id="send">Send</button><button type="button" id="mic" aria-pressed="false" disabled title="Dictate a message">Mic</button><button type="button" id="interrupt" disabled>Interrupt</button><button type="button" id="rewind" disabled title="Restore code or the conversation to before a prompt, or fork the session">Rewind…</button></div></form>
+</main>
+<section id="preview-pane" aria-label="Preview" hidden><header><h2 id="preview-title">Preview</h2><div><button id="preview-external" type="button" title="Open this preview in your browser">Open in browser</button><button id="preview-close" type="button" aria-label="Close the preview">×</button></div></header><iframe id="preview-frame" sandbox="allow-scripts" referrerpolicy="no-referrer" title="Preview"></iframe><img id="preview-image" alt="Tool output" hidden></section>
+<dialog id="dialog" aria-labelledby="dialog-title"><form id="reply"><h2 id="dialog-title"></h2><pre id="detail"></pre><div id="options"></div><label for="answer" id="answer-label">Feedback (optional)</label><textarea id="answer" rows="3"></textarea><div id="decisions"></div><p id="dialog-error" role="alert"></p></form></dialog>
+<dialog id="rewind-dialog" aria-labelledby="rewind-title"><h2 id="rewind-title"></h2><p id="rewind-detail"></p><ul id="checkpoints" aria-label="Prompts"></ul><div id="rewind-actions"></div><p id="rewind-error" role="alert"></p></dialog>
+</body></html>

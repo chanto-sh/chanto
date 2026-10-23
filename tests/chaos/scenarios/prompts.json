@@ -1,0 +1,4 @@
+{"turns": [
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "p1.txt", "content": "one\n"}}], "repeat": 3},
+ {"tool_calls": [{"name": "Bash", "args": {"command": "touch made-by-bash.txt"}}], "repeat": 3}
+], "default": {"text": "turn over."}}

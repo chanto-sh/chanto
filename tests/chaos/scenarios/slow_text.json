@@ -1,0 +1,3 @@
+{"turns": [
+ {"text": "A slow answer, one word at a time, so there is time to poke at the interface while it streams. ", "chunk": 3, "drip_ms": 150, "repeat": 20}
+], "default": {"text": "quick answer."}}

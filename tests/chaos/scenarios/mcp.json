@@ -1,0 +1,4 @@
+[
+ {"tool_calls": [{"name": "mcp__fake__echo", "args": {"text": "ping"}}]},
+ {"text": "mcp done."}
+]

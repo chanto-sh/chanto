@@ -1,0 +1,154 @@
+[package]
+name = "chanto"
+version = "0.1.12"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A coding agent for your terminal that checks its own work"
+homepage = "https://chanto.sh"
+documentation = "https://chanto.sh/docs"
+readme = "README.md"
+keywords = ["agent", "llm", "cli", "coding", "ai"]
+categories = ["command-line-utilities", "development-tools"]
+# What `cargo install chanto` needs to build: the CLI sources and the few
+# files they embed.
+include = [
+    "/src/**",
+    "/assets/logo.svg",
+    "/CHANGELOG.md",
+    "/integrations/github/*",
+    "/LICENSE",
+    "/NOTICE",
+    "/README.md",
+]
+
+# The desktop app (desktop/) is a separate member so its dependencies never
+# reach the CLI: `cargo build` here builds only `chanto`. proto/ holds the wire
+# types the CLI shares with the hosted service.
+[workspace]
+members = [".", "desktop", "proto"]
+
+# Metadata shared by every workspace crate; each inherits a field with
+# `<field>.workspace = true`. Version stays per-crate because they differ.
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "Apache-2.0"
+repository = "https://github.com/chanto-sh/chanto.git"
+
+[dependencies]
+chanto-proto = { path = "proto", version = "0.1.0" }
+aho-corasick = "1.1.5"
+memchr = "2.8.3"
+anyhow = "1.0.104"
+async-trait = "0.1.92"
+# Already in the tree through rustls: HMAC for AWS SigV4 and RS256 for Google
+# service-account tokens.
+aws-lc-rs = { version = "1.18.1", default-features = false, features = ["aws-lc-sys"] }
+axum = "0.8"
+base64 = "0.23.1"
+chrono = "0.4.45"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+clap_complete = "4.6.11"
+# Already in the tree through flate2: AWS event-stream frame checksums.
+crc32fast = "1.5.2"
+crossterm = { version = "0.29.0", features = ["event-stream", "bracketed-paste"] }
+dirs = "7.0.0"
+dunce = "1.0.5"
+futures = "0.3.34"
+globset = "0.4.20"
+htmd = "0.5.5"
+ignore = "0.4.33"
+libc = "0.2.190"
+pulldown-cmark = "0.13.4"
+ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color", "layout-cache"] }
+reedline = "0.52.1"
+regex = "1.13.1"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls", "gzip", "http2", "charset", "system-proxy", "query", "form"] }
+webpki-root-certs = "1"
+scraper = "0.27.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.152"
+sha2 = "0.11.1"
+shell-words = "1.1.1"
+similar = "3.2.0"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+tokio = { version = "1.53.2", features = ["full"] }
+tokio-tungstenite = "0.30.0"
+tokio-util = "0.7.20"
+toml = "1.1.8"
+toml_edit = "0.25"
+unicode-width = "0.2.2"
+urlencoding = "2.1.3"
+uuid = { version = "1.28.0", features = ["v4"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+strip = true
+# Our own code and the search/text crates are tuned for speed; the rest
+# (UI, HTTP, TLS, async runtime) for size.
+opt-level = 3
+
+[profile.release.package."*"]
+opt-level = "s"
+
+[profile.release.package.regex]
+opt-level = 3
+[profile.release.package.regex-automata]
+opt-level = 3
+[profile.release.package.regex-syntax]
+opt-level = 3
+[profile.release.package.aho-corasick]
+opt-level = 3
+[profile.release.package.memchr]
+opt-level = 3
+[profile.release.package.ignore]
+opt-level = 3
+[profile.release.package.globset]
+opt-level = 3
+
+# Size-minimised build for edge / on-device / fleet targets (Pi, containers):
+# `cargo build --profile lean`. Trades the desktop release's speed-tuned own
+# code for size (opt-level "z") and drops unwinding tables (panic = "abort"),
+# which is the largest single size lever. panic = "abort" means a panic aborts
+# the process instead of unwinding, so a background subagent can no longer be
+# isolated in-process (agent/background.rs catch_unwind); only ship this where
+# that is acceptable (single-session edge use) or alongside out-of-process
+# subagents. The search/text crates stay at opt-level 3 so grep/search keep
+# their speed on the weaker cores this profile targets.
+# To keep in-process subagent isolation, drop `panic = "abort"` below: opt-level
+# "z" alone still gives most of the shrink (~16 MB) and keeps unwinding; the
+# abort line is the last ~5 MB, paid for with that isolation.
+[profile.lean]
+inherits = "release"
+opt-level = "z"
+panic = "abort"
+
+[profile.lean.package."*"]
+opt-level = "z"
+[profile.lean.package.regex]
+opt-level = 3
+[profile.lean.package.regex-automata]
+opt-level = 3
+[profile.lean.package.regex-syntax]
+opt-level = 3
+[profile.lean.package.aho-corasick]
+opt-level = 3
+[profile.lean.package.memchr]
+opt-level = 3
+[profile.lean.package.ignore]
+opt-level = 3
+[profile.lean.package.globset]
+opt-level = 3
+
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4.7"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Isolation", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Console", "Win32_System_StationsAndDesktops", "Win32_Storage_FileSystem"] }

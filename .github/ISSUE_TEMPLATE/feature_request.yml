@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest something Chanto should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What you'd like
+      description: How you'd like it to work. Mention how Claude Code or other tools handle it, if relevant.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives or workarounds

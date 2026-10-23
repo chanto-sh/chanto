@@ -1,0 +1,18 @@
+# gitleaks: the default rules, minus known false positives. CI scans the full
+# history on every push and pull request (.github/workflows/secrets.yml); run
+# the same check locally with `gitleaks git` or `gitleaks dir`.
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Redaction and credential-handling tests use realistic fake secrets"
+paths = [
+    '''^src/secrets\.rs$''',
+    '''^src/feedback\.rs$''',
+    '''^src/agent/tests\.rs$''',
+    '''^src/cloud/tests\.rs$''',
+]
+
+[[allowlists]]
+description = "tldr-pages snapshot: command examples with placeholder keys"
+paths = ['''^classifier/sources/tldr\.jsonl$''']

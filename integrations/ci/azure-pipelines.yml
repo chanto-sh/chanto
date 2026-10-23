@@ -1,0 +1,22 @@
+# azure-pipelines.yml
+trigger: none
+pr:
+  branches:
+    include: ['*']
+
+pool:
+  vmImage: ubuntu-latest
+
+jobs:
+  - job: chanto_review
+    timeoutInMinutes: 60
+    steps:
+      - checkout: none
+      - script: curl -fsSL https://chanto.sh/install.sh | sh
+        displayName: Install Chanto
+      - script: ~/.local/bin/chanto cloud run --agent reviewer --input "Pull request $(System.PullRequest.PullRequestId)" --wait
+        displayName: Run the reviewer agent
+        env:
+          # Secret variables aren't passed to scripts unless mapped like this.
+          CHANTO_CLOUD_TOKEN: $(CHANTO_CLOUD_TOKEN)
+          CHANTO_CLOUD_ORG: $(CHANTO_CLOUD_ORG)

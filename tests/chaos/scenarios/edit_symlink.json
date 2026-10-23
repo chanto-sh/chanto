@@ -1,0 +1,6 @@
+[
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "CLAUDE.md"}}]},
+ {"tool_calls": [{"name": "Edit", "args": {"file_path": "CLAUDE.md", "old_string": "rule one", "new_string": "rule ONE"}}]},
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "WRITE.md", "content": "rewritten\n"}}]},
+ {"text": "edited."}
+]

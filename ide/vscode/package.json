@@ -1,0 +1,50 @@
+{
+  "name": "chanto-vscode",
+  "displayName": "Chanto",
+  "description": "Connects the chanto coding agent to VS Code: shares your selection and diagnostics, and shows proposed edits as diffs you can accept, edit or reject.",
+  "version": "0.1.12",
+  "publisher": "chanto",
+  "icon": "icon.png",
+  "license": "Apache-2.0",
+  "repository": { "type": "git", "url": "https://github.com/chanto-sh/chanto" },
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Other"],
+  "main": "./out/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "chanto.openTerminal", "title": "Chanto: Open in Terminal" },
+      { "command": "chanto.insertMention", "title": "Chanto: Insert @-mention of Current File" },
+      { "command": "chanto.acceptDiff", "title": "Chanto: Accept Proposed Change", "icon": "$(check)" },
+      { "command": "chanto.rejectDiff", "title": "Chanto: Reject Proposed Change", "icon": "$(close)" }
+    ],
+    "menus": {
+      "editor/title": [
+        { "command": "chanto.acceptDiff", "when": "chanto.diffActive", "group": "navigation@1" },
+        { "command": "chanto.rejectDiff", "when": "chanto.diffActive", "group": "navigation@2" }
+      ],
+      "commandPalette": [
+        { "command": "chanto.acceptDiff", "when": "chanto.diffActive" },
+        { "command": "chanto.rejectDiff", "when": "chanto.diffActive" }
+      ]
+    },
+    "keybindings": [
+      { "command": "chanto.insertMention", "key": "ctrl+alt+k", "mac": "cmd+alt+k", "when": "editorTextFocus" }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "npm run compile && node --test test/server.test.js",
+    "package": "npm run compile && npx --yes @vscode/vsce@3 package --skip-license"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@types/ws": "^8.5.10",
+    "typescript": "^5.4.0"
+  }
+}

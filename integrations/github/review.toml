@@ -1,0 +1,13 @@
+# Copy to .chanto/review.toml on the default branch. Policy is read from the
+# PR's base commit, so changes made in a PR take effect only after merging.
+# provider/model; omit to use the workflow's model input. Keys stay in secrets.
+# model = "anthropic/claude-sonnet-5-5"
+# Confidence bar: high (>= .90), normal (>= .75), all (>= .60).
+strictness = "high"
+max_inline_comments = 10
+ignore_paths = ["vendor/*", "generated/*"]
+instructions = "Report correctness and security bugs with concrete failing scenarios."
+# Omit checks to detect supported project manifests. An empty list disables fixes.
+# checks = ["cargo test -j 2 --quiet"]
+# Checks have no network by default. Add registry domains if needed:
+allowed_domains = []

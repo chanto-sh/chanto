@@ -1,0 +1,12 @@
+[
+ {"tool_calls": [{"name": "Read", "args": {"file_path": "a.txt"}}]},
+ {"tool_calls": [
+   {"name": "Edit", "args": {"file_path": "a.txt", "old_string": "hello", "new_string": "hello one"}},
+   {"name": "Edit", "args": {"file_path": "a.txt", "old_string": "hello one", "new_string": "hello one two"}},
+   {"name": "Read", "args": {"file_path": "a.txt"}},
+   {"name": "MultiEdit", "args": {"file_path": "a.txt", "edits": [{"old_string": "one", "new_string": "1"}, {"old_string": "two", "new_string": "2"}, {"old_string": "missing", "new_string": "x"}]}},
+   {"name": "Edit", "args": {"file_path": "a.txt", "old_string": "hello one two", "new_string": "hello 1 2 three"}},
+   {"name": "Read", "args": {"file_path": "a.txt"}}
+ ]},
+ {"text": "done."}
+]

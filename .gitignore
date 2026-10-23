@@ -1,0 +1,9 @@
+/target
+*.log
+.chanto/config.local.toml
+.claude/worktrees/
+__pycache__/
+
+# GTFOBins is GPL-3.0 and deliberately not vendored; a local snapshot of it must
+# never be committed, or its terms would attach to the training data.
+classifier/sources/gtfobins.jsonl

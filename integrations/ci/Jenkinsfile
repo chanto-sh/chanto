@@ -1,0 +1,18 @@
+// Jenkinsfile: a nightly agent run (a "Secret text" credential with id chanto-cloud-token)
+pipeline {
+  agent any
+  triggers { cron('H 3 * * *') }
+  options { timeout(time: 1, unit: 'HOURS') }
+  environment {
+    CHANTO_CLOUD_TOKEN = credentials('chanto-cloud-token')
+    CHANTO_CLOUD_ORG = 'acme'
+  }
+  stages {
+    stage('chanto') {
+      steps {
+        sh 'curl -fsSL https://chanto.sh/install.sh | sh'
+        sh '$HOME/.local/bin/chanto cloud run --agent nightly-deps --wait'
+      }
+    }
+  }
+}

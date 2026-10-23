@@ -1,0 +1,16 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 7,
+    "title": "Pagination skips the last page",
+    "body": "Listing with page_size=10 and 21 items only shows 2 pages.",
+    "user": {"login": "bob"}
+  },
+  "comment": {
+    "id": 555,
+    "body": "@chanto fix this off-by-one; $(rm -rf /) `whoami`",
+    "user": {"login": "alice"}
+  },
+  "repository": {"full_name": "acme/widgets", "default_branch": "main"},
+  "sender": {"login": "alice"}
+}

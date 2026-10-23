@@ -1,0 +1,48 @@
+# Dependency policy, enforced in CI by `cargo deny check`.
+#
+# The allow list is deliberately just the permissive licenses already in the
+# tree. A new dependency that drags in copyleft (GPL/AGPL) or an unknown
+# license fails the build instead of shipping unnoticed. Update the list
+# consciously when you add a dependency, not to make CI green.
+
+[licenses]
+version = 2
+# Permissive licenses only. Note LGPL appears in the graph solely as an
+# alternative in `MIT OR Apache-2.0 OR LGPL-2.1-or-later`, so it is not listed:
+# cargo-deny accepts the expression via the MIT arm.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+[advisories]
+version = 2
+# A yanked release is often one pulled for a security or integrity problem;
+# fail the build rather than keep resolving to it.
+yanked = "deny"
+ignore = [
+    # bincode 1.3.3 (pulled in by syntect, for syntax highlighting) is frozen
+    # but complete — the maintainers say no updates are needed. It is not a
+    # vulnerability, so it should not fail the build. Remove if syntect drops it.
+    "RUSTSEC-2025-0141",
+]

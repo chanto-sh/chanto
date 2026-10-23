@@ -1,0 +1,3 @@
+# Standard rustfmt formatting: everything below is left at its default. CI runs
+# `cargo fmt --all --check`, so run `cargo fmt --all` before pushing.
+edition = "2024"

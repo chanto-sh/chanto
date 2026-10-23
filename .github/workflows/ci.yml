@@ -1,0 +1,155 @@
+name: ci
+on: [push, pull_request, workflow_dispatch]
+# A newer push to the same branch cancels the run still going for the last one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+# Checks only read the repository; nothing here needs a writable token.
+permissions:
+  contents: read
+jobs:
+  test:
+    # macOS minutes bill at 10x Linux, and the suite already runs on a Mac
+    # locally before every push, so this job runs only by hand.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      # The extension's server is also exercised by the Rust IDE tests.
+      - run: npm ci && npm test
+        working-directory: ide/vscode
+      - run: cargo build --locked -j 2
+      - run: cargo check --locked -p chanto-desktop
+      - run: cargo test --locked -j 2 --quiet
+        env:
+          CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
+          CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+  # rustfmt, on every push: no build, just the format check.
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+  # clippy over the whole workspace, on every push. The desktop app needs the
+  # same GTK/WebKit packages as `desktop-linux` to build on Linux.
+  clippy:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+  # The main suite on Linux, on every push (Linux minutes are the cheapest).
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      # bubblewrap for the Linux sandbox; ripgrep for Grep. Ubuntu 24.04
+      # restricts the unprivileged user namespaces bubblewrap needs.
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      # The extension's server is also exercised by the Rust IDE tests.
+      - run: npm ci && npm test
+        working-directory: ide/vscode
+      - run: cargo build --locked
+      - run: cargo test --locked --quiet
+        env:
+          CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
+          CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+      - run: cargo test --locked --quiet -p chanto-proto
+  # Exercise the native sandbox and process-tree tests on Windows.
+  windows:
+    # On every push to main (and by hand); pull requests skip it, since
+    # Windows runners cost more.
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+      - run: cargo build --locked -j 2
+      - run: cargo check --locked -p chanto-desktop
+      - run: cargo test --locked -j 2 --quiet
+        env:
+          CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
+          CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+  proto:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: cargo test --locked -j 2 --quiet -p chanto-proto
+  # The desktop app ships in releases, so make sure it builds on every push.
+  desktop-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+      - run: cargo check --locked -p chanto-desktop
+  # Computer use on Wayland, in a headless Sway session with grim and ydotool.
+  wayland:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - run: sudo apt-get update && sudo apt-get install -y sway grim ydotool && (ydotool --help 2>&1 | head -5 || true)
+      - run: sudo modprobe uinput && sudo chmod 666 /dev/uinput
+      - name: Start Sway (headless) and ydotoold
+        run: |
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/xdg"
+          mkdir -p -m 700 "$XDG_RUNTIME_DIR"
+          WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman sway -c /dev/null > "$RUNNER_TEMP/sway.log" 2>&1 &
+          ydotoold > "$RUNNER_TEMP/ydotoold.log" 2>&1 &
+          sleep 3
+          ls -la "$XDG_RUNTIME_DIR" /tmp | grep -i -e wayland -e ydotool || true
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "WAYLAND_DISPLAY=$(ls "$XDG_RUNTIME_DIR" | grep -m1 -E '^wayland-[0-9]+$')" >> "$GITHUB_ENV"
+          echo "SWAYSOCK=$(ls "$XDG_RUNTIME_DIR"/sway-ipc.* 2>/dev/null | head -1)" >> "$GITHUB_ENV"
+      - run: cargo test --locked -j 2 wayland_end_to_end -- --ignored --nocapture
+      - if: failure()
+        run: cat "$RUNNER_TEMP/sway.log" "$RUNNER_TEMP/ydotoold.log" || true
+  sdk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - run: python3 -m unittest -v test_chanto_sdk
+        working-directory: sdk/python
+      - run: npm install --no-save typescript@5 @types/node@22 && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts
+        working-directory: sdk/typescript
+  action:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: python3 -m unittest discover -s action/tests
+  # Dependency policy (deny.toml): licenses, advisories, yanked crates, sources.
+  deny:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+        with:
+          command: check

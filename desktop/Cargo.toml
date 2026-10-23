@@ -1,0 +1,28 @@
+[package]
+name = "chanto-desktop"
+version = "0.1.12"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Desktop app for chanto: a native window around the daemon's web UI"
+
+[[bin]]
+name = "chanto-desktop"
+path = "src/main.rs"
+
+[dependencies]
+muda = "0.21"
+rfd = "0.17"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tao = "0.37"
+wry = "0.57"
+
+# Only for CHANTO_DESKTOP_SNAPSHOT (a PNG of the page, for docs and smoke
+# tests); wry already builds these crates.
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSImage"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData", "NSError"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKSnapshotConfiguration"] }

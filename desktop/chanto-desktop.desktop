@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=chanto
+GenericName=Coding agent
+Comment=The Chanto web UI in its own window
+Exec=chanto-desktop %f
+Icon=chanto-desktop
+Terminal=false
+Categories=Development;

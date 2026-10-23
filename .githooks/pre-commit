@@ -1,0 +1,137 @@
+#!/bin/sh
+# Fast, deterministic pre-commit checks. Enable once per clone:
+#
+#   git config core.hooksPath .githooks
+#
+# These mirror the cheap CI jobs that don't need a build (rustfmt, cargo deny)
+# and add a few hygiene guards. Skip a single run with `git commit --no-verify`.
+set -eu
+
+status=0
+
+# --- rustfmt, matching the CI `fmt` job -------------------------------------
+if ! cargo fmt --all --check; then
+    echo "error: rust code is not formatted; run \`cargo fmt --all\` and stage the result" >&2
+    status=1
+fi
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -n "$staged" ] || exit "$status"
+
+# --- no leftover merge conflict markers -------------------------------------
+if git diff --cached --diff-filter=ACM -U0 | grep -nE '^\+(<<<<<<< |>>>>>>> |\|\|\|\|\|\|\| )'; then
+    echo "error: staged changes contain git conflict markers" >&2
+    status=1
+fi
+
+# --- no debug leftovers in Rust source --------------------------------------
+# A committed todo!()/unimplemented!() panics at runtime and dbg!() is never
+# meant to ship. Comment lines are ignored.
+if git diff --cached --diff-filter=ACM -U0 -- '*.rs' \
+    | grep -E '^\+' | grep -vE '^\+\s*//' \
+    | grep -nE 'todo!\(|unimplemented!\(|dbg!\('; then
+    echo "error: staged Rust contains todo!(), unimplemented!() or dbg!()" >&2
+    status=1
+fi
+
+# --- keep `unsafe` where it belongs -----------------------------------------
+# Real unsafe is the platform FFI in a handful of files (Windows sandbox, the
+# Linux seccomp/rusage code) and test code uses the edition-2024
+# `env::set_var`/`remove_var` idiom. A file gaining its *first* unsafe is the
+# change worth a second look, so it's flagged unless it already had unsafe or
+# the addition is the env test idiom.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+        *.rs) ;;
+        *) continue ;;
+    esac
+    added=$(git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -vE '^\+\s*//' \
+        | grep -E '(^|[^A-Za-z0-9_])unsafe([^A-Za-z0-9_]|$)' || true)
+    [ -n "$added" ] || continue
+    if git diff --cached -U0 -- "$f" | grep -E '^\+' | grep -qE 'env::(set_var|remove_var)'; then
+        continue
+    fi
+    if git cat-file -e "HEAD:$f" 2>/dev/null && git show "HEAD:$f" | grep -q 'unsafe'; then
+        continue
+    fi
+    echo "error: $f gains its first \`unsafe\`; if it's a trusted FFI site keep it, else drop it (--no-verify to skip)" >&2
+    status=1
+done <<EOF
+$staged
+EOF
+
+# --- refuse to commit obvious secret material -------------------------------
+# First by path; a scoped content scan of the added lines follows. Runtime
+# redaction lives in src/secrets.rs.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+        # templates are fine to commit; real ones are not
+        *.example|*.sample|*.template) ;;
+        .env|*.env|*.pem|*.key|*.p12|*.pfx|*.jks|id_rsa|id_ed25519|*credentials.json|*service-account*.json)
+            echo "error: refusing to commit sensitive-looking file: $f" >&2
+            status=1
+            ;;
+    esac
+done <<EOF
+$staged
+EOF
+
+# --- and secret-shaped strings, in the added lines only ---------------------
+# The fixture files below deliberately hold realistic dummy tokens (AWS's
+# published example key, GitHub/Slack-shaped strings) to exercise the
+# redactor, so they're skipped; anything else that *adds* a live-looking
+# token is almost certainly an accident.
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    case "$f" in
+        */tests/*|*.md|src/secrets.rs|src/cloud/*|src/cost.rs|src/feedback.rs|src/memory.rs|src/share.rs) continue ;;
+        *.rs|*.py|*.toml|*.json|*.yaml|*.yml|*.sh) ;;
+        *) continue ;;
+    esac
+    hit=$(git diff --cached -U0 -- "$f" | grep -E '^\+' \
+        | grep -E 'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{36}|xox[baprs]-[0-9A-Za-z-]{10,}|sk-ant-[A-Za-z0-9_-]{20,}|github_pat_[A-Za-z0-9_]{50}|AIza[0-9A-Za-z_-]{35}|-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----' \
+        || true)
+    if [ -n "$hit" ]; then
+        printf '%s:%s\n' "$f" "$hit" >&2
+        echo "error: staged changes look like a credential; remove it, or add the fixture path above and commit again" >&2
+        status=1
+    fi
+done <<EOF
+$staged
+EOF
+
+# --- gitleaks over the staged changes, when it's installed -----------------
+# The same rules and allowlist as the CI `secrets` job (.gitleaks.toml), so a
+# leak is caught before it's ever committed rather than after it's pushed.
+if command -v gitleaks >/dev/null 2>&1; then
+    if ! gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner . >/dev/null 2>&1; then
+        gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner . >&2 || true
+        echo "error: gitleaks found a secret in the staged changes" >&2
+        status=1
+    fi
+fi
+
+# --- reject very large blobs ------------------------------------------------
+while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    sz=$(git cat-file -s ":$f" 2>/dev/null || echo 0)
+    if [ "$sz" -gt 5242880 ]; then
+        echo "error: $f is $((sz / 1048576)) MB (over the 5 MB limit); commit it deliberately or use --no-verify" >&2
+        status=1
+    fi
+done <<EOF
+$staged
+EOF
+
+# --- dependency policy: offline subset of the CI `deny` job -----------------
+# Only when dependencies may have changed, and only if cargo-deny is installed.
+if printf '%s\n' "$staged" | grep -qE '(^|/)Cargo\.(toml|lock)$' && command -v cargo-deny >/dev/null 2>&1; then
+    if ! cargo deny check licenses bans >/dev/null; then
+        echo "error: cargo deny licenses/bans failed; run \`cargo deny check licenses bans\`" >&2
+        status=1
+    fi
+fi
+
+exit "$status"

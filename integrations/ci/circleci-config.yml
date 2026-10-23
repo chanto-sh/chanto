@@ -1,0 +1,26 @@
+# .circleci/config.yml: a nightly agent run
+version: 2.1
+
+jobs:
+  chanto:
+    docker:
+      - image: cimg/base:current
+    steps:
+      - run: curl -fsSL https://chanto.sh/install.sh | sh
+      - run:
+          name: Run the nightly-deps agent
+          no_output_timeout: 60m
+          command: ~/.local/bin/chanto cloud run --agent nightly-deps --wait
+
+workflows:
+  nightly:
+    triggers:
+      - schedule:
+          cron: "0 3 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
+      - chanto:
+          # CHANTO_CLOUD_TOKEN and CHANTO_CLOUD_ORG in a context with this name.
+          context: chanto-cloud

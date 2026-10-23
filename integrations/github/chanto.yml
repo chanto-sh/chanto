@@ -1,0 +1,41 @@
+# Copy to .github/workflows/chanto.yml. Mention @chanto in an issue,
+# PR comment or PR review comment to ask it to answer or make changes.
+name: Chanto
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: write        # push commits and branches
+  pull-requests: write   # comment on and open pull requests
+  issues: write          # comment on issues
+
+# Serialize commands so two fixes cannot race to publish the same branch.
+concurrency:
+  group: chanto-command-${{ github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  chanto:
+    # Cheap pre-filter: only maintainers' comments start a job. Comments and PR
+    # text are untrusted model input, so the action also checks the commenter's
+    # live collaborator permission (write, maintain or admin) before running.
+    if: >-
+      contains(github.event.comment.body, '@chanto') &&
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: chanto-sh/chanto/action@main
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # provider_config: ${{ secrets.CHANTO_PROVIDERS }}   # [providers.<name>] tables; select <name>/<model> in .chanto/review.toml
+          # model: anthropic/claude-sonnet-5-5
+          # openai_api_key: ${{ secrets.OPENAI_API_KEY }}   # with model: openai/<model>

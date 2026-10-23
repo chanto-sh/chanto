@@ -1,0 +1,4 @@
+[
+ {"tool_calls": [{"name": "Bash", "args": {"command": "for i in $(seq 5); do echo x-$i >> shared.log; done; echo ok > own.txt"}}]},
+ {"text": "bash done"}
+]

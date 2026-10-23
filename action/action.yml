@@ -1,0 +1,154 @@
+name: Chanto
+description: Run the Chanto coding agent from issue and PR comments, review pull requests, or run a prompt.
+author: dphang
+branding:
+  icon: terminal
+  color: orange
+
+inputs:
+  prompt:
+    description: Task to run (workflow_dispatch / schedule), or the review instructions for pull_request events
+    required: false
+    default: ""
+  trigger_phrase:
+    description: Phrase that triggers Chanto in issue and PR comments
+    required: false
+    default: "@chanto"
+  model:
+    description: Model to use, e.g. anthropic/claude-sonnet-5-5, openai/gpt-5, or a model served at base_url
+    required: false
+    default: anthropic/claude-sonnet-5-5
+  anthropic_api_key:
+    description: Anthropic API key (for anthropic/* models)
+    required: false
+    default: ""
+  openai_api_key:
+    description: OpenAI API key (for openai/* models), or the key for base_url
+    required: false
+    default: ""
+  base_url:
+    description: Self-hosted OpenAI-compatible endpoint (llama.cpp, vLLM, LM Studio, Ollama /v1)
+    required: false
+    default: ""
+  dry_run:
+    description: Print structured review JSON without posting to GitHub
+    required: false
+    default: "false"
+  provider_config:
+    description: Trusted TOML with named [providers.*] tables (pass from a secret)
+    required: false
+    default: ""
+  mode:
+    description: Permission mode (default, acceptEdits, auto, bypassPermissions)
+    required: false
+    default: acceptEdits
+  allowed_tools:
+    description: Comma-separated tool allowlist
+    required: false
+    default: ""
+  max_turns:
+    description: Maximum model calls per run
+    required: false
+    default: ""
+  timeout_minutes:
+    description: Stop Chanto after this many minutes
+    required: false
+    default: "30"
+  trust_project:
+    description: Deprecated; review bot always ignores executable project settings
+    required: false
+    default: "false"
+  version:
+    description: Chanto release to install (e.g. v0.2.0), or "latest"
+    required: false
+    default: latest
+  allow_network:
+    description: "Let the agent use WebFetch/WebSearch. Off by default: issue and PR text is untrusted and could steer the agent into leaking data."
+    required: false
+    default: "false"
+  github_token:
+    description: Token used to comment, push and open pull requests
+    required: false
+    default: ${{ github.token }}
+  cloud_agent:
+    description: "Run this Chanto cloud agent instead of Chanto on this machine: the work happens on a cloud runner, and this step waits for the result (see cloud_token)"
+    required: false
+    default: ""
+  cloud_input:
+    description: With cloud_agent, added to the agent's instructions for this run (e.g. the pull request number)
+    required: false
+    default: ""
+  cloud_token:
+    description: With cloud_agent, a Chanto cloud API token (store it as a secret)
+    required: false
+    default: ""
+  cloud_org:
+    description: With cloud_agent, the org the agent belongs to; the token's personal org if empty
+    required: false
+    default: ""
+  cloud_url:
+    description: With cloud_agent, the Chanto cloud API; the public service if empty
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Chanto
+      shell: bash
+      env:
+        CHANTO_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        # The installer checks the download against the release's SHA256SUMS.
+        dest="$RUNNER_TEMP/chanto"
+        if [ "$CHANTO_VERSION" = latest ]; then set -- --prefix "$dest"; else set -- --prefix "$dest" --version "$CHANTO_VERSION"; fi
+        curl -fsSL https://chanto.sh/install.sh | sh -s -- "$@"
+        echo "$dest/bin" >> "$GITHUB_PATH"
+        "$dest/bin/chanto" --version
+
+    - name: Run the agent in Chanto cloud
+      if: ${{ inputs.cloud_agent != '' }}
+      shell: bash
+      env:
+        CHANTO_CLOUD_TOKEN: ${{ inputs.cloud_token }}
+        CHANTO_CLOUD_ORG: ${{ inputs.cloud_org }}
+        CHANTO_CLOUD_URL: ${{ inputs.cloud_url }}
+        INPUT_AGENT: ${{ inputs.cloud_agent }}
+        INPUT_INPUT: ${{ inputs.cloud_input }}
+      run: |
+        set -euo pipefail
+        if [ -z "$CHANTO_CLOUD_TOKEN" ]; then echo "::error::cloud_agent needs cloud_token"; exit 1; fi
+        [ -n "$CHANTO_CLOUD_ORG" ] || unset CHANTO_CLOUD_ORG
+        [ -n "$CHANTO_CLOUD_URL" ] || unset CHANTO_CLOUD_URL
+        args=(--agent "$INPUT_AGENT" --wait)
+        if [ -n "$INPUT_INPUT" ]; then args+=(--input "$INPUT_INPUT"); fi
+        chanto cloud run "${args[@]}"
+
+    - name: Run Chanto
+      if: ${{ inputs.cloud_agent == '' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github_token }}
+        GITHUB_TOKEN: ${{ inputs.github_token }}
+        ANTHROPIC_API_KEY: ${{ inputs.anthropic_api_key }}
+        OPENAI_API_KEY: ${{ inputs.openai_api_key }}
+        INPUT_PROMPT: ${{ inputs.prompt }}
+        INPUT_TRIGGER_PHRASE: ${{ inputs.trigger_phrase }}
+        INPUT_MODEL: ${{ inputs.model }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_ALLOWED_TOOLS: ${{ inputs.allowed_tools }}
+        INPUT_MAX_TURNS: ${{ inputs.max_turns }}
+        INPUT_TIMEOUT_MINUTES: ${{ inputs.timeout_minutes }}
+        INPUT_TRUST_PROJECT: ${{ inputs.trust_project }}
+        INPUT_BASE_URL: ${{ inputs.base_url }}
+        INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        INPUT_PROVIDER_CONFIG: ${{ inputs.provider_config }}
+        INPUT_ALLOW_NETWORK: ${{ inputs.allow_network }}
+      run: |
+        set -euo pipefail
+        if [ -n "$INPUT_BASE_URL" ]; then
+          export CHANTO_PROVIDER=openai CHANTO_BASE_URL="$INPUT_BASE_URL" CHANTO_API_KEY="$OPENAI_API_KEY"
+        fi
+        export CHANTO_HOME="$RUNNER_TEMP/chanto-home"
+        python3 "$GITHUB_ACTION_PATH/run.py"

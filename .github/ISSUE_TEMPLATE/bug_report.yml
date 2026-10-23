@@ -1,0 +1,41 @@
+name: Bug report
+description: Something in Chanto doesn't work as it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. For security problems, don't use this form: see SECURITY.md.
+        Please remove API keys, tokens and private code from anything you paste.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. chanto -p "..."
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `chanto --version`
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS, terminal, provider and model
+      placeholder: macOS 15, iTerm2, ollama/qwen3-coder
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or output
+      description: "`chanto logs` shows the redacted diagnostic log; `/feedback` can send a report directly."
+      render: text

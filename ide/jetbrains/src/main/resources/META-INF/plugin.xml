@@ -1,0 +1,50 @@
+<idea-plugin>
+    <id>dev.chanto.ide</id>
+    <name>Chanto</name>
+    <vendor>chanto</vendor>
+    <description><![CDATA[
+        Connect the <a href="https://chanto.sh">chanto</a> coding agent to your IDE.
+
+        The plugin serves the Chanto IDE bridge (protocol v1) on a loopback WebSocket:
+        Chanto can read your selection and diagnostics, open files, and show the edits
+        it proposes as diffs you can accept, edit or reject. Everything stays local —
+        the bridge only listens on 127.0.0.1 and requires a per-session auth token.
+    ]]></description>
+
+    <!-- 2025.3: the postStartupActivity extension point takes a ProjectActivity. -->
+    <depends>com.intellij.modules.platform</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <projectService serviceImplementation="dev.chanto.ide.ChantoIdeService"/>
+        <postStartupActivity implementation="dev.chanto.ide.ChantoStartupActivity"/>
+    </extensions>
+
+    <actions>
+        <action id="Chanto.OpenInTerminal" class="dev.chanto.ide.OpenInTerminalAction"
+                text="Chanto: Open in Terminal"
+                description="Start Chanto in a terminal wired to this window's IDE bridge">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+
+        <action id="Chanto.InsertMention" class="dev.chanto.ide.InsertMentionAction"
+                text="Chanto: Insert @-mention of Current File"
+                description="Type the current file as an @path mention into the Chanto terminal">
+            <keyboard-shortcut keymap="$default" first-keystroke="control alt K"/>
+            <keyboard-shortcut keymap="Mac OS X" first-keystroke="meta alt K"/>
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+
+        <action id="Chanto.AcceptProposedChange" class="dev.chanto.ide.AcceptProposedChangeAction"
+                text="Chanto: Accept Proposed Change"
+                description="Accept the proposed change Chanto is showing">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+
+        <action id="Chanto.RejectProposedChange" class="dev.chanto.ide.RejectProposedChangeAction"
+                text="Chanto: Reject Proposed Change"
+                description="Reject the proposed change Chanto is showing">
+            <add-to-group group-id="EditorPopupMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>

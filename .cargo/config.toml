@@ -1,0 +1,8 @@
+# Windows gives the main thread a 1 MB stack, and `#[tokio::main]` keeps the
+# whole top-level future on it: every command overflowed it at startup
+# (STATUS_STACK_OVERFLOW). Match the 8 MB the main thread gets on macOS and Linux.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:8388608"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/STACK:8388608"]

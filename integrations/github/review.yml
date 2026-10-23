@@ -1,0 +1,33 @@
+# Copy to .github/workflows/chanto-review.yml to get an automatic review
+# on every pull request (summary updated in place plus one review with inline findings).
+name: Chanto review
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write   # post summary and inline review
+
+concurrency:
+  group: chanto-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Secrets aren't available to workflows from forks, so only review same-repo PRs.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: chanto-sh/chanto/action@main
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # provider_config: ${{ secrets.CHANTO_PROVIDERS }}   # [providers.<name>] tables; select <name>/<model> in .chanto/review.toml
+          # prompt: Focus on security and error handling.

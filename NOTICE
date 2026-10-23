@@ -1,0 +1,54 @@
+Chanto
+Copyright 2026 Daniel Phang
+
+This product includes software and data developed by third parties. The notices
+below supplement the license texts that ship with each component.
+
+Chanto is licensed under Apache-2.0 (see LICENSE). The client SDKs under sdk/
+carry their own copy of the same Apache-2.0 license (sdk/LICENSE).
+
+
+Rust dependencies
+-----------------
+Chanto is built on open-source Rust crates, each under a permissive license
+(MIT, Apache-2.0, BSD, ISC, ...). deny.toml restricts the dependency graph to
+those licenses and CI runs `cargo deny check`. To ship a release, generate the
+full dependency/license inventory with `cargo about generate about.hbs` (or
+`cargo deny list`) and distribute that output with the binaries.
+
+
+tldr-pages - Creative Commons Attribution 4.0 International (CC BY 4.0)
+-----------------------------------------------------------------------
+The shell-command classifier under classifier/ is trained in part on pages from
+tldr-pages (https://github.com/tldr-pages/tldr), used under CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/).
+
+    Copyright (c) 2014-present the tldr-pages team and contributors.
+
+The vendored snapshot classifier/sources/tldr.jsonl and the evaluation set
+classifier/eval/tldr.jsonl are unmodified extractions of that content, and some
+examples in classifier/train.jsonl are derived from it. See
+classifier/sources/README.md for provenance.
+
+
+Sublime Text syntax definitions and themes (via syntect) - MIT / per asset
+--------------------------------------------------------------------------
+Syntax highlighting uses the syntect crate (MIT) with its bundled
+`default-syntaxes` and `default-themes`. Those definitions originate from
+Sublime Text's editor packages and are redistributed through the bat project
+(https://github.com/sharkdp/bat); each definition carries its own license,
+recorded upstream in syntect's and bat's asset folders. No such asset is
+modified here.
+
+
+Benchmarks
+----------
+The benchmark suite and its task data live in a separate repository,
+https://github.com/chanto-sh/benchmarks, with their own license notices.
+
+
+Not included
+------------
+GTFOBins content (GPL-3.0) is deliberately not vendored and no GTFOBins-derived
+output is distributed, to keep the classifier data free of copyleft terms. See
+classifier/sources/README.md.

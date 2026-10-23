@@ -1,0 +1,18 @@
+# Project-level Chanto config. Checked into the repo so verified mode runs the
+# same suites CI does.
+#
+# `[guardrails]` is a risky key (it runs commands), so it only takes effect in a
+# trusted folder — run Chanto here once and approve the trust prompt, or pass
+# `--trust`.
+
+[guardrails]
+# Mirrors .github/workflows/ci.yml. Auto-detection only looked for one python
+# suite and would have run `unittest discover -p '*test*.py'` at the repo root,
+# which collects nothing; the extension suite wasn't detected at all.
+checks = [
+    "cargo test --locked",
+    "python3 -m unittest discover -s action/tests",
+    "python3 -m unittest discover -s sdk/python -t sdk/python",
+    "cd ide/vscode && npm test",
+]
+protect_tests = true

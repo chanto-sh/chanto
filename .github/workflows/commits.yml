@@ -1,0 +1,67 @@
+# Commit message rules (.githooks/commit-msg), enforced server-side so they
+# don't depend on anyone having enabled the local hook:
+# - the hook's own tests, so the rules can't silently regress;
+# - the pull request title, which becomes the squash-merge commit on main
+#   (the main ruleset requires this check before merging);
+# - every commit pushed to main, which catches a direct push that bypassed
+#   the pull request flow.
+name: commits
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  hook-tests:
+    name: commit-msg hook tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: sh .githooks/test-commit-msg.sh
+
+  pr-title:
+    name: PR title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # The title goes through the environment, never into the script text,
+      # so a crafted title can't inject shell.
+      - env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          printf '%s\n' "$TITLE" > "$RUNNER_TEMP/title"
+          sh .githooks/commit-msg "$RUNNER_TEMP/title"
+
+  pushed-commits:
+    name: commits on main
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+      - env:
+          BEFORE: ${{ github.event.before }}
+          AFTER: ${{ github.sha }}
+        run: |
+          # A new branch has no "before"; then only the pushed tip is checked.
+          if git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..$AFTER"
+          else
+            range="$AFTER -1"
+          fi
+          status=0
+          # shellcheck disable=SC2086 # $range is deliberately split
+          for c in $(git rev-list --no-merges $range); do
+            git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg"
+            if ! sh .githooks/commit-msg "$RUNNER_TEMP/msg"; then
+              echo "::error::commit $c doesn't follow the commit message rules"
+              status=1
+            fi
+          done
+          exit "$status"

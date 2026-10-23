@@ -1,0 +1,6 @@
+[
+ {"tool_calls": [{"name": "Write", "args": {"file_path": "big.txt", "content": "first version\n"}}]},
+ {"tool_calls": [{"name": "Bash", "args": {"command": "sleep 20; echo slept"}}]},
+ {"text": "Now a long slow answer that will be interrupted. ", "chunk": 2, "drip_ms": 300},
+ {"text": "resumed fine."}
+]
