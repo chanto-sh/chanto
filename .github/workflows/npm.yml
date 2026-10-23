@@ -56,12 +56,13 @@ jobs:
               echo "$name@$version is already on npm"
               return
             fi
-            # A brand-new package can 404 on `npm view` for a few minutes, so
-            # a refusal to republish a version also counts as done.
+            # npm may stage a publish for approval on npmjs.com (2FA) rather than
+            # release it, and `npm view` doesn't see staged or brand-new
+            # versions; a refusal to publish over one also counts as done.
             local out
             if ! out=$(cd "$1" && npm publish --access public --provenance --tag "$dist_tag" 2>&1); then
-              if grep -q 'cannot publish over the previously published' <<<"$out"; then
-                echo "$name@$version is already on npm"
+              if grep -qiE 'publish over (the )?previously (published|staged)' <<<"$out"; then
+                echo "$name@$version is already published or staged"
                 return
               fi
               echo "$out"
