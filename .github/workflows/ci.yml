@@ -28,9 +28,10 @@ jobs:
       # The extension's server is also exercised by the Rust IDE tests.
       - run: npm ci && npm test
         working-directory: ide/vscode
-      - run: cargo build --locked -j 2
+      # macOS runners are the slowest: use all their cores, and let
+      # `cargo test` build the binary rather than a separate `cargo build`.
       - run: cargo check --locked -p chanto-desktop
-      - run: cargo test --locked -j 2 --quiet
+      - run: cargo test --locked --quiet
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
@@ -109,12 +110,16 @@ jobs:
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+      # Product code only: test files would inflate the figure.
       - name: Summary
         run: |
+          cargo llvm-cov report --summary-only \
+            --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' > coverage.txt
+          tail -n 1 coverage.txt
           {
-            echo '### Test coverage'
+            echo '### Test coverage (product code)'
             echo '```'
-            cargo llvm-cov report --summary-only | tail -n 1
+            tail -n 1 coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
@@ -122,6 +127,13 @@ jobs:
           files: lcov.info
           use_oidc: true
           fail_ci_if_error: false
+      # After the upload, so a drop is still reported. OpenSSF silver asks
+      # for 80% line coverage.
+      - name: Coverage floor
+        run: |
+          cargo llvm-cov report --summary-only \
+            --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' \
+            --fail-under-lines 80 > /dev/null
   # Exercise the native sandbox and process-tree tests on Windows.
   windows:
     runs-on: windows-latest
