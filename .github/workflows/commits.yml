@@ -31,8 +31,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # The title goes through the environment, never into the script text,
       # so a crafted title can't inject shell.
+      # Dependabot's grouped titles ("... in the deps group across 1
+      # directory") run past 72 characters and can't be shortened.
       - env:
           TITLE: ${{ github.event.pull_request.title }}
+          COMMIT_SUBJECT_MAX: ${{ github.event.pull_request.user.login == 'dependabot[bot]' && '120' || '72' }}
         run: |
           printf '%s\n' "$TITLE" > "$RUNNER_TEMP/title"
           sh .githooks/commit-msg "$RUNNER_TEMP/title"
@@ -59,7 +62,9 @@ jobs:
           # shellcheck disable=SC2086 # $range is deliberately split
           for c in $(git rev-list --no-merges $range); do
             git log -1 --format=%B "$c" > "$RUNNER_TEMP/msg"
-            if ! sh .githooks/commit-msg "$RUNNER_TEMP/msg"; then
+            max=72
+            [ "$(git log -1 --format=%an "$c")" = "dependabot[bot]" ] && max=120
+            if ! COMMIT_SUBJECT_MAX=$max sh .githooks/commit-msg "$RUNNER_TEMP/msg"; then
               echo "::error::commit $c doesn't follow the commit message rules"
               status=1
             fi

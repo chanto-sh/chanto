@@ -48,7 +48,9 @@ printf '%s\n' "$subject" | grep -qE "^($types)(\([a-z0-9][a-z0-9._/-]*\))?!?: [^
     || fail "subject doesn't follow Conventional Commits"
 
 summary=${subject#*: }
-[ ${#subject} -le 72 ] || fail "subject is ${#subject} characters; keep it to 72"
+# CI raises the limit for Dependabot, whose titles it can't shorten.
+max=${COMMIT_SUBJECT_MAX:-72}
+[ ${#subject} -le "$max" ] || fail "subject is ${#subject} characters; keep it to $max"
 case "$summary" in
     *.) fail "drop the trailing period from the summary" ;;
 esac

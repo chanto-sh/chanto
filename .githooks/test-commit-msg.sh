@@ -38,6 +38,10 @@ check fail 'fix:add retries'
 check fail 'fix: '
 check fail 'fix: add retries\nbody without a blank line'
 check fail 'fix: this subject line is deliberately far too long to fit in seventy-two chars'
+# CI's longer limit for Dependabot titles.
+export COMMIT_SUBJECT_MAX=100
+check pass 'build(deps): bump crc32fast from 1.5.2 to 1.5.3 in the deps group across 1 directory'
+unset COMMIT_SUBJECT_MAX
 check fail 'fix: add retries\n\nCo-Authored-By: Claude <noreply@anthropic.com>'
 check fail 'fix: add retries\n\nGenerated with ChatGPT'
 
