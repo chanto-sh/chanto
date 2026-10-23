@@ -1,9 +1,14 @@
+# At most two pull requests per ecosystem a week: minor and patch updates
+# together (auto-merged once CI passes, see workflows/dependabot.yml) and
+# major updates together (left for review). Security updates are grouped
+# the same way.
 version: 2
 updates:
   - package-ecosystem: cargo
     directory: /
     schedule:
       interval: weekly
+      day: monday
     # Conventional Commits titles: "build(deps): bump ..."
     commit-message:
       prefix: build
@@ -11,14 +16,29 @@ updates:
     open-pull-requests-limit: 5
     groups:
       minor-and-patch:
+        applies-to: version-updates
         update-types: [minor, patch]
+      major:
+        applies-to: version-updates
+        update-types: [major]
+      security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: monthly
+      interval: weekly
+      day: monday
     # Conventional Commits titles: "ci(deps): bump ..."
     commit-message:
       prefix: ci
       include: scope
     open-pull-requests-limit: 3
+    groups:
+      minor-and-patch:
+        applies-to: version-updates
+        update-types: [minor, patch]
+      major:
+        applies-to: version-updates
+        update-types: [major]
