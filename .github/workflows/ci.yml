@@ -8,10 +8,9 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  # GitHub's standard runners are free for public repositories, macOS and
+  # Windows included, so the whole suite runs on all three on every push.
   test:
-    # macOS minutes bill at 10x Linux, and the suite already runs on a Mac
-    # locally before every push, so this job runs only by hand.
-    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -75,9 +74,6 @@ jobs:
       - run: cargo test --locked --quiet -p chanto-proto
   # Exercise the native sandbox and process-tree tests on Windows.
   windows:
-    # On every push to main (and by hand); pull requests skip it, since
-    # Windows runners cost more.
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
