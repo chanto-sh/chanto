@@ -380,7 +380,8 @@ async fn projects_are_enabled_only_when_trusted() {
     let other = d.home.dir.join("other");
     std::fs::create_dir_all(other.join(".chanto")).unwrap();
     sh(&other, &["init", "-q"]);
-    let other = other.canonicalize().unwrap();
+    // The same form `enable` stores (no `\\?\` prefix on Windows).
+    let other = crate::util::canonical(&other).unwrap();
     std::fs::write(
         project_file(&other),
         "[[job]]\nname = \"proj\"\nprompt = \"again\"\n",

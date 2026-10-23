@@ -134,7 +134,9 @@ fn file_listing_respects_ignore_files() {
     std::fs::write(dir.join(".ignore"), "build.log\n").unwrap();
     std::fs::write(dir.join("build.log"), "").unwrap();
     let files = list_files(&dir);
-    assert!(files.contains(&"src/".to_string()) && files.contains(&"src/lib.rs".to_string()));
+    // Paths use the platform separator.
+    let slashed: Vec<String> = files.iter().map(|f| f.replace('\\', "/")).collect();
+    assert!(slashed.contains(&"src/".to_string()) && slashed.contains(&"src/lib.rs".to_string()));
     assert!(!files.iter().any(|f| f == "build.log"));
     let ignored = list_ignored_files(&dir, &files);
     assert_eq!(ignored, ["build.log"]);

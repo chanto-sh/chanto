@@ -454,7 +454,7 @@ async fn at_completion_lists_project_files_then_ignored_ones() {
     t.update_popup();
     let p = t.popup.as_ref().unwrap();
     assert!(p.kind == PopupKind::File);
-    assert_eq!(p.items[0].0, "@src/parser.rs");
+    assert_eq!(p.items[0].0.replace('\\', "/"), "@src/parser.rs");
     t.input.set("see @secret");
     t.update_popup();
     let p = t.popup.as_ref().unwrap();
