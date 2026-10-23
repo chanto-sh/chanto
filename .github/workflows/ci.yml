@@ -80,6 +80,48 @@ jobs:
       - run: cargo test --locked --quiet -p chanto-proto
       # The install script: platforms, curl/wget, checksums and signatures.
       - run: sh tests/install.sh
+  # Test coverage (cargo-llvm-cov, the compiler's own instrumentation) of the
+  # Linux suite, including the chanto binary that tests run as a subprocess.
+  # The summary goes on the run page; Codecov comments on pull requests.
+  # Informational for now: nothing fails on a coverage number.
+  coverage:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: coverage
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: 22
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+      - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
+      - uses: taiki-e/install-action@a4d3f3f761dcd95cce1b72cb61cb6d1963438177 # v2.87.30
+        with:
+          tool: cargo-llvm-cov@0.6.21
+      - run: cargo llvm-cov --locked --quiet --lcov --output-path lcov.info
+        env:
+          CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
+          CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+      - name: Summary
+        run: |
+          {
+            echo '### Test coverage'
+            echo '```'
+            cargo llvm-cov report --summary-only | tail -n 1
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: lcov.info
+          use_oidc: true
+          fail_ci_if_error: false
   # Exercise the native sandbox and process-tree tests on Windows.
   windows:
     runs-on: windows-latest

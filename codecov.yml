@@ -1,0 +1,12 @@
+# Codecov (free for open source): a comment on each pull request with the
+# coverage of the changed lines. Informational: coverage never fails a check.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+comment:
+  layout: "condensed_header, diff, files"
