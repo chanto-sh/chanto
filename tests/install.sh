@@ -64,7 +64,7 @@ for row in 'Darwin arm64 aarch64-apple-darwin' 'Darwin x86_64 x86_64-apple-darwi
 done
 # A restricted PATH proves the wget branch works without curl installed.
 mkdir -p "$tmp/wget-only"
-for tool in sh awk sed tar mktemp rm mkdir cp chmod dirname python3 shasum; do
+for tool in sh awk sed tar gzip mktemp rm mkdir cp chmod dirname python3 shasum; do
     ln -s "$(command -v "$tool")" "$tmp/wget-only/$tool"
 done
 cp "$tmp/mock/uname" "$tmp/wget-only/uname"
