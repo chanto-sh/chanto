@@ -1,10 +1,12 @@
 name: ci
-# Pull requests run here once; main runs again after each merge. (Running on
-# every branch push as well would run each pull request twice.)
+# Pull requests run here once, again in the merge queue (against the latest
+# main), and main runs after each merge. (Running on every branch push as
+# well would run each pull request twice.)
 on:
   push:
     branches: [main]
   pull_request:
+  merge_group:
   workflow_dispatch:
 # A newer push to the same branch cancels the run still going for the last one.
 concurrency:
@@ -84,7 +86,6 @@ jobs:
   # Test coverage (cargo-llvm-cov, the compiler's own instrumentation) of the
   # Linux suite, including the chanto binary that tests run as a subprocess.
   # The summary goes on the run page; Codecov comments on pull requests.
-  # Informational for now: nothing fails on a coverage number.
   coverage:
     runs-on: ubuntu-latest
     permissions:
