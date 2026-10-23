@@ -1628,3 +1628,54 @@ async fn transcript_skips_reminders_and_unknown_tools() {
         "## Last turn\nLooking.\n\n- `Mystery`: \n\nDone."
     );
 }
+
+#[tokio::test]
+async fn status_reports_for_long_runs_and_sessions() {
+    let (base, _) = mock_server(vec![json!({"content": "We fixed the parser."})]).await;
+    let fx = fixture_with("cmd-misc", &base, false, |_| {}, |_| {});
+    let mut agent = Agent::new(fx.env.clone());
+    for c in [
+        "/goal",
+        "/goal list",
+        "/team",
+        "/team list",
+        "/stats",
+        "/peers",
+        "/plugins",
+        "/schedule",
+        "/plan",
+        "/autocompact",
+    ] {
+        assert!(
+            matches!(handle(&mut agent, c).await, Outcome::Show(_)),
+            "{c}"
+        );
+    }
+    assert_eq!(
+        run(&mut agent, "/team stop").await,
+        "No team is running in this session."
+    );
+    assert!(matches!(
+        handle(&mut agent, "/cd no/such/dir").await,
+        Outcome::Show(_)
+    ));
+    assert_eq!(fx.env.cwd(), fx.dir, "a bad /cd stays put");
+    agent.messages = vec![
+        Message::system("sys"),
+        Message::user("fix the parser"),
+        Message::assistant("Done: the parser handles empty input."),
+    ];
+    let recap = run(&mut agent, "/recap").await;
+    assert!(recap.starts_with("※ "), "{recap}");
+}
+
+#[tokio::test]
+async fn statusline_saves_a_script_to_the_config() {
+    let home = Home::new("cmd-statusline-home");
+    let fx = fixture("cmd-statusline");
+    let mut agent = Agent::new(fx.env.clone());
+    let p = prompt(handle(&mut agent, "/statusline show the branch").await);
+    assert!(p.contains("What the user wants: show the branch"), "{p}");
+    let cfg = std::fs::read_to_string(home.dir.join("config.toml")).unwrap();
+    assert!(cfg.contains("status_line"), "{cfg}");
+}
