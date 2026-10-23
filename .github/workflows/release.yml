@@ -47,6 +47,9 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
           test "$GITHUB_REF_NAME" = "v$version"
+          # The GitHub release notes are this version's CHANGELOG.md section,
+          # dated (not "unreleased") before tagging.
+          grep -E "^## $GITHUB_REF_NAME \(" CHANGELOG.md | grep -qv unreleased
       - name: Build
         shell: bash
         run: |
@@ -114,6 +117,7 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: dist
@@ -136,8 +140,10 @@ jobs:
           fi
           assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
           [ -f dist/SHA256SUMS.sig ] && assets+=(dist/SHA256SUMS.sig)
+          awk -v h="## $GITHUB_REF_NAME " 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' \
+            CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
-            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes
+            --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file "$RUNNER_TEMP/notes.md"
 
   homebrew:
     needs: release
