@@ -37,6 +37,9 @@ pub struct Target {
     pub exe: PathBuf,
     pub method: InstallMethod,
     pub current: String,
+    /// The Ed25519 public key (standard base64) the release's `SHA256SUMS`
+    /// must be signed with: [`RELEASE_PUBKEY_B64`] outside tests.
+    pub release_key: String,
 }
 
 impl Target {
@@ -51,6 +54,7 @@ impl Target {
             method: InstallMethod::detect(&exe),
             exe,
             current: env!("CARGO_PKG_VERSION").into(),
+            release_key: RELEASE_PUBKEY_B64.into(),
         })
     }
 }
@@ -106,18 +110,17 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// The Ed25519 public key (standard base64 of the raw 32 bytes) that release
-/// `SHA256SUMS` files are signed with. Empty until a release signing key is
-/// generated and published: while empty, self-update is checksum-only (as it
-/// has always been); once set, a valid `SHA256SUMS.sig` is *mandatory*, so a
-/// tampered or unsigned checksum file is refused rather than trusted.
+/// `SHA256SUMS` files are signed with, from v0.1.2 on. A valid `SHA256SUMS.sig`
+/// is mandatory: a tampered or unsigned checksum file is refused rather than
+/// trusted. The same key, as PEM, is `packaging/release-signing-key.pub`.
 ///
-/// To turn signing on: generate a key
-///   `openssl genpkey -algorithm ed25519 -out release.pem`
-/// put the raw public key here
-///   `openssl pkey -in release.pem -pubout -outform DER | tail -c 32 | base64`
-/// and give CI the private key as the `RELEASE_SIGNING_KEY` secret (see
-/// `.github/workflows/release.yml`). Keep `release.pem` offline.
-const RELEASE_PUBKEY_B64: &str = "";
+/// The private key is the `RELEASE_SIGNING_KEY` secret in CI (see
+/// `.github/workflows/release.yml`), with an offline backup. To rotate it:
+/// generate a key (`openssl genpkey -algorithm ed25519 -out release.pem`), put
+/// its raw public key here
+/// (`openssl pkey -in release.pem -pubout -outform DER | tail -c 32 | base64`)
+/// and in the PEM file, and replace the secret.
+const RELEASE_PUBKEY_B64: &str = "Hk8ypq/plTuzCUZ4P9+bmwesZLkwM18CBO7AcUQLGd0=";
 
 /// Verify a raw Ed25519 `signature` over `sums` against `pubkey_b64` (standard
 /// base64 of the 32-byte key). Err on a bad key, a bad signature, or a mismatch.
@@ -225,7 +228,13 @@ async fn download(url: &str) -> Result<Vec<u8>> {
 
 /// Download release `tag` for `triple`, verify it against the release's
 /// SHA256SUMS, check that the binary runs, and put it at `dest`.
-pub async fn install_release(base_url: &str, tag: &str, triple: &str, dest: &Path) -> Result<()> {
+pub async fn install_release(
+    base_url: &str,
+    tag: &str,
+    triple: &str,
+    dest: &Path,
+    release_key: &str,
+) -> Result<()> {
     let (top, name) = archive_name(tag, triple);
     let base = format!("{}/download/{tag}", base_url.trim_end_matches('/'));
     let sums_bytes = download(&format!("{base}/SHA256SUMS")).await?;
@@ -233,7 +242,7 @@ pub async fn install_release(base_url: &str, tag: &str, triple: &str, dest: &Pat
     // carry a valid signature: this is what makes self-update tamper-evident
     // rather than trusting whatever SHA256SUMS the download host served. The
     // signature is verified over the exact bytes, before any checksum is read.
-    if !RELEASE_PUBKEY_B64.is_empty() {
+    if !release_key.is_empty() {
         use base64::Engine as _;
         let sig_b64 = download(&format!("{base}/SHA256SUMS.sig"))
             .await
@@ -241,7 +250,7 @@ pub async fn install_release(base_url: &str, tag: &str, triple: &str, dest: &Pat
         let sig = base64::engine::general_purpose::STANDARD
             .decode(String::from_utf8_lossy(&sig_b64).trim())
             .context("SHA256SUMS.sig is not valid base64")?;
-        verify_sums_signature(RELEASE_PUBKEY_B64, &sums_bytes, &sig)?;
+        verify_sums_signature(release_key, &sums_bytes, &sig)?;
     }
     let sums = String::from_utf8_lossy(&sums_bytes).to_string();
     let expected = sum_for(&sums, &name)
@@ -377,7 +386,7 @@ pub async fn run(
                     "chanto {latest} is available; nothing was changed. Run `chanto upgrade --yes` to install it without asking."
                 ));
             }
-            install_release(&t.base_url, &latest, triple, &t.exe).await?;
+            install_release(&t.base_url, &latest, triple, &t.exe, &t.release_key).await?;
             let mut msg = format!(
                 "Upgraded Chanto v{} → {latest} ({}). New sessions use it; running ones keep the old version until restarted.",
                 t.current,
@@ -476,6 +485,7 @@ mod tests {
             exe: exe.into(),
             method,
             current: "1.2.3".into(),
+            release_key: RELEASE_PUBKEY_B64.into(),
         }
     }
 
@@ -674,16 +684,40 @@ mod tests {
         let archive = std::fs::read(dir.join(&name)).unwrap();
         let good = format!("{}  {name}\n", sha256_hex(&archive));
         let bad = format!("{}  {name}\n", "0".repeat(64));
+        // Signed with a throwaway key, as the release workflow signs releases.
+        use aws_lc_rs::signature::{Ed25519KeyPair, KeyPair};
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let kp = Ed25519KeyPair::generate().unwrap();
+        let sign = |sums: &str| b64.encode(kp.sign(sums.as_bytes()).as_ref()).into_bytes();
         let latest = br#"{"tag_name":"v9.9.9"}"#.to_vec();
         let url = serve(vec![
             ("/latest".into(), latest.clone()),
             (
                 format!("/good/download/{tag}/SHA256SUMS"),
+                good.clone().into_bytes(),
+            ),
+            (format!("/good/download/{tag}/SHA256SUMS.sig"), sign(&good)),
+            (format!("/good/download/{tag}/{name}"), archive.clone()),
+            (
+                format!("/bad/download/{tag}/SHA256SUMS"),
+                bad.clone().into_bytes(),
+            ),
+            (format!("/bad/download/{tag}/SHA256SUMS.sig"), sign(&bad)),
+            (format!("/bad/download/{tag}/{name}"), archive.clone()),
+            // Checksums swapped after signing: the signature no longer matches.
+            (
+                format!("/forged/download/{tag}/SHA256SUMS"),
+                good.clone().into_bytes(),
+            ),
+            (format!("/forged/download/{tag}/SHA256SUMS.sig"), sign(&bad)),
+            (format!("/forged/download/{tag}/{name}"), archive.clone()),
+            // No signature at all.
+            (
+                format!("/unsigned/download/{tag}/SHA256SUMS"),
                 good.into_bytes(),
             ),
-            (format!("/good/download/{tag}/{name}"), archive.clone()),
-            (format!("/bad/download/{tag}/SHA256SUMS"), bad.into_bytes()),
-            (format!("/bad/download/{tag}/{name}"), archive.clone()),
+            (format!("/unsigned/download/{tag}/{name}"), archive.clone()),
         ])
         .await;
         let bin = dir.join("bin");
@@ -696,6 +730,7 @@ mod tests {
             exe: exe.clone(),
             method: InstallMethod::Installer,
             current: "1.0.0".into(),
+            release_key: b64.encode(kp.public_key().as_ref()),
         };
 
         // Declined: nothing changes.
@@ -723,6 +758,21 @@ mod tests {
         .unwrap_err();
         assert!(format!("{err:#}").contains("checksum mismatch"), "{err:#}");
         assert_eq!(std::fs::read(&exe).unwrap(), b"old binary");
+
+        // A forged or missing signature is refused before any checksum is read.
+        let yes = Options {
+            yes: true,
+            ..Default::default()
+        };
+        for (base, why) in [
+            ("forged", "does not verify"),
+            ("unsigned", "SHA256SUMS.sig could not be fetched"),
+        ] {
+            t.base_url = format!("{url}/{base}");
+            let err = run(&t, &yes, &mut |_| true).await.unwrap_err();
+            assert!(format!("{err:#}").contains(why), "{base}: {err:#}");
+            assert_eq!(std::fs::read(&exe).unwrap(), b"old binary");
+        }
 
         // Confirmed, with a good checksum: the release's binary is in place.
         t.base_url = format!("{url}/good");

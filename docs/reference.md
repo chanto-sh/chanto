@@ -145,6 +145,35 @@ with `SHA256SUMS`, as a [GitHub release](https://github.com/chanto-sh/chanto/rel
 [download page](https://chanto.sh/download) links them. Release archives also
 carry build provenance attestations (`gh attestation verify <file> -R chanto-sh/chanto`).
 
+### Verifying a release
+
+From v0.1.2 on, every release's `SHA256SUMS` is signed with the project's
+Ed25519 release key, and the signature is published next to it as
+`SHA256SUMS.sig` (base64). `chanto upgrade` refuses a release whose signature is
+missing or doesn't verify, and `install.sh` checks it whenever OpenSSL 3 is
+installed. The public key is
+[`packaging/release-signing-key.pub`](../packaging/release-signing-key.pub):
+
+```text
+-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAHk8ypq/plTuzCUZ4P9+bmwesZLkwM18CBO7AcUQLGd0=
+-----END PUBLIC KEY-----
+```
+
+To check a download by hand (OpenSSL 3 or later; on macOS, Homebrew's
+`openssl@3`), put `SHA256SUMS`, `SHA256SUMS.sig`, the archive and the key file
+in one folder, then:
+
+```sh
+openssl base64 -d -A -in SHA256SUMS.sig -out SHA256SUMS.sig.bin
+openssl pkeyutl -verify -pubin -inkey release-signing-key.pub -rawin \
+  -in SHA256SUMS -sigfile SHA256SUMS.sig.bin    # prints "Signature Verified Successfully"
+shasum -a 256 -c SHA256SUMS --ignore-missing    # or: sha256sum -c SHA256SUMS --ignore-missing
+```
+
+The private key never leaves the release workflow's secrets and an offline
+backup.
+
 To build from a checkout (needs Rust 1.95+), run `./install.sh --from-source`; it
 builds a release binary and installs it like the installer. Cargo can also
 build a release from crates.io (installs to Cargo's bin directory):

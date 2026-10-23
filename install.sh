@@ -51,6 +51,38 @@ else
         download "$base/download/$version/SHA256SUMS" "$tmp/SHA256SUMS" || fail "release $version not found at $base"
     fi
     valid_version "$version" || fail 'invalid release version'
+    # From v0.1.2 on, SHA256SUMS is signed with the release key
+    # (packaging/release-signing-key.pub), so the checksums can't be swapped
+    # along with the archives. A missing or wrong signature stops the install;
+    # it is checked whenever an OpenSSL that can verify Ed25519 (3.0+) exists.
+    case "$version" in
+        v0.1.0 | v0.1.1) ;;
+        *)
+            download "$base/download/$version/SHA256SUMS.sig" "$tmp/SHA256SUMS.sig" ||
+                fail "release $version has no SHA256SUMS.sig: refusing an unsigned release"
+            ossl=
+            for o in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@3/bin/openssl; do
+                command -v "$o" >/dev/null 2>&1 || continue
+                case "$("$o" pkeyutl -help 2>&1)" in *-rawin*) ossl=$o; break ;; esac
+            done
+            if [ -n "$ossl" ]; then
+                if [ -n "${CHANTO_RELEASE_KEY_FILE:-}" ]; then
+                    cp "$CHANTO_RELEASE_KEY_FILE" "$tmp/release.pub"
+                else
+                    printf '%s\n' '-----BEGIN PUBLIC KEY-----' \
+                        'MCowBQYDK2VwAyEAHk8ypq/plTuzCUZ4P9+bmwesZLkwM18CBO7AcUQLGd0=' \
+                        '-----END PUBLIC KEY-----' > "$tmp/release.pub"
+                fi
+                "$ossl" base64 -d -A -in "$tmp/SHA256SUMS.sig" -out "$tmp/SHA256SUMS.sig.bin" 2>/dev/null ||
+                    fail 'SHA256SUMS.sig is not valid base64'
+                "$ossl" pkeyutl -verify -pubin -inkey "$tmp/release.pub" -rawin \
+                    -in "$tmp/SHA256SUMS" -sigfile "$tmp/SHA256SUMS.sig.bin" >/dev/null 2>&1 ||
+                    fail 'signature check failed for SHA256SUMS: refusing to install'
+            else
+                echo 'note: release signature not checked (needs OpenSSL 3); checksums still are' >&2
+            fi
+            ;;
+    esac
     # Download a file of this release into $tmp and check it against SHA256SUMS.
     fetch() {
         expected=$(awk -v name="$1" '$2 == name {print $1}' "$tmp/SHA256SUMS")
