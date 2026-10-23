@@ -166,6 +166,16 @@ pub fn url_needs_approval(url: &str, cwd: &Path) -> bool {
     if !(lower.starts_with("http://") || lower.starts_with("https://") || lower == "about:blank") {
         return lower.contains(':');
     }
+    // Where the request really goes is up to the URL parser the fetch uses,
+    // which drops control characters around the URL and tabs or newlines
+    // inside it, and decodes `%`-escapes in the host: ask about the host it
+    // reads too, not only the one read from the text below.
+    if let Ok(parsed) = reqwest::Url::parse(u)
+        && let Some(host) = parsed.host_str()
+        && metadata_host(host.trim_start_matches('[').trim_end_matches(']'))
+    {
+        return true;
+    }
     let host = lower
         .split("://")
         .nth(1)
@@ -185,6 +195,12 @@ pub fn url_needs_approval(url: &str, cwd: &Path) -> bool {
         .rsplit_once(':')
         .filter(|(h, _)| !h.contains(':'))
         .map_or(host, |(h, _)| h);
+    metadata_host(host)
+}
+
+/// A host naming cloud instance metadata, by name or by address.
+fn metadata_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
     if host == "metadata.google.internal" || host == "metadata" {
         return true;
     }
@@ -2337,6 +2353,15 @@ mod claude_rule_tests {
             "http://169.254.169.254/",
             "http://[::ffff:169.254.169.254]/",
             "http://100.100.100.200/",
+            // Spellings the URL parser cleans up before it connects: control
+            // characters around the URL, tabs inside it, `%`-escapes and a
+            // trailing dot in the host.
+            "http://@169.254.16\0",
+            "http://169.254.169.254/\t\0",
+            "http://169.254.16\t9.254/",
+            "http://169.254.169.%32%35%34/",
+            "http://169.254.169.254./",
+            "http://metadata.google.internal./",
             "javascript:alert(1)",
             "chrome://settings",
             "view-source:https://example.com",
