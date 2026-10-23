@@ -24,8 +24,30 @@ Please include, as far as you can:
 - any known mitigations.
 
 Please give us a reasonable chance to release a fix before any public
-disclosure. We aim to acknowledge a report within a few days and to keep you
-updated as we investigate.
+disclosure.
+
+## How we respond
+
+1. **Acknowledge** the report within 3 business days.
+2. **Triage:** reproduce it, assess severity (we use CVSS as a guide) and agree
+   on a timeline with you. We aim to fix critical and high-severity issues
+   within 14 days and others within 60.
+3. **Fix** it in a private advisory (or privately, for issues reported by email),
+   with a regression test, and **release** a patched version.
+4. **Disclose:** describe the fix in the release notes and, when it affects
+   users, publish a GitHub security advisory (requesting a CVE where
+   appropriate).
+5. **Credit** the reporter by name or handle in the release notes and the
+   advisory, unless they ask to stay anonymous.
+
+We keep you updated throughout, and you're welcome to review the fix before it
+ships.
+
+## Fixed vulnerabilities
+
+| Version | Issue | Found by |
+|---|---|---|
+| v0.1.1 | Shell commands could be hidden from the permission check by a quote in a comment, a heredoc body or an escape | Internal security review |
 
 ## Supported versions
 
@@ -46,3 +68,6 @@ commands on your machine. Reports that are most useful concern, for example:
 Running an agent against untrusted code or prompts carries inherent risk; the
 permission system and sandbox are defense-in-depth, not a guarantee. Findings
 that strengthen those boundaries are especially welcome.
+
+[docs/security-model.md](docs/security-model.md) describes the threat model,
+the trust boundaries and how Chanto defends them.

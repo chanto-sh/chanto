@@ -223,7 +223,9 @@ cargo test
 
 Day-to-day commands and architecture notes are in [AGENTS.md](AGENTS.md); how to
 contribute, report a vulnerability, and behave are in [CONTRIBUTING.md](CONTRIBUTING.md),
-[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). How the
+project is run and where it's going: [GOVERNANCE.md](GOVERNANCE.md) and
+[ROADMAP.md](ROADMAP.md); how Chanto defends you: [docs/security-model.md](docs/security-model.md).
 
 ---
 
