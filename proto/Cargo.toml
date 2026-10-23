@@ -13,3 +13,11 @@ keywords = ["chanto"]
 chrono = { version = "0.4.45", default-features = false, features = ["serde", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.152"
+
+# CI's semver check (cargo-semver-checks) enforces the wire rule: old CLIs
+# must keep parsing new responses. New struct fields are fine (unknown fields
+# are ignored); new enum variants are not, since an old CLI can't parse them,
+# so those, and removals, renames and type changes, still fail.
+[package.metadata.cargo-semver-checks.lints]
+constructible_struct_adds_field = "allow"
+enum_struct_variant_field_added = "allow"
