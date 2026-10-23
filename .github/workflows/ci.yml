@@ -72,6 +72,8 @@ jobs:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
       - run: cargo test --locked --quiet -p chanto-proto
+      # The install script: platforms, curl/wget, checksums and signatures.
+      - run: sh tests/install.sh
   # Exercise the native sandbox and process-tree tests on Windows.
   windows:
     runs-on: windows-latest
