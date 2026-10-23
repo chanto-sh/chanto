@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.1.2 (unreleased)
+## v0.1.2 (October 23, 2026)
 
 - **Signed releases.** From this release on, each release's `SHA256SUMS` is signed with the project's release key. `chanto upgrade` refuses a release whose signature is missing or wrong, and `install.sh` checks it too whenever OpenSSL 3 is available. To verify a download yourself, see [Verifying a release](docs/reference.md#verifying-a-release).
 
