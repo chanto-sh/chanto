@@ -1,0 +1,147 @@
+# Security model
+
+Chanto is a coding agent: a language model decides which tools to call, and
+Chanto runs them on your machine. This document is the project's assurance
+case: what we protect, from whom, where the trust boundaries are, and how each
+one is defended. To report a problem, see [SECURITY.md](../SECURITY.md).
+
+## What we protect
+
+- **Your machine and files** outside what you asked Chanto to work on.
+- **Your credentials:** API keys, cloud credentials, SSH keys, tokens, `.env` values.
+- **Your intent:** Chanto should only take consequential actions you allowed,
+  either by approving them or by choosing a permission mode that allows them.
+- **The software you install:** releases should be the ones this project built.
+
+## Threats
+
+| Threat | Example |
+|---|---|
+| Prompt injection | A README, web page, issue or dependency file tells the model to run a command or send data somewhere. |
+| A mistaken model | The model runs something destructive while trying to help. |
+| A malicious repository | Project files try to run code or change settings when you open the folder (hooks, MCP servers, `.claude/` or `.chanto/` config). |
+| Other local users and web pages | Something on the same machine, or a site in your browser, reaches a server Chanto runs on localhost. |
+| Network attackers | Someone between you and a model provider, the update server or a remote session. |
+| A compromised release channel | A tampered download, package or update. |
+
+Out of scope: an attacker who already runs code as your user, and the model
+provider itself (Chanto sends it your prompts and the files it reads, as you'd
+expect).
+
+## Trust boundaries and defenses
+
+### 1. Model ↔ tools: the permission layer
+
+Every tool call the model makes goes through one decision point before it runs.
+
+- **Permission modes** decide the default: *default* asks before edits and
+  before any shell command not known to be read-only; *acceptEdits* allows edits
+  inside the project; *plan* allows only read-only actions; *auto* lets a
+  separate classifier model judge each command; *bypass* allows everything and
+  must be chosen explicitly. No project file can turn on bypass mode.
+- **Shell commands** are parsed before they're judged: split into simple
+  commands, with comments, heredoc bodies and escapes read the way bash reads
+  them, so text bash treats as data can't hide a command (fixed in v0.1.1).
+  Command substitution, process substitution and write redirections always
+  need approval.
+- **Files** outside the project, protected paths (`.git/`, Chanto's own
+  config) and secret files (`.env`, `~/.ssh`, `~/.aws` and similar) always need
+  a human, in every mode except bypass.
+- **Web fetches** to cloud instance metadata, local files outside the project
+  or loopback services need approval, to counter server-side request forgery.
+- **Your own allow and deny rules** apply to each simple command, and an allow
+  rule never vouches for an attached substitution or redirection.
+
+### 2. Commands ↔ the operating system: the sandbox
+
+Shell commands run inside an OS sandbox by default (Seatbelt on macOS,
+Landlock and bubblewrap on Linux, a write-restricted token on Windows):
+
+- writes are limited to the project, temporary directories and tool caches;
+- on macOS and Linux, reads of known credential locations are denied, and
+  network access can be turned off or limited to an allowlist of domains (on
+  Windows the sandbox confines writes only);
+- leaving the sandbox (`dangerouslyDisableSandbox`) always needs a human.
+
+The permission layer and the sandbox are independent, so a mistake in one is
+still contained by the other.
+
+### 3. Project files ↔ your settings: folder trust
+
+Settings in a project that could run code or widen permissions (hooks, MCP
+servers, status-line and key-helper commands, environment variables, sandbox
+settings, allow rules, guardrail commands, plugins, language servers) are
+ignored until you trust the folder at a prompt. New `.mcp.json` servers also
+need approval.
+
+### 4. Your secrets ↔ the model and logs
+
+Known secret values (from the environment, config, `.env` files and provider
+settings) and secret-shaped strings are replaced with placeholders before
+anything goes to the model, into logs, session files or shared transcripts.
+Credentials Chanto stores itself are written with owner-only permissions, or
+to the macOS keychain.
+
+### 5. Local servers ↔ other programs
+
+`chanto serve`, `chanto web` and the background-run daemon listen on
+`127.0.0.1` by default and require a bearer token (compared in constant time,
+stored owner-only) on every route except health. Tokens travel in headers,
+and the web UI's launch link carries its token in the URL fragment, so browser
+pages can't forge requests. The editor bridges authenticate with a header browsers
+can't set on a WebSocket. The web UI never inserts HTML from model or tool
+output, and is served with a strict Content Security Policy.
+
+### 6. Remote sessions ↔ the network
+
+`/remote` encrypts the session end to end: P-256 ECDH key agreement, keys
+derived with HKDF-SHA256 for each purpose and direction, AES-256-GCM with
+sequence numbers bound into the authenticated data, and key material only in
+the link's URL fragment. A link admits only the first reader to join.
+
+### 7. Releases ↔ you
+
+Releases are built by GitHub Actions from version tags that only organization
+admins can create. Archives are published with SHA-256 checksums and GitHub
+build-provenance attestations; npm packages are published through trusted
+publishing with Sigstore provenance; the Homebrew formula pins each archive's
+checksum. All downloads use HTTPS. Signed checksums, verified by `chanto
+upgrade` and the install scripts, are on the [roadmap](../ROADMAP.md).
+
+## Secure design principles
+
+- **Least privilege:** asking is the default; modes and rules widen it only on
+  your say-so.
+- **Fail-safe defaults:** anything the checks can't classify needs approval; a
+  heredoc that never closes is judged line by line; an unknown project setting
+  is ignored until trusted.
+- **Complete mediation:** every tool call passes the same decision point,
+  including those from subagents and background runs.
+- **Defense in depth:** permissions, sandbox and secret redaction each limit
+  what the others miss.
+- **Open design:** the code, this model and the security tests are public.
+
+## Common weaknesses countered
+
+| Weakness | Countermeasure |
+|---|---|
+| CWE-78 OS command injection | Shell parsing before permission checks; sandbox; approval for substitutions and redirections |
+| CWE-22 Path traversal | Paths canonicalized (symlinks, `..`, case) before workspace checks |
+| CWE-918 Server-side request forgery | Approval for metadata, loopback and local-file URLs |
+| CWE-79 Cross-site scripting | No HTML insertion of untrusted text; strict CSP; escaped shared transcripts |
+| CWE-352 Cross-site request forgery | Header-based tokens that browsers won't send cross-site |
+| CWE-200 / CWE-532 Exposure of sensitive information | Secret redaction before the model, logs and shares |
+| CWE-798 Hard-coded credentials | gitleaks on every push; secret scanning with push protection |
+| CWE-330 Insufficient randomness | Tokens and keys from the OS CSPRNG |
+| CWE-319 Cleartext transmission | HTTPS/TLS for providers, updates and cloud; end-to-end encryption for remote sessions |
+| CWE-494 Download without integrity check | Checksums, attestations and provenance (signatures planned) |
+
+## Reviews
+
+- October 2026: an internal review of the whole codebase covering supply chain,
+  permissions and sandbox, network-facing surfaces, and credentials and
+  updates. Its critical finding was fixed in v0.1.1; the remaining findings are
+  being fixed, and are tracked privately until released.
+
+Continuous checks: CodeQL, clippy with warnings as errors, cargo-deny,
+gitleaks, OpenSSF Scorecard and Dependabot.
