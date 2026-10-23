@@ -1,5 +1,11 @@
 name: ci
-on: [push, pull_request, workflow_dispatch]
+# Pull requests run here once; main runs again after each merge. (Running on
+# every branch push as well would run each pull request twice.)
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
 # A newer push to the same branch cancels the run still going for the last one.
 concurrency:
   group: ci-${{ github.ref }}
@@ -9,8 +15,8 @@ permissions:
   contents: read
 jobs:
   # GitHub's standard runners are free for public repositories, macOS and
-  # Windows included, so the whole suite runs on all three on every push.
-  test:
+  # Windows included, so the whole suite runs on all three platforms.
+  macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
