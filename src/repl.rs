@@ -359,3 +359,6 @@ async fn next_scheduled(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
