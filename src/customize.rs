@@ -495,6 +495,11 @@ mod tests {
     }
     #[test]
     fn guide_covers_extension_points() {
+        // The guide and the expected home path both read CHANTO_HOME, which
+        // other tests change under this lock; hold it so they agree.
+        let _home_lock = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let guide = extension_guide();
         for word in [
             "config.toml",
