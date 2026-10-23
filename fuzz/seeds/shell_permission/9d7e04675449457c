@@ -1,0 +1,4 @@
+cat <<E\OF
+x
+EOF
+ls

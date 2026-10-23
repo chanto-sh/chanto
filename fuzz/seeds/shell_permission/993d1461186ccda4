@@ -1,0 +1,4 @@
+echo a#b <<EOF
+body
+EOF
+ls

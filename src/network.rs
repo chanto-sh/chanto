@@ -234,7 +234,7 @@ async fn response(client: &mut TcpStream, status: &str, body: &str) -> Result<()
     Ok(())
 }
 
-fn authority(s: &str, default_port: u16) -> Result<(String, u16)> {
+pub(crate) fn authority(s: &str, default_port: u16) -> Result<(String, u16)> {
     let url = reqwest::Url::parse(&format!("http://{s}"))?;
     if !url.username().is_empty()
         || url.password().is_some()

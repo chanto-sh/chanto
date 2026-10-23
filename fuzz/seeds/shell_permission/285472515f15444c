@@ -1,0 +1,4 @@
+cat <<EOF > x
+hello
+EOF
+echo done

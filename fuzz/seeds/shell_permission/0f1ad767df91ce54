@@ -1,0 +1,3 @@
+cat <<'EOF'
+it's fine
+EOF

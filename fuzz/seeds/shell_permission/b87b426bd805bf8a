@@ -1,0 +1,1 @@
+jq '.a | .b' f.json

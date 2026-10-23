@@ -30,6 +30,10 @@ mod detect;
 mod doctor;
 mod feedback;
 mod format;
+// Crate internals the fuzz targets in fuzz/ call; not public API.
+#[cfg(feature = "fuzzing")]
+#[doc(hidden)]
+pub mod fuzzing;
 mod github;
 mod goal;
 mod guardrails;
