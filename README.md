@@ -13,6 +13,7 @@
 <p align="center">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-f59e0b">
   <a href="https://scorecard.dev/viewer/?uri=github.com/chanto-sh/chanto"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/chanto-sh/chanto/badge"></a>
+  <a href="https://www.bestpractices.dev/projects/15833"><img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/15833/badge"></a>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.95%2B-000000?logo=rust&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue">
   <img alt="Local models" src="https://img.shields.io/badge/local-Ollama%20·%20llama.cpp%20·%20vLLM-10b981">
@@ -222,7 +223,9 @@ cargo test
 
 Day-to-day commands and architecture notes are in [AGENTS.md](AGENTS.md); how to
 contribute, report a vulnerability, and behave are in [CONTRIBUTING.md](CONTRIBUTING.md),
-[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
+[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). How the
+project is run and where it's going: [GOVERNANCE.md](GOVERNANCE.md) and
+[ROADMAP.md](ROADMAP.md); how Chanto defends you: [docs/security-model.md](docs/security-model.md).
 
 ---
 
