@@ -284,7 +284,9 @@ mod tests {
         unsafe {
             std::env::remove_var("CHANTO_HOME");
         }
-        std::fs::remove_dir_all(dir).unwrap();
+        // Best-effort: on Windows another process (a scanner or indexer) can
+        // still hold a file we just wrote, and the temp dir is cleaned anyway.
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[cfg(unix)]
@@ -352,6 +354,8 @@ mod tests {
             }
             std::env::remove_var("CHANTO_HOME");
         }
-        std::fs::remove_dir_all(dir).unwrap();
+        // Best-effort: on Windows another process (a scanner or indexer) can
+        // still hold a file we just wrote, and the temp dir is cleaned anyway.
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
