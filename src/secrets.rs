@@ -1123,7 +1123,8 @@ mod tests {
             ("GitLab token ending in -", "glpat-abcdefghij012345678-"),
             (
                 "Google API key ending in -",
-                "AIzaSyA0123456789abcdefghijklmnopqrstu-",
+                // Split so secret scanners don't take the fake for a real key.
+                concat!("AIza", "SyA0123456789abcdefghijklmnopqrstu-"),
             ),
             (
                 "SendGrid key ending in -",
