@@ -3,6 +3,8 @@
 use super::*;
 use crate::config::SandboxConfig;
 
+/// A fresh, resolved temp directory for the sandbox-exec tests below.
+#[cfg(target_os = "macos")]
 fn scratch(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("chanto-{tag}-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&d).unwrap();
