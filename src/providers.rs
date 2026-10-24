@@ -644,7 +644,9 @@ pub fn credential(h: &Hosted) -> Option<Cred> {
         return crate::chanto_cloud::credential_source().map(|_| Cred::Login);
     }
     match crate::auth::get(h.id) {
-        Some(crate::auth::Credential::ApiKey { key }) => return Some(Cred::Key(key)),
+        Some(crate::auth::Credential::ApiKey { key }) => {
+            return Some(Cred::Key(key.expose().to_string()));
+        }
         Some(crate::auth::Credential::Oauth { .. }) => return Some(Cred::Login),
         Some(crate::auth::Credential::Remote { .. }) | None => {}
         Some(crate::auth::Credential::Keychain) => {}

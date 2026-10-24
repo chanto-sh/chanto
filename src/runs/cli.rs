@@ -748,7 +748,7 @@ pub async fn remote_cmd(args: &[String]) -> Result<()> {
                 &format!("remote:{name}"),
                 crate::auth::Credential::Remote {
                     url: url.trim_end_matches('/').into(),
-                    token,
+                    token: token.into(),
                 },
             )?;
             let c = remote_client(name)?;

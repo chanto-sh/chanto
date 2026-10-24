@@ -43,6 +43,45 @@ impl Default for SecretsConfig {
     }
 }
 
+/// A credential held in memory: an API key, an OAuth token, an account token.
+/// `Debug` shows only that it is set, so a struct holding one can be logged
+/// or debug-printed without leaking it, and there is no `Display` to format
+/// it into text by accident. [`Secret::expose`] is the one way to the value,
+/// for where it has to go (a request header, the keychain). It serializes as
+/// the plain string, so `auth.json` keeps its format.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    /// The value, for sending or storing it; never for logs or messages.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Secret {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "Secret(\"\")"
+        } else {
+            "Secret(***)"
+        })
+    }
+}
+
 /// Names of variables (and `.env` keys) that hold secrets.
 pub fn is_secret_name(name: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -1049,24 +1088,61 @@ mod tests {
     }
 
     #[test]
+    fn a_secret_debug_prints_masked_and_serializes_plain() {
+        let cred = crate::auth::Credential::Oauth {
+            access: "at-123".into(),
+            refresh: "rt-456".into(),
+            expires: 1,
+            client_id: "app".into(),
+        };
+        let shown = format!("{cred:?}");
+        assert!(shown.contains("Secret(***)") && shown.contains("app"));
+        assert!(!shown.contains("at-123") && !shown.contains("rt-456"));
+        assert_eq!(format!("{:?}", Secret::from("")), "Secret(\"\")");
+        // `auth.json` and the keychain keep the plain value.
+        let json = serde_json::to_value(&cred).unwrap();
+        assert_eq!(json["access"], "at-123");
+        let back: crate::auth::Credential = serde_json::from_value(json).unwrap();
+        let crate::auth::Credential::Oauth { refresh, .. } = back else {
+            panic!("not an OAuth credential");
+        };
+        assert_eq!(refresh.expose(), "rt-456");
+    }
+
+    #[test]
     fn masks_token_formats_but_not_ordinary_code() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         with_values(&[]);
-        for secret in [
-            "AKIAIOSFODNN7EXAMPLE",
-            "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB",
-            "xoxb-1234567890-abcdefghij",
+        // A failure names the format; the sample itself stays out of the log.
+        for (format, sample) in [
+            ("AWS access key", "AKIAIOSFODNN7EXAMPLE"),
+            ("GitHub token", "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"),
+            ("Slack token", "xoxb-1234567890-abcdefghij"),
             // Formats whose last character can be `-`.
-            "xoxb-123456789-",
-            "glpat-abcdefghij012345678-",
-            "AIzaSyA0123456789abcdefghijklmnopqrstu-",
-            "SG.abcdefghij0123456789ab.abcdefghij0123456789abcdefghij0123456789ab-",
-            "sk-ant-api03-abcdefghijklmnopqrstuv",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+            ("Slack token ending in -", "xoxb-123456789-"),
+            ("GitLab token ending in -", "glpat-abcdefghij012345678-"),
+            (
+                "Google API key ending in -",
+                "AIzaSyA0123456789abcdefghijklmnopqrstu-",
+            ),
+            (
+                "SendGrid key ending in -",
+                "SG.abcdefghij0123456789ab.abcdefghij0123456789abcdefghij0123456789ab-",
+            ),
+            ("Anthropic key", "sk-ant-api03-abcdefghijklmnopqrstuv"),
+            (
+                "JWT",
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+            ),
+            (
+                "OpenSSH private key",
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+            ),
         ] {
-            let out = redact(secret);
-            assert!(out.starts_with("[REDACTED:"), "{secret} -> {out}");
+            assert!(
+                redact(sample).starts_with("[REDACTED:"),
+                "{format} not redacted"
+            );
         }
         assert_eq!(
             redact("postgres://app:s3cretPass@db:5432/x"),

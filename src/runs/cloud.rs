@@ -65,7 +65,8 @@ Sign in with `chanto cloud login`; plans at ", site_url!(), "/pricing.");
 /// Requests to the account side of Chanto cloud.
 #[derive(Clone)]
 pub struct Cloud {
-    pub url: String,
+    /// Always one [`check_url`] accepted: every request carries the token.
+    url: String,
     token: String,
     http: reqwest::Client,
 }
@@ -95,17 +96,26 @@ struct OrgList {
 }
 
 impl Cloud {
-    pub fn new(url: &str, token: &str) -> Cloud {
+    /// A client for the server at `url`, refused unless [`check_url`] accepts
+    /// it, so the token never goes over plain http to another machine.
+    pub fn new(url: &str, token: &str) -> Result<Cloud> {
+        let url = url.trim_end_matches('/');
+        check_url(url)?;
         let http = crate::http::builder()
             .timeout(Duration::from_secs(60))
             .user_agent(concat!("chanto/", env!("CARGO_PKG_VERSION")))
             .build()
             .unwrap_or_default();
-        Cloud {
-            url: url.trim_end_matches('/').to_string(),
+        Ok(Cloud {
+            url: url.to_string(),
             token: token.to_string(),
             http,
-        }
+        })
+    }
+
+    /// The server's base URL, without a trailing `/`.
+    pub fn url(&self) -> &str {
+        &self.url
     }
 
     /// `CHANTO_CLOUD_TOKEN` (for `CHANTO_CLOUD_URL`, else the saved
@@ -120,10 +130,10 @@ impl Cloud {
             let url = env("CHANTO_CLOUD_URL")
                 .or(saved.map(|(u, _)| u))
                 .unwrap_or_else(|| DEFAULT_URL.into());
-            return Ok(Cloud::new(&url, &token));
+            return Cloud::new(&url, &token);
         }
         match saved {
-            Some((url, token)) => Ok(Cloud::new(&url, &token)),
+            Some((url, token)) => Cloud::new(&url, token.expose()),
             None => bail!(
                 "You're not signed in to Chanto cloud; run `chanto cloud login` (or set CHANTO_CLOUD_TOKEN).\n{SIGN_UP}"
             ),
@@ -273,7 +283,7 @@ async fn sign_in_with(
     open: bool,
     quiet: bool,
 ) -> Result<(String, User)> {
-    let c = Cloud::new(url, "");
+    let c = Cloud::new(url, "")?;
     let offered: AuthProviders = c.get("/v1/auth/providers").await?;
     let names = || {
         offered
@@ -426,7 +436,7 @@ fn save_login(url: &str, token: &str) -> Result<()> {
         CREDENTIAL,
         crate::auth::Credential::Remote {
             url: url.to_string(),
-            token: token.to_string(),
+            token: token.into(),
         },
     )
 }
@@ -569,7 +579,7 @@ async fn login_cmd(args: &[String]) -> Result<String> {
     let (token, user) = sign_in(&url, provider.as_deref(), open).await?;
     save_login(&url, &token)?;
     let mut s = format!("Signed in to Chanto cloud ({url}) as {}.", user.login);
-    if let Ok(orgs) = Cloud::new(&url, &token).orgs().await {
+    if let Ok(orgs) = Cloud::new(&url, &token)?.orgs().await {
         let current = default_org()
             .filter(|d| orgs.iter().any(|o| &o.slug == d))
             .or_else(|| orgs.first().map(|o| o.slug.clone()));
@@ -619,7 +629,14 @@ async fn logout_cmd() -> Result<String> {
     let Some(crate::auth::Credential::Remote { url, token }) = crate::auth::get(CREDENTIAL) else {
         return Ok("You're not signed in to Chanto cloud.".into());
     };
-    let revoked = Cloud::new(&url, &token).delete("/v1/auth/token").await;
+    // A saved URL that is no longer accepted still signs out here; only the
+    // revoking, which would send the token there, is skipped.
+    let revoked = async {
+        Cloud::new(&url, token.expose())?
+            .delete("/v1/auth/token")
+            .await
+    }
+    .await;
     crate::auth::remove(CREDENTIAL)?;
     Ok(match revoked {
         Ok(_) => format!("Signed out of Chanto cloud ({url}); the token is revoked."),
@@ -638,7 +655,7 @@ async fn status_cmd() -> Result<String> {
     let current = default_org().or_else(|| orgs.first().map(|o| o.slug.clone()));
     let mut s = format!(
         "Chanto cloud: {}\nSigned in as {}{}",
-        c.url,
+        c.url(),
         me.login,
         me.name.map(|n| format!(" ({n})")).unwrap_or_default()
     );
@@ -1463,7 +1480,7 @@ mod tests {
         }
         let c = Cloud::signed_in().unwrap();
         assert_eq!(
-            (c.url.as_str(), c.token.as_str()),
+            (c.url(), c.token.as_str()),
             ("https://cloud.example", "crt_saved")
         );
         #[cfg(unix)]
@@ -1481,16 +1498,18 @@ mod tests {
         // and the `chanto` provider bills the default org.
         unsafe { std::env::set_var("CHANTO_CLOUD_TOKEN", "crt_env") };
         let c = Cloud::signed_in().unwrap();
-        assert_eq!(
-            (c.url.as_str(), c.token()),
-            ("https://cloud.example", "crt_env")
-        );
+        assert_eq!((c.url(), c.token()), ("https://cloud.example", "crt_env"));
         let p = crate::chanto_cloud::provider("claude-sonnet-4-5").unwrap();
         assert_eq!(p.base_url, "https://cloud.example/v1/model/anthropic");
         assert!(
             p.api_key.as_deref() == Some("crt_env")
                 && p.headers.contains(&("x-chanto-org", "acme".to_string()))
         );
+        // A server from the environment is held to the same rule as `--url`.
+        unsafe { std::env::set_var("CHANTO_CLOUD_URL", "http://cloud.example") };
+        assert!(Cloud::signed_in().is_err());
+        assert!(crate::chanto_cloud::provider("claude-sonnet-4-5").is_none());
+        unsafe { std::env::remove_var("CHANTO_CLOUD_URL") };
         unsafe { std::env::remove_var("CHANTO_CLOUD_TOKEN") };
         unsafe {
             if let Some(v) = prev.0 {
@@ -1711,7 +1730,7 @@ mod tests {
                 }),
             );
         let url = serve(app).await;
-        let c = Cloud::new(&url, "crt_token");
+        let c = Cloud::new(&url, "crt_token").unwrap();
         let req = CreateRun {
             repo: "https://github.com/acme/app.git".into(),
             git_ref: Some("feature".into()),
@@ -1777,7 +1796,7 @@ mod tests {
                 axum::routing::get(|| async { (axum::http::StatusCode::UNAUTHORIZED, axum::Json(json!({"error": "unauthorized", "message": "invalid token"}))) }),
             );
         let url = serve(app).await;
-        let c = Cloud::new(&url, "crt_old");
+        let c = Cloud::new(&url, "crt_old").unwrap();
         let req = CreateRun {
             repo: "https://github.com/acme/app.git".into(),
             task: "t".into(),

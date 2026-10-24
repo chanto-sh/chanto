@@ -1123,7 +1123,7 @@ async fn coding_plans_send_their_key_to_their_endpoint() {
                 id,
                 None,
                 crate::auth::Credential::ApiKey {
-                    key: format!("key-{id}"),
+                    key: format!("key-{id}").into(),
                 },
             )
             .unwrap();

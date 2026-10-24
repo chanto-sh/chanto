@@ -31,13 +31,14 @@
 //! All native calls keep their backing buffers/handles alive through process
 //! creation. Only the three duplicated standard handles are inheritable.
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::ffi::{OsStr, c_void};
+use std::marker::PhantomData;
 use std::mem::{size_of, zeroed};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
-use std::ptr::{null, null_mut};
+use std::ptr::{NonNull, null, null_mut};
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Security::Authorization::*;
 use windows_sys::Win32::Security::*;
@@ -185,32 +186,158 @@ impl Drop for AclLock {
     }
 }
 
-fn ace_sid(ace: *mut ACCESS_ALLOWED_ACE) -> PSID {
-    unsafe { std::ptr::addr_of_mut!((*ace).SidStart) }.cast()
+const ACCESS_ALLOWED_ACE_TYPE: u8 = 0;
+const ACCESS_DENIED_ACE_TYPE: u8 = 1;
+
+/// A borrowed ACL: non-null, accepted by `IsValidAcl`, and stored in memory
+/// its owner (a security descriptor, a token information buffer or a
+/// [`Dacl`]'s storage) keeps in place for `'a`. Every raw ACL from Windows
+/// goes through [`AclRef::new`] before anything reads it.
+#[derive(Clone, Copy)]
+struct AclRef<'a> {
+    ptr: NonNull<ACL>,
+    _owner: PhantomData<&'a ()>,
+}
+
+impl<'a> AclRef<'a> {
+    /// `None` for a NULL ACL; an error if Windows says it is malformed.
+    ///
+    /// # Safety
+    /// A non-null `ptr` must point at an ACL inside `_owner`, which must not
+    /// move or free it while the result is in use.
+    unsafe fn new<T: ?Sized>(ptr: *mut ACL, _owner: &'a T) -> Result<Option<Self>> {
+        let Some(ptr) = NonNull::new(ptr) else {
+            return Ok(None);
+        };
+        ensure!(
+            unsafe { IsValidAcl(ptr.as_ptr()) } != 0,
+            "IsValidAcl: malformed ACL"
+        );
+        Ok(Some(Self {
+            ptr,
+            _owner: PhantomData,
+        }))
+    }
+
+    fn header(self) -> ACL {
+        // SAFETY: a valid ACL starts with its header (the type's invariant).
+        unsafe { self.ptr.as_ptr().read_unaligned() }
+    }
+
+    /// Its size in bytes, header and ACEs included.
+    fn size(self) -> usize {
+        self.header().AclSize as usize
+    }
+
+    fn ace_count(self) -> u32 {
+        self.header().AceCount as u32
+    }
+
+    fn as_ptr(self) -> *mut ACL {
+        self.ptr.as_ptr()
+    }
+
+    /// ACE `index`, checked to lie wholly within the ACL's own `AclSize`
+    /// bytes.
+    fn ace(self, index: u32) -> Result<Ace<'a>> {
+        let mut ace: *mut c_void = null_mut();
+        check(unsafe { GetAce(self.as_ptr(), index, &mut ace) }, "GetAce")?;
+        let ace =
+            NonNull::new(ace.cast::<u8>()).with_context(|| format!("GetAce: no ACE {index}"))?;
+        let start = self.as_ptr() as usize + size_of::<ACL>();
+        let end = self.as_ptr() as usize + self.size();
+        let at = ace.as_ptr() as usize;
+        ensure!(
+            start <= at && at + size_of::<ACE_HEADER>() <= end,
+            "ACE {index} lies outside its ACL"
+        );
+        // SAFETY: the header is within the ACL (checked just above).
+        let header = unsafe { ace.cast::<ACE_HEADER>().as_ptr().read_unaligned() };
+        let size = header.AceSize as usize;
+        ensure!(
+            size >= size_of::<ACE_HEADER>() && at + size <= end,
+            "ACE {index} overruns its ACL"
+        );
+        Ok(Ace {
+            ptr: ace,
+            header,
+            _acl: PhantomData,
+        })
+    }
+}
+
+/// One ACE of an [`AclRef`]: its `AceSize` bytes are all inside the ACL.
+#[derive(Clone, Copy)]
+struct Ace<'a> {
+    ptr: NonNull<u8>,
+    header: ACE_HEADER,
+    _acl: PhantomData<&'a ()>,
+}
+
+impl Ace<'_> {
+    fn header(self) -> ACE_HEADER {
+        self.header
+    }
+
+    /// The access mask and SID of an access-allowed or access-denied ACE
+    /// (the two share a layout), if it is one and it holds the whole SID.
+    fn allowed_or_denied(self) -> Option<(u32, PSID)> {
+        if !matches!(
+            self.header.AceType,
+            ACCESS_ALLOWED_ACE_TYPE | ACCESS_DENIED_ACE_TYPE
+        ) {
+            return None;
+        }
+        let mask_at = std::mem::offset_of!(ACCESS_ALLOWED_ACE, Mask);
+        let sid_at = std::mem::offset_of!(ACCESS_ALLOWED_ACE, SidStart);
+        // A SID is 8 bytes plus 4 per subauthority; byte 1 is their count.
+        let size = self.header.AceSize as usize;
+        if size < sid_at + 8 {
+            return None;
+        }
+        // SAFETY: every offset read below is less than `size`, and the ACE's
+        // `size` bytes are inside its ACL (the type's invariant).
+        let subauthorities = unsafe { self.ptr.add(sid_at + 1).read() } as usize;
+        if size < sid_at + 8 + 4 * subauthorities {
+            return None;
+        }
+        let mask = unsafe { self.ptr.add(mask_at).cast::<u32>().read_unaligned() };
+        let sid = unsafe { self.ptr.add(sid_at) }.as_ptr().cast();
+        Some((mask, sid))
+    }
 }
 
 // Whether a DACL already carries our explicit, inheritable write grant.
-fn has_write_grant(acl: *mut ACL, sid: PSID, dir: bool) -> bool {
-    if acl.is_null() {
-        return false;
-    }
-    let count = unsafe { (*acl).AceCount as u32 };
-    (0..count).any(|i| {
-        let mut ace = null_mut();
-        if unsafe { GetAce(acl, i, &mut ace) } == 0 {
+fn has_write_grant(acl: AclRef, sid: PSID, dir: bool) -> bool {
+    (0..acl.ace_count()).any(|i| {
+        let Ok(ace) = acl.ace(i) else {
             return false;
-        }
-        let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
-        let header = unsafe { (*ace).Header };
-        header.AceType == 0 // ACCESS_ALLOWED_ACE_TYPE
+        };
+        let header = ace.header();
+        header.AceType == ACCESS_ALLOWED_ACE_TYPE
             && header.AceFlags & (INHERITED_ACE | INHERIT_ONLY_ACE) as u8 == 0
             && (!dir || header.AceFlags & INHERITABLE == INHERITABLE)
-            && unsafe { (*ace).Mask } & WRITE_MASK == WRITE_MASK
-            && unsafe { EqualSid(ace_sid(ace), sid) } != 0
+            && ace.allowed_or_denied().is_some_and(|(mask, ace_sid)| {
+                mask & WRITE_MASK == WRITE_MASK && unsafe { EqualSid(ace_sid, sid) } != 0
+            })
     })
 }
 
-fn read_file_dacl(name: &[u16]) -> Result<(*mut ACL, Local)> {
+/// A file's DACL, inside the security descriptor that holds it.
+struct FileDacl {
+    acl: *mut ACL,
+    descriptor: Local,
+}
+
+impl FileDacl {
+    /// `None` for a NULL DACL.
+    fn acl(&self) -> Result<Option<AclRef<'_>>> {
+        // SAFETY: `acl` is null or points into `descriptor`, freed only on drop.
+        unsafe { AclRef::new(self.acl, &self.descriptor) }
+    }
+}
+
+fn read_file_dacl(name: &[u16]) -> Result<FileDacl> {
     let mut acl: *mut ACL = null_mut();
     let mut descriptor = null_mut();
     let err = unsafe {
@@ -230,7 +357,10 @@ fn read_file_dacl(name: &[u16]) -> Result<(*mut ACL, Local)> {
         "GetNamedSecurityInfoW: {}",
         std::io::Error::from_raw_os_error(err as i32)
     );
-    Ok((acl, Local(descriptor)))
+    Ok(FileDacl {
+        acl,
+        descriptor: Local(descriptor),
+    })
 }
 
 /// Give `sid` write access to `path` and (inheritably) everything under it.
@@ -239,9 +369,12 @@ fn grant_write(path: &Path, sid: &Sid) -> Result<()> {
     let name = wide(path)?;
     let dir = path.is_dir();
     let _lock = AclLock::new()?;
-    let (acl, _descriptor) = read_file_dacl(&name)?;
+    let dacl = read_file_dacl(&name)?;
     // A NULL DACL already grants everyone (and every restricting SID) access.
-    if acl.is_null() || has_write_grant(acl, sid.ptr(), dir) {
+    let Some(acl) = dacl.acl()? else {
+        return Ok(());
+    };
+    if has_write_grant(acl, sid.ptr(), dir) {
         return Ok(());
     }
     let entry = EXPLICIT_ACCESS_W {
@@ -261,7 +394,7 @@ fn grant_write(path: &Path, sid: &Sid) -> Result<()> {
         },
     };
     let mut new_acl: *mut ACL = null_mut();
-    let err = unsafe { SetEntriesInAclW(1, &entry, acl, &mut new_acl) };
+    let err = unsafe { SetEntriesInAclW(1, &entry, acl.as_ptr(), &mut new_acl) };
     ensure!(
         err == 0,
         "SetEntriesInAclW {}: {}",
@@ -285,9 +418,10 @@ fn grant_write(path: &Path, sid: &Sid) -> Result<()> {
     if err != 0 {
         // Propagation can fail on a descendant after the root was updated;
         // those descendants just stay read-only inside the sandbox.
-        let (acl, _descriptor) = read_file_dacl(&name)?;
+        let dacl = read_file_dacl(&name)?;
         ensure!(
-            has_write_grant(acl, sid.ptr(), dir),
+            dacl.acl()?
+                .is_some_and(|acl| has_write_grant(acl, sid.ptr(), dir)),
             "SetNamedSecurityInfoW {}: {}",
             path.display(),
             std::io::Error::from_raw_os_error(err as i32)
@@ -323,20 +457,35 @@ impl Dacl {
             "GetSecurityInfo(window station/desktop): {}",
             std::io::Error::from_raw_os_error(err as i32)
         );
-        let _descriptor = Local(descriptor);
-        ensure!(!acl.is_null(), "window station/desktop has no DACL");
-        let bytes = unsafe { (*acl).AclSize as usize };
+        let descriptor = Local(descriptor);
+        // SAFETY: GetSecurityInfo points `acl` into `descriptor`, or leaves it null.
+        let Some(acl) = (unsafe { AclRef::new(acl, &descriptor) })? else {
+            bail!("window station/desktop has no DACL");
+        };
+        let bytes = acl.size();
         let size = bytes + spare;
         ensure!(size <= u16::MAX as usize, "DACL too large");
         let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
         unsafe {
-            std::ptr::copy_nonoverlapping(acl.cast::<u8>(), storage.as_mut_ptr().cast(), bytes);
+            std::ptr::copy_nonoverlapping(
+                acl.as_ptr().cast::<u8>(),
+                storage.as_mut_ptr().cast(),
+                bytes,
+            );
             (*storage.as_mut_ptr().cast::<ACL>()).AclSize = size as u16;
         }
         Ok(Self { handle, storage })
     }
     fn acl(&mut self) -> *mut ACL {
         self.storage.as_mut_ptr().cast()
+    }
+    /// The copy, for reading: a valid ACL (a copy of one, with `AclSize`
+    /// raised to cover the spare room) that `storage` holds.
+    fn view(&self) -> AclRef<'_> {
+        AclRef {
+            ptr: NonNull::from(self.storage.as_slice()).cast(),
+            _owner: PhantomData,
+        }
     }
     fn write(&mut self) -> Result<()> {
         let mut sd: SECURITY_DESCRIPTOR = unsafe { zeroed() };
@@ -462,17 +611,15 @@ fn add_window_ace(handle: HANDLE, sid: PSID, mask: u32) -> Result<()> {
         },
         "CopySid",
     )?;
-    let count = unsafe { (*dacl.acl()).AceCount as u32 };
+    let acl = dacl.view();
     let mut index = u32::MAX; // append
-    for i in 0..count {
-        let mut other = null_mut();
-        check(unsafe { GetAce(dacl.acl(), i, &mut other) }, "GetAce")?;
-        if unsafe { (*other.cast::<ACE_HEADER>()).AceFlags } & INHERITED_ACE as u8 != 0 {
+    for i in 0..acl.ace_count() {
+        if acl.ace(i)?.header().AceFlags & INHERITED_ACE as u8 != 0 {
             index = i;
             break;
         }
     }
-    let revision = unsafe { (*dacl.acl()).AclRevision as u32 };
+    let revision = acl.header().AclRevision as u32;
     check(
         unsafe {
             AddAce(
@@ -491,12 +638,14 @@ fn add_window_ace(handle: HANDLE, sid: PSID, mask: u32) -> Result<()> {
 fn remove_window_aces(handle: HANDLE, sid: PSID) -> Result<()> {
     let mut dacl = Dacl::read(handle, 0)?;
     let mut changed = false;
-    for i in (0..unsafe { (*dacl.acl()).AceCount as u32 }).rev() {
-        let mut ace = null_mut();
-        check(unsafe { GetAce(dacl.acl(), i, &mut ace) }, "GetAce")?;
-        let ace = ace.cast::<ACCESS_ALLOWED_ACE>();
-        let kind = unsafe { (*ace).Header.AceType };
-        if (kind == 0 || kind == 1) && unsafe { EqualSid(ace_sid(ace), sid) } != 0 {
+    // Backwards, so deleting an ACE leaves the indexes still to visit alone.
+    for i in (0..dacl.view().ace_count()).rev() {
+        let ours = dacl
+            .view()
+            .ace(i)?
+            .allowed_or_denied()
+            .is_some_and(|(_, ace_sid)| unsafe { EqualSid(ace_sid, sid) } != 0);
+        if ours {
             check(unsafe { DeleteAce(dacl.acl(), i) }, "DeleteAce")?;
             changed = true;
         }
@@ -545,11 +694,12 @@ fn logon_sid(token: HANDLE) -> Result<Option<Sid>> {
 fn allow_in_default_dacl(token: HANDLE, sids: &[PSID]) -> Result<()> {
     let info = token_info(token, TokenDefaultDacl)?;
     let old = unsafe { (*info.as_ptr().cast::<TOKEN_DEFAULT_DACL>()).DefaultDacl };
+    // SAFETY: the default DACL, if any, is stored in `info` after the pointer.
     // No default DACL: new objects get no DACL and are open to everyone.
-    if old.is_null() {
+    let Some(old) = (unsafe { AclRef::new(old, &info) })? else {
         return Ok(());
-    }
-    let old_size = unsafe { (*old).AclSize as usize };
+    };
+    let old_size = old.size();
     let size = old_size
         + sids
             .iter()
@@ -559,7 +709,7 @@ fn allow_in_default_dacl(token: HANDLE, sids: &[PSID]) -> Result<()> {
     let mut storage = vec![0usize; size.div_ceil(size_of::<usize>())];
     let acl = storage.as_mut_ptr().cast::<ACL>();
     unsafe {
-        std::ptr::copy_nonoverlapping(old.cast::<u8>(), acl.cast::<u8>(), old_size);
+        std::ptr::copy_nonoverlapping(old.as_ptr().cast::<u8>(), acl.cast::<u8>(), old_size);
         (*acl).AclSize = size as u16;
     }
     let revision = unsafe { (*acl).AclRevision as u32 };

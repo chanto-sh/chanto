@@ -35,7 +35,7 @@
   "scripts": {
     "compile": "tsc -p .",
     "watch": "tsc -w -p .",
-    "test": "npm run compile && node --test test/server.test.js",
+    "test": "npm run compile && node --test test/server.test.js test/mention.test.js",
     "package": "npm run compile && npx --yes @vscode/vsce@3 package --skip-license"
   },
   "dependencies": {

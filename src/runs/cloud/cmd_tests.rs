@@ -256,7 +256,7 @@ async fn sign_in_status_orgs_and_sign_out() {
     assert!(out.contains("acme (Acme Inc)"), "{out}");
     assert!(out.ends_with("`chanto run --cloud \"<task>\"`."), "{out}");
     let c = Cloud::signed_in().unwrap();
-    assert_eq!((c.url.as_str(), c.token()), (h.url.as_str(), "crt_new"));
+    assert_eq!((c.url(), c.token()), (h.url.as_str(), "crt_new"));
     // Again, with the provider named: the saved server is reused.
     cmd(&["login", "--provider=google", "--no-open"])
         .await
@@ -422,7 +422,7 @@ async fn runs_are_listed_shown_cancelled_and_followed() {
 
 #[tokio::test]
 async fn following_retries_a_server_that_is_briefly_unreachable() {
-    let c = Cloud::new("http://127.0.0.1:1", "t");
+    let c = Cloud::new("http://127.0.0.1:1", "t").unwrap();
     let e = follow(&c, ID_A, Duration::from_millis(1))
         .await
         .unwrap_err();
@@ -633,7 +633,10 @@ fn finished_runs_say_where_their_work_is() {
         "http://127.0.0.1@evil.com/",
     ] {
         assert!(check_url(url).is_err(), "{url}");
+        // Nor does a client for one exist, so no token can be sent there.
+        assert!(Cloud::new(url, "t").is_err(), "{url}");
     }
+    assert!(Cloud::new("http://example.com", "t").is_err());
     let mut in_text = false;
     for ev in [
         json!({"type": "permission_request", "label": "Bash"}),

@@ -143,15 +143,8 @@ fn parse(args: &[String]) -> Result<Opts> {
         .with_context(|| format!("which server? pass its URL\n{USAGE}"))?
         .trim_end_matches('/')
         .to_string();
-    if !o.url.starts_with("https://")
-        && !o.url.starts_with("http://localhost")
-        && !o.url.starts_with("http://127.0.0.1")
-    {
-        bail!(
-            "{} must use https:// (plain http only for localhost)",
-            o.url
-        );
-    }
+    // By the host the URL parser reads: `http://localhost.evil.com` is remote.
+    super::cloud::check_url(&o.url)?;
     if let Some(m) = &o.mode
         && crate::permissions::Mode::parse(m).is_none()
     {
@@ -1621,13 +1614,15 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/acme/app.git", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let auth = super::super::git::auth_env(&url, "x-access-token", "ghs_secret");
+        // A fresh token per run: nothing else in the output can match it by chance.
+        let token = format!("ghs_{}", uuid::Uuid::new_v4().simple());
+        let auth = super::super::git::auth_env(&url, "x-access-token", &token);
         let u = url.clone();
         let err = tokio::task::spawn_blocking(move || default_branch(&u, &auth))
             .await
             .unwrap()
             .unwrap_err();
-        assert!(!format!("{err:#}").contains("ghs_secret"));
+        assert!(!format!("{err:#}").contains(&token));
         let seen = seen.lock().unwrap();
         assert!(
             seen.iter()
@@ -1637,7 +1632,7 @@ mod tests {
         use base64::Engine as _;
         let expected = format!(
             "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode("x-access-token:ghs_secret")
+            base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"))
         );
         assert!(seen.iter().all(|(_, a)| *a == expected), "{seen:?}");
     }

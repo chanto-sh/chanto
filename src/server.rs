@@ -2007,9 +2007,11 @@ mod tests {
             let path = transcribe_upload(&local, b"RIFF....WAVE", "audio/wav")
                 .await
                 .unwrap();
-            assert!(
-                path.contains("chanto-voice-") && path.ends_with(".wav"),
-                "{path}"
+            let name = std::path::Path::new(&path).file_name().unwrap();
+            assert!(name.to_string_lossy().starts_with("chanto-voice-"));
+            assert_eq!(
+                std::path::Path::new(&path).extension(),
+                Some("wav".as_ref())
             );
             assert!(!std::path::Path::new(&path).exists());
             std::fs::remove_dir_all(dir).unwrap();

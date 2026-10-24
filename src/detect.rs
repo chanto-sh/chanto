@@ -850,14 +850,15 @@ mod tests {
                 "http://localhost:1/v1"
             );
             let text = report.to_string();
-            for secret in [
-                "env-secret-unused",
-                "saved-secret-unused",
-                "configured-secret",
-                "url-secret",
-                "query-secret",
+            // Name which one leaked, never the value.
+            for (what, value) in [
+                ("the unused environment key", "env-secret-unused"),
+                ("the unused saved key", "saved-secret-unused"),
+                ("the configured key", "configured-secret"),
+                ("the password in the base URL", "url-secret"),
+                ("the token in the base URL's query", "query-secret"),
             ] {
-                assert!(!text.contains(secret), "doctor exposed {secret}");
+                assert!(!text.contains(value), "doctor exposed {what}");
             }
             assert_eq!(report["settings"]["model"]["source"], "session selection");
         });
