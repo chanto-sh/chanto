@@ -1,0 +1,39 @@
+# Fuzzes the security-critical parsers (fuzz/: the shell permission check,
+# secret redaction, URL checks) with ClusterFuzzLite for an hour every night,
+# far longer than the few minutes each pull request gets (fuzz.yml). Batch
+# mode keeps a growing corpus between runs as an artifact, and the pull
+# request runs start from it. A crash fails the run, with the crashing input
+# attached to it.
+name: fuzz-batch
+on:
+  schedule:
+    - cron: "37 6 * * *"
+  workflow_dispatch:
+concurrency:
+  group: fuzz-batch
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  batch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # `actions: read` lets ClusterFuzzLite fetch the corpus from earlier runs.
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Build fuzzers
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          sanitizer: address
+      - name: Run fuzzers
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        with:
+          language: rust
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          fuzz-seconds: 3600
+          mode: batch
+          sanitizer: address
+          output-sarif: false
