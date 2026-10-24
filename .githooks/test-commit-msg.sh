@@ -9,15 +9,35 @@ tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
 failures=0
 
+# The format checks, with the sign-off requirement off (as CI runs it on
+# titles); signed() below covers the sign-off.
 check() {
     want=$1
     printf '%b' "$2" >"$tmp"
-    if sh "$hook" "$tmp" >/dev/null 2>&1; then got=pass; else got=fail; fi
+    if REQUIRE_SIGNOFF=0 sh "$hook" "$tmp" >/dev/null 2>&1; then got=pass; else got=fail; fi
     if [ "$got" != "$want" ]; then
         printf 'FAIL: expected %s, got %s: %s\n' "$want" "$got" "$(head -n 1 "$tmp")"
         failures=$((failures + 1))
     fi
 }
+
+# A commit as git hands it to the hook: the sign-off is required.
+signed() {
+    want=$1
+    printf '%b' "$2" >"$tmp"
+    if sh "$hook" "$tmp" >/dev/null 2>&1; then got=pass; else got=fail; fi
+    if [ "$got" != "$want" ]; then
+        printf 'FAIL (sign-off): expected %s, got %s: %s\n' "$want" "$got" "$(printf '%b' "$2" | tail -n 1)"
+        failures=$((failures + 1))
+    fi
+}
+
+signed pass 'fix: add retries\n\nSigned-off-by: Ada Lovelace <ada@example.com>'
+signed pass 'fix: add retries\n\nWhy.\n\nSigned-off-by: Ada Lovelace <ada@example.com>\n# a comment git strips'
+signed fail 'fix: add retries'
+signed fail 'fix: add retries\n\nSigned-off-by: Ada Lovelace'
+signed fail 'fix: add retries\n\nsigned-off-by ada@example.com'
+signed pass "Merge branch 'main' into topic"
 
 check pass 'fix(sandbox): allow writes to the cargo registry cache'
 check pass 'feat!: drop the --legacy flag\n\nBREAKING CHANGE: use --mode instead.'

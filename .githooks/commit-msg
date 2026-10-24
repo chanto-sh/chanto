@@ -1,7 +1,9 @@
 #!/bin/sh
-# Checks a commit message: Conventional Commits format, and no AI attribution
-# (house rule). CI runs this same script on pull request titles, since squash
-# merges use the title as the commit subject.
+# Checks a commit message: Conventional Commits format, no AI attribution
+# (house rule), and a Developer Certificate of Origin sign-off
+# (`Signed-off-by:`, added by `git commit -s`). CI runs this same script on
+# pull request titles, since squash merges use the title as the commit
+# subject; titles carry no sign-off, so CI sets REQUIRE_SIGNOFF=0 for them.
 #
 #   git config core.hooksPath .githooks     # once per clone
 #   .githooks/commit-msg <message-file>     # what git and CI call
@@ -57,6 +59,16 @@ esac
 case "$summary" in
     [A-Z][a-z]*) fail "start the summary in lowercase, as an imperative (\"add\", not \"Added\")" ;;
 esac
+
+if [ "${REQUIRE_SIGNOFF:-1}" != 0 ] && ! printf '%s\n' "$msg" | grep -qE '^Signed-off-by: .+ <[^>]+>$'; then
+    cat >&2 <<'EOF'
+error: the commit isn't signed off. Commit with `git commit -s`, which adds
+  Signed-off-by: Your Name <you@example.com>
+to certify the Developer Certificate of Origin (https://developercertificate.org).
+See CONTRIBUTING.md#signing-off-commits.
+EOF
+    exit 1
+fi
 
 # A body, if any, is separated from the subject by one blank line.
 second=$(printf '%s\n' "$msg" | sed -n '2p')
