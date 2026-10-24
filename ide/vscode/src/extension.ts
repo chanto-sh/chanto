@@ -5,6 +5,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { mentionToken } from "./mention";
 import { IdeServer } from "./server";
 
 const EMPTY_SCHEME = "chanto-empty";
@@ -192,14 +193,18 @@ function updateDiffContext() {
 function insertMention() {
   const ed = vscode.window.activeTextEditor;
   if (!ed) return;
-  const rel = vscode.workspace.asRelativePath(ed.document.uri, false).replace(/ /g, "\\ ");
+  const mention = mentionToken(vscode.workspace.asRelativePath(ed.document.uri, false));
+  if (!mention) {
+    void vscode.window.showWarningMessage("This file's name can't be typed as an @-mention.");
+    return;
+  }
   const term = vscode.window.terminals.find((t) => t.name === "chanto") ?? vscode.window.activeTerminal;
   if (!term) {
     void vscode.window.showWarningMessage("No Chanto terminal open. Run 'Chanto: Open in Terminal' first.");
     return;
   }
   term.show();
-  term.sendText(`@${rel} `, false);
+  term.sendText(`${mention} `, false);
 }
 
 function debounce(fn: () => void, ms: number): () => void {
