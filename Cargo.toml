@@ -28,6 +28,8 @@ include = [
 # types the CLI shares with the hosted service.
 [workspace]
 members = [".", "desktop", "proto"]
+# fuzz/ builds on nightly with cargo-fuzz, as a workspace of its own.
+exclude = ["fuzz"]
 
 # Metadata shared by every workspace crate; each inherits a field with
 # `<field>.workspace = true`. Version stays per-crate because they differ.
@@ -36,6 +38,10 @@ edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/chanto-sh/chanto.git"
+
+[features]
+# Exposes `chanto::fuzzing`, the entry points the fuzz targets in fuzz/ call.
+fuzzing = []
 
 [dependencies]
 chanto-proto = { path = "proto", version = "0.1.0" }

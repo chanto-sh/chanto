@@ -1,0 +1,1 @@
+ls -la && cat Cargo.toml | head -5

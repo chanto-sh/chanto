@@ -47,6 +47,10 @@ ships.
 
 | Version | Issue | Found by |
 |---|---|---|
+| v0.1.4 | Shell commands could be hidden from the permission check after a heredoc end marker bash doesn't accept (such as one with leading spaces), or past characters that end a word for the check but not for bash | Fuzzing |
+| v0.1.4 | A cloud metadata address written with a tab, `%`-escapes, a trailing dot or control characters skipped the approval that address needs | Fuzzing |
+| v0.1.4 | Hosts like `localhost.evil.com` or `localhost@evil.com` counted as local, so plain HTTP was allowed to them | Fuzzing |
+| v0.1.4 | GitLab, Slack, Google and SendGrid tokens ending in `-` were only partly redacted | Fuzzing |
 | v0.1.1 | Shell commands could be hidden from the permission check by a quote in a comment, a heredoc body or an escape | Internal security review |
 
 ## Supported versions

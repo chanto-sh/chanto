@@ -1,0 +1,6 @@
+cat <<"EOF" <<EOF2
+a
+EOF
+b
+EOF2
+ls

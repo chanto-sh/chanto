@@ -352,6 +352,8 @@ pub fn refresh(root: &Path) {
 }
 
 /// Token formats worth masking wherever they appear: (label, regex, group to mask).
+/// A token whose alphabet has `-` can end in one, where `\b` can't match, so
+/// those end at the first character outside the alphabet instead.
 fn patterns() -> &'static [(&'static str, Regex, usize)] {
     static P: OnceLock<Vec<(&'static str, Regex, usize)>> = OnceLock::new();
     P.get_or_init(|| {
@@ -361,17 +363,17 @@ fn patterns() -> &'static [(&'static str, Regex, usize)] {
             p("AWS_ACCESS_KEY", r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", 0),
             p("AWS_SECRET", r#"(?i)aws_?secret_?access_?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})"#, 1),
             p("GITHUB_TOKEN", r"\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})\b", 0),
-            p("GITLAB_TOKEN", r"\bglpat-[A-Za-z0-9_-]{20,}\b", 0),
-            p("SLACK_TOKEN", r"\bxox[abposr]-[A-Za-z0-9-]{10,}\b", 0),
+            p("GITLAB_TOKEN", r"\bglpat-[A-Za-z0-9_-]{20,}", 0),
+            p("SLACK_TOKEN", r"\bxox[abposr]-[A-Za-z0-9-]{10,}", 0),
             p("SLACK_WEBHOOK", r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+", 0),
             p("STRIPE_KEY", r"\b(sk|rk)_(live|test)_[A-Za-z0-9]{16,}\b", 0),
             p("ANTHROPIC_KEY", r"\bsk-ant-[A-Za-z0-9_-]{20,}", 0),
             p("OPENAI_KEY", r"\bsk-(proj-|svcacct-)?[A-Za-z0-9_-]{32,}", 0),
-            p("GOOGLE_API_KEY", r"\bAIza[0-9A-Za-z_-]{35}\b", 0),
+            p("GOOGLE_API_KEY", r"\b(AIza[0-9A-Za-z_-]{35})(?:[^0-9A-Za-z_-]|$)", 1),
             p("NPM_TOKEN", r"\bnpm_[A-Za-z0-9]{36}\b", 0),
             p("PYPI_TOKEN", r"\bpypi-AgE[A-Za-z0-9_-]{50,}", 0),
             p("HF_TOKEN", r"\bhf_[A-Za-z]{34,}\b", 0),
-            p("SENDGRID_KEY", r"\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b", 0),
+            p("SENDGRID_KEY", r"\b(SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)", 1),
             p("DIGITALOCEAN_TOKEN", r"\bdop_v1_[a-f0-9]{64}\b", 0),
             p("JWT", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", 0),
             p("URL_PASSWORD", r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@", 1),
@@ -1054,6 +1056,11 @@ mod tests {
             "AKIAIOSFODNN7EXAMPLE",
             "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB",
             "xoxb-1234567890-abcdefghij",
+            // Formats whose last character can be `-`.
+            "xoxb-123456789-",
+            "glpat-abcdefghij012345678-",
+            "AIzaSyA0123456789abcdefghijklmnopqrstu-",
+            "SG.abcdefghij0123456789ab.abcdefghij0123456789abcdefghij0123456789ab-",
             "sk-ant-api03-abcdefghijklmnopqrstuv",
             "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
             "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",

@@ -242,11 +242,14 @@ fn api_error(status: reqwest::StatusCode, body: &[u8], url: &str, what: &str) ->
     anyhow::anyhow!("Chanto cloud: {}{hint}", e.message)
 }
 
-fn check_url(url: &str) -> Result<()> {
-    if !url.starts_with("https://")
-        && !url.starts_with("http://localhost")
-        && !url.starts_with("http://127.0.0.1")
-    {
+pub(crate) fn check_url(url: &str) -> Result<()> {
+    // Judge the host the request will go to, as the URL parser reads it:
+    // `http://localhost.evil.com` and `http://localhost@evil.com` start like
+    // a local address but aren't one.
+    let local = reqwest::Url::parse(url).is_ok_and(|u| {
+        u.scheme() == "http" && matches!(u.host_str(), Some("localhost" | "127.0.0.1"))
+    });
+    if !url.starts_with("https://") && !local {
         bail!("{url} must use https:// (plain http only for localhost)");
     }
     Ok(())

@@ -1,0 +1,2 @@
+cat README.md # <<EOF
+rm -rf target

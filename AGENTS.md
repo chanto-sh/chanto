@@ -7,6 +7,7 @@
 - Lint: `cargo clippy --workspace --all-targets` must stay warning-free (CI runs it with `-D warnings`)
 - Debug a tool without a model: `chanto --run-tool <Tool> '<json args>'`
 - Inspect prompt size: `chanto --dump-prompt`; classifier check: `chanto --classify <Tool> '<json>' "<request>"`
+- Fuzz: `fuzz/` is its own crate (nightly + `cargo install cargo-fuzz`); from there, `cargo +nightly fuzz run <target> corpus/<target> seeds/<target>` with target `shell_permission`, `redact` or `url_checks`. CI fuzzes pull requests with ClusterFuzzLite (`.clusterfuzzlite/`). Add a minimized crash to `fuzz/seeds/<target>/` and a unit test next to the fix
 - Benchmarks: a separate repository, [chanto-sh/benchmarks](https://github.com/chanto-sh/benchmarks); clone it next to this one and run `python3 run.py --agents chanto,opencode,claude` there (it uses `../chanto/target/release/chanto`)
 
 ## Architecture
