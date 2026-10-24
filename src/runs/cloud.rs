@@ -123,7 +123,7 @@ impl Cloud {
             return Ok(Cloud::new(&url, &token));
         }
         match saved {
-            Some((url, token)) => Ok(Cloud::new(&url, &token)),
+            Some((url, token)) => Ok(Cloud::new(&url, token.expose())),
             None => bail!(
                 "You're not signed in to Chanto cloud; run `chanto cloud login` (or set CHANTO_CLOUD_TOKEN).\n{SIGN_UP}"
             ),
@@ -426,7 +426,7 @@ fn save_login(url: &str, token: &str) -> Result<()> {
         CREDENTIAL,
         crate::auth::Credential::Remote {
             url: url.to_string(),
-            token: token.to_string(),
+            token: token.into(),
         },
     )
 }
@@ -619,7 +619,9 @@ async fn logout_cmd() -> Result<String> {
     let Some(crate::auth::Credential::Remote { url, token }) = crate::auth::get(CREDENTIAL) else {
         return Ok("You're not signed in to Chanto cloud.".into());
     };
-    let revoked = Cloud::new(&url, &token).delete("/v1/auth/token").await;
+    let revoked = Cloud::new(&url, token.expose())
+        .delete("/v1/auth/token")
+        .await;
     crate::auth::remove(CREDENTIAL)?;
     Ok(match revoked {
         Ok(_) => format!("Signed out of Chanto cloud ({url}); the token is revoked."),

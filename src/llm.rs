@@ -676,7 +676,7 @@ pub fn builtin_provider(name: &str, model: &str) -> Option<Provider> {
     // explicit `bedrock/<model>` always gets a provider and a precise error.
     if h.kind.is_cloud() {
         let key = match crate::auth::get(h.id) {
-            Some(crate::auth::Credential::ApiKey { key }) => Some(key),
+            Some(crate::auth::Credential::ApiKey { key }) => Some(key.expose().to_string()),
             _ => h
                 .env
                 .iter()

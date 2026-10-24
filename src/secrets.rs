@@ -43,6 +43,45 @@ impl Default for SecretsConfig {
     }
 }
 
+/// A credential held in memory: an API key, an OAuth token, an account token.
+/// `Debug` shows only that it is set, so a struct holding one can be logged
+/// or debug-printed without leaking it, and there is no `Display` to format
+/// it into text by accident. [`Secret::expose`] is the one way to the value,
+/// for where it has to go (a request header, the keychain). It serializes as
+/// the plain string, so `auth.json` keeps its format.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Secret(String);
+
+impl Secret {
+    /// The value, for sending or storing it; never for logs or messages.
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for Secret {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for Secret {
+    fn from(s: &str) -> Self {
+        Self(s.to_string())
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(if self.0.is_empty() {
+            "Secret(\"\")"
+        } else {
+            "Secret(***)"
+        })
+    }
+}
+
 /// Names of variables (and `.env` keys) that hold secrets.
 pub fn is_secret_name(name: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
@@ -1046,6 +1085,28 @@ mod tests {
         );
         assert_eq!(labels, vec!["DB_PASSWORD", "STRIPE_KEY"]);
         with_values(&[]);
+    }
+
+    #[test]
+    fn a_secret_debug_prints_masked_and_serializes_plain() {
+        let cred = crate::auth::Credential::Oauth {
+            access: "at-123".into(),
+            refresh: "rt-456".into(),
+            expires: 1,
+            client_id: "app".into(),
+        };
+        let shown = format!("{cred:?}");
+        assert!(shown.contains("Secret(***)") && shown.contains("app"));
+        assert!(!shown.contains("at-123") && !shown.contains("rt-456"));
+        assert_eq!(format!("{:?}", Secret::from("")), "Secret(\"\")");
+        // `auth.json` and the keychain keep the plain value.
+        let json = serde_json::to_value(&cred).unwrap();
+        assert_eq!(json["access"], "at-123");
+        let back: crate::auth::Credential = serde_json::from_value(json).unwrap();
+        let crate::auth::Credential::Oauth { refresh, .. } = back else {
+            panic!("not an OAuth credential");
+        };
+        assert_eq!(refresh.expose(), "rt-456");
     }
 
     #[test]

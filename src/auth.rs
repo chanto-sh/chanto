@@ -22,6 +22,7 @@
 
 mod keychain;
 
+use crate::secrets::Secret;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,11 +34,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Credential {
     ApiKey {
-        key: String,
+        key: Secret,
     },
     Oauth {
-        access: String,
-        refresh: String,
+        access: Secret,
+        refresh: Secret,
         expires: u64,
         client_id: String,
     },
@@ -46,7 +47,7 @@ pub enum Credential {
     /// (`chanto cloud login`), stored as `cloud`.
     Remote {
         url: String,
-        token: String,
+        token: Secret,
     },
     /// The real credential is in the OS keychain ([`keychain`]); only written
     /// when [`keychain::enabled`], and always resolved back on load.
@@ -120,7 +121,7 @@ pub fn remotes() -> BTreeMap<String, (String, String)> {
         .into_iter()
         .filter_map(|(k, c)| match (k.strip_prefix("remote:"), c) {
             (Some(name), Credential::Remote { url, token }) => {
-                Some((name.to_string(), (url, token)))
+                Some((name.to_string(), (url, token.expose().to_string())))
             }
             _ => None,
         })
@@ -345,8 +346,8 @@ fn oauth_from(v: &Value, client_id: &str) -> Result<Credential> {
     }
     // Refresh three minutes early so a request never starts with a token about to expire.
     Ok(Credential::Oauth {
-        access,
-        refresh,
+        access: access.into(),
+        refresh: refresh.into(),
         expires: now() + expires_in.saturating_sub(180),
         client_id: client_id.to_string(),
     })
@@ -432,17 +433,17 @@ pub async fn token(provider: &str) -> Result<String> {
     let _g = LOCK.lock().await;
     let key = active_key(&load_all(), provider);
     match load_all().remove(&key) {
-        Some(Credential::ApiKey { key }) => Ok(key),
+        Some(Credential::ApiKey { key }) => Ok(key.expose().to_string()),
         Some(Credential::Oauth {
             access, expires, ..
-        }) if expires > now() => Ok(access),
+        }) if expires > now() => Ok(access.expose().to_string()),
         Some(Credential::Oauth {
             refresh, client_id, ..
         }) if provider == "chatgpt" => {
             let http = crate::http::client();
             let v = token_request(
                 &http,
-                &[("grant_type", "refresh_token"), ("client_id", &client_id), ("refresh_token", &refresh), ("resource", OAI_RESOURCE)],
+                &[("grant_type", "refresh_token"), ("client_id", &client_id), ("refresh_token", refresh.expose()), ("resource", OAI_RESOURCE)],
             )
             .await
             .context("refreshing the ChatGPT sign-in (run `chanto login chatgpt` again if this keeps failing)")?;
@@ -450,7 +451,7 @@ pub async fn token(provider: &str) -> Result<String> {
             let Credential::Oauth { access, .. } = &c else {
                 unreachable!()
             };
-            let access = access.clone();
+            let access = access.expose().to_string();
             set(&key, c)?;
             Ok(access)
         }
@@ -495,9 +496,7 @@ pub async fn login_openrouter(
     set_as(
         "openrouter",
         account,
-        Credential::ApiKey {
-            key: key.to_string(),
-        },
+        Credential::ApiKey { key: key.into() },
     )
 }
 
@@ -667,7 +666,7 @@ pub async fn cli(args: &[String]) -> Result<String> {
                 if h.id == "vertex" {
                     bail!("{}", VERTEX_LOGIN);
                 }
-                set_as(h.id, account, Credential::ApiKey { key })?;
+                set_as(h.id, account, Credential::ApiKey { key: key.into() })?;
                 return Ok(format!("Saved key for {}{as_note}.", h.id));
             }
             match h.id {
@@ -686,7 +685,7 @@ pub async fn cli(args: &[String]) -> Result<String> {
                     if key.is_empty() {
                         bail!("no key entered");
                     }
-                    set_as(h.id, account, Credential::ApiKey { key })?;
+                    set_as(h.id, account, Credential::ApiKey { key: key.into() })?;
                 }
             }
             if let Some(a) = account {
@@ -724,7 +723,9 @@ mod tests {
             },
         )
         .unwrap();
-        assert!(matches!(get("groq"), Some(Credential::ApiKey { key }) if key == "gsk_test"));
+        assert!(
+            matches!(get("groq"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_test")
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -773,7 +774,9 @@ mod tests {
             "the secret must not be in the file: {raw}"
         );
         assert!(raw.contains("keychain"), "a placeholder is written: {raw}");
-        assert!(matches!(get("groq"), Some(Credential::ApiKey { key }) if key == "gsk_secret"));
+        assert!(
+            matches!(get("groq"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_secret")
+        );
         assert!(remove("groq").unwrap() && get("groq").is_none());
         // SAFETY: test-only, serialized by TEST_HOME_LOCK.
         unsafe {
@@ -804,7 +807,7 @@ mod tests {
         // SAFETY: test-only, serialized by TEST_HOME_LOCK.
         unsafe { std::env::set_var("CHANTO_HOME", &d) };
         assert!(
-            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key == "gsk_personal")
+            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_personal")
         );
         assert_eq!(
             account_label("groqtest"),
@@ -847,7 +850,9 @@ mod tests {
                 .contains("default, work")
         );
         switch_account("groqtest", "work").unwrap();
-        assert!(matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key == "gsk_work"));
+        assert!(
+            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_work")
+        );
         assert_eq!(token("groqtest").await.unwrap(), "gsk_work");
         assert_eq!(account_label("groqtest").as_deref(), Some("work"));
         // No table in the failure messages: if it is wrong it may hold a key.
@@ -856,7 +861,7 @@ mod tests {
         assert!(!table.contains("gsk_"), "the table shows a key");
         switch_account("groqtest", DEFAULT_ACCOUNT).unwrap();
         assert!(
-            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key == "gsk_personal")
+            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_personal")
         );
         let msg = cli(&["logout".into(), "groqtest".into(), "--as=work".into()])
             .await
