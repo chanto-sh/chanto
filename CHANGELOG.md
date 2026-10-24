@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.1.4 (October 23, 2026)
+
+- **Security: commands could slip past the permission check.** A heredoc closed by a marker bash doesn't accept (such as one indented with spaces), or characters that ended a word for Chanto's check but not for bash, let a command after them run without a prompt. Chanto now ends heredocs and words exactly where bash does. Please update: `chanto upgrade`, `brew upgrade chanto`, `npm i -g @chanto/cli` or `cargo install chanto --locked`.
+- **Security: the cloud metadata address could skip its approval.** `169.254.169.254` written with a tab, `%`-escapes, a trailing dot or control characters wasn't recognised, so a request to it went through without asking. Chanto now checks the address as the URL parser reads it.
+- **Security:** hosts like `localhost.evil.com` no longer count as local for plain HTTP, and GitLab, Slack, Google and SendGrid tokens ending in `-` are now redacted whole. These and the fixes above were found by fuzzing, which now runs on every pull request.
+- **Faster and lighter.** About a third less CPU per turn and about 15% less peak memory in our overhead benchmark: Chanto no longer starts helper processes it doesn't need (`defaults`, `caffeinate`, git outside a repository), stops rewriting and re-reading files on every model call, sends requests without building a copy of the conversation first, and skips work whose result hasn't changed.
+- **Releases** now carry each build's SLSA provenance as a `.intoto.jsonl` file next to the archive.
+
 ## v0.1.3 (October 23, 2026)
 
 - **Windows: unchanged `--worktree` sessions are cleaned up again.** Chanto exited while still inside the worktree, and a file held open for a moment could make the removal fail, so an untouched worktree was kept and reported as having changes. Chanto now leaves the worktree first and retries; if removal still fails, it says so rather than claiming there are changes.
