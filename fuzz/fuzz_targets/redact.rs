@@ -38,11 +38,11 @@ struct Input {
 }
 
 /// `n` characters from `alphabet`, driven by the fuzzer's bytes.
-fn chars(body: &[u8], alphabet: &[u8], n: usize, salt: usize) -> String {
+fn chars(body: &[u8], alphabet: &[u8], n: usize, offset: usize) -> String {
     (0..n)
         .map(|i| {
             let b = body
-                .get((i + salt) % body.len().max(1))
+                .get((i + offset) % body.len().max(1))
                 .copied()
                 .unwrap_or(0) as usize;
             alphabet[(b + i * 7) % alphabet.len()] as char
@@ -50,8 +50,9 @@ fn chars(body: &[u8], alphabet: &[u8], n: usize, salt: usize) -> String {
         .collect()
 }
 
-/// A credential to embed, and the part of it that must not survive.
-fn secret(input: &Input) -> (String, String) {
+/// A synthetic credential to plant in the text, and the part of it that
+/// must not survive redaction.
+fn planted(input: &Input) -> (String, String) {
     let b = &input.body;
     let x = input.extra_len as usize % 24;
     let whole = |s: String| (s.clone(), s);
@@ -124,7 +125,7 @@ fuzz_target!(|input: Input| {
     let _ = chanto::fuzzing::redact(&input.before);
     let _ = chanto::fuzzing::contains_secret(&input.before);
 
-    let (embedded, core) = secret(&input);
+    let (embedded, core) = planted(&input);
     let sep = |i: u8| SEPARATORS[i as usize % SEPARATORS.len()];
     let text = format!(
         "{}{}{embedded}{}{}",

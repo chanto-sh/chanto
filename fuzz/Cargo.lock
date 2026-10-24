@@ -389,7 +389,7 @@ dependencies = [
 
 [[package]]
 name = "chanto"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -406,6 +406,7 @@ dependencies = [
  "dirs",
  "dunce",
  "futures",
+ "getrandom 0.4.3",
  "globset",
  "htmd",
  "ignore",
