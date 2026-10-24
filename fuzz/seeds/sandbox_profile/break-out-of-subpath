@@ -1,0 +1,1 @@
+x")) (allow file-write* (subpath "/")) (allow file-write* (literal "y

@@ -1,9 +1,9 @@
 # Fuzzes the security-critical parsers (fuzz/: the shell permission check,
-# secret redaction, URL checks) with ClusterFuzzLite for an hour every night,
-# far longer than the few minutes each pull request gets (fuzz.yml). Batch
-# mode keeps a growing corpus between runs as an artifact, and the pull
-# request runs start from it. A crash fails the run, with the crashing input
-# attached to it.
+# secret redaction, URL checks, the Seatbelt profile) with ClusterFuzzLite for
+# an hour every night, far longer than the few minutes each pull request gets
+# (fuzz.yml). Batch mode keeps a growing corpus between runs as an artifact,
+# and the pull request runs start from it. A crash fails the run, with the
+# crashing input attached to it.
 name: fuzz-batch
 on:
   schedule:

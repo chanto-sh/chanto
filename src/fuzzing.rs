@@ -4,6 +4,7 @@
 //! functions becoming public API.
 
 use std::borrow::Cow;
+use std::path::{Path, PathBuf};
 
 /// [`crate::permissions::normalize_shell`].
 pub fn normalize_shell(cmd: &str) -> String {
@@ -65,4 +66,27 @@ pub fn in_project(path: &str, cwd: &std::path::Path, root: &std::path::Path) -> 
 /// ([`crate::util::resolve`]).
 pub fn tool_path(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
     crate::util::resolve(cwd, path)
+}
+
+/// The macOS Seatbelt profile for these writable paths, home and config
+/// ([`crate::tools::bash::sandbox_profile_with_paths`]).
+pub fn seatbelt_profile(
+    writable: &[String],
+    home: &Path,
+    cfg: &crate::config::SandboxConfig,
+    proxy_port: Option<u16>,
+) -> String {
+    crate::tools::bash::sandbox_profile_with_paths(writable, home, cfg, proxy_port)
+}
+
+/// The paths inside writable trees whose writes the profile denies
+/// ([`crate::tools::bash::write_deny_paths`]).
+pub fn seatbelt_write_denies(cwd: &Path, home: &Path) -> Vec<PathBuf> {
+    crate::tools::bash::write_deny_paths(cwd, home)
+}
+
+/// A path resolved as a deny rule needs it: symlinks followed as far as the
+/// path exists ([`crate::permissions::normalize`]).
+pub fn resolve_for_deny(p: &Path) -> PathBuf {
+    crate::permissions::normalize(p)
 }
