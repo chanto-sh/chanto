@@ -2055,6 +2055,13 @@ mod tests {
     async fn acp_fs_is_confined_to_the_working_directory() {
         let dir = std::env::temp_dir().join(format!("acp-fs-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&dir).unwrap();
+        // Links out of it: `..` after one leaves from its target, and writing
+        // through a dangling one creates its target.
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("/usr/bin", dir.join("sys")).unwrap();
+            std::os::unix::fs::symlink("/usr/chanto-acp-nope", dir.join("dangle")).unwrap();
+        }
         // A write inside the working directory is allowed.
         write_text_file(
             &dir,
@@ -2069,6 +2076,10 @@ mod tests {
             "/etc/chanto-acp-nope",
             "../../etc/passwd",
             "/Users/x/.ssh/id_rsa",
+            #[cfg(unix)]
+            "sys/../chanto-acp-nope",
+            #[cfg(unix)]
+            "dangle",
         ] {
             let w = write_text_file(&dir, &serde_json::json!({"path": p, "content": "x"})).await;
             assert!(w.is_err(), "write {p} should be refused");
