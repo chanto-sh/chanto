@@ -776,11 +776,10 @@ async fn deepseek_reasoning_content_goes_back_with_its_assistant_turn() {
         "{sent}"
     );
     // Another model never gets this model's reasoning.
-    assert!(
-        Provider::openai_messages(&history, "other-model")[1]
-            .get("reasoning_content")
-            .is_none()
-    );
+    let fields = json!({});
+    let other =
+        serde_json::to_value(Provider::openai_body(&fields, &history, "other-model")).unwrap();
+    assert!(other["messages"][1].get("reasoning_content").is_none());
 }
 
 #[tokio::test]

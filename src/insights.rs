@@ -46,32 +46,64 @@ pub struct CacheBreak {
     pub tokens: u64,
 }
 
+/// Hashes the whole request on every call to spot a changed prefix, so it's
+/// CRC-32 (hardware-accelerated, many times SipHash's speed) with the byte
+/// count beside it. Not kept anywhere; a collision would only hide one cache
+/// break from the stats.
+#[derive(Default)]
+struct PrefixHasher {
+    crc: crc32fast::Hasher,
+    len: u64,
+}
+
+impl std::hash::Hasher for PrefixHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        self.crc.update(bytes);
+        self.len += bytes.len() as u64;
+    }
+    fn finish(&self) -> u64 {
+        (self.len << 32) ^ u64::from(self.crc.clone().finalize())
+    }
+}
+
 fn hash<T: std::hash::Hash>(v: &T) -> u64 {
     use std::hash::Hasher;
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = PrefixHasher::default();
     v.hash(&mut h);
     h.finish()
 }
 
 fn msg_hash(m: &Message) -> u64 {
-    let calls: Vec<String> = m
-        .tool_calls
-        .iter()
-        .map(|c| format!("{}{}", c.name, c.arguments))
-        .collect();
+    use std::hash::Hasher;
+    use std::io::Write;
+    // Streamed into the hasher rather than formatted into strings first:
+    // every message is hashed again on every call.
+    struct Feed<'a>(&'a mut PrefixHasher);
+    impl Write for Feed<'_> {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.write(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut h = PrefixHasher::default();
+    let _ = write!(Feed(&mut h), "{:?}\0", m.role);
+    h.write(m.content.as_bytes());
+    h.write_u8(0);
+    for c in &m.tool_calls {
+        h.write(c.name.as_bytes());
+        let _ = serde_json::to_writer(Feed(&mut h), &c.arguments);
+        h.write_u8(0);
+    }
+    h.write_usize(m.images.len());
     // Replayed reasoning goes out with the message, so a change to it moves
     // the prefix as much as a change to the text does.
-    let items = m
-        .provider_items
-        .as_ref()
-        .map(|p| serde_json::to_string(&p.items).unwrap_or_default());
-    hash(&(
-        format!("{:?}", m.role),
-        &m.content,
-        calls,
-        m.images.len(),
-        items,
-    ))
+    if let Some(p) = &m.provider_items {
+        let _ = serde_json::to_writer(Feed(&mut h), &p.items);
+    }
+    h.finish()
 }
 
 fn tokens_of(s: &str) -> u64 {

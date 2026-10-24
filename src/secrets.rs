@@ -512,13 +512,65 @@ pub fn redact_messages(msgs: &mut [crate::llm::Message]) {
     }
 }
 
-/// Reuse content redaction for unchanged messages. Keep exact originals rather
-/// than hashes: a collision must never let a secret through. Tool arguments
-/// are small and mutable, so they still go through the regular redactor.
+/// Reuse redaction for unchanged messages. A message counts as unchanged
+/// only when its length and a GMAC tag of its content match: a keyed MAC
+/// (AES-256-GCM over the content as associated data, under a random key that
+/// never leaves the process), so no input can be crafted to look unchanged,
+/// and the chance of two different messages matching is under 2^-100 even
+/// for megabytes of text. That keeps a 16-byte tag per message instead of a
+/// copy of the whole conversation. Tool-call arguments are small, so they're
+/// compared with their exact originals.
 #[derive(Default)]
 pub struct MessageRedactor {
     state: Option<Arc<Redactor>>,
-    contents: Vec<(String, Option<String>)>,
+    contents: Vec<Redacted>,
+}
+
+/// One message as last sent: what identifies its content, and its content
+/// and tool-call arguments redacted, when that differs.
+struct Redacted {
+    content: Seen,
+    redacted: Option<String>,
+    arguments: Vec<(serde_json::Value, Option<serde_json::Value>)>,
+}
+
+#[derive(PartialEq)]
+enum Seen {
+    Tag(usize, [u8; 16]),
+    /// No key could be made: the content itself, compared exactly.
+    Exact(String),
+}
+
+impl Seen {
+    fn of(content: &str) -> Self {
+        use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
+        static KEY: std::sync::OnceLock<Option<LessSafeKey>> = std::sync::OnceLock::new();
+        let key = KEY.get_or_init(|| {
+            // Straight from the OS: aws-lc's own generator spends ~30 ms of
+            // CPU seeding itself on first use, which a plain-HTTP session
+            // otherwise never pays.
+            let mut k = [0u8; 32];
+            getrandom::fill(&mut k).ok()?;
+            Some(LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &k).ok()?))
+        });
+        // The fixed nonce is safe here: a GCM nonce must not repeat when
+        // tags are seen by someone who could forge one, and these tags never
+        // leave this process.
+        key.as_ref()
+            .and_then(|key| {
+                key.seal_in_place_separate_tag(
+                    Nonce::assume_unique_for_key([0; 12]),
+                    Aad::from(content.as_bytes()),
+                    &mut [],
+                )
+                .ok()
+            })
+            .and_then(|tag| tag.as_ref().try_into().ok())
+            .map_or_else(
+                || Seen::Exact(content.to_owned()),
+                |t| Seen::Tag(content.len(), t),
+            )
+    }
 }
 
 impl MessageRedactor {
@@ -539,23 +591,47 @@ impl MessageRedactor {
         }
         self.contents.truncate(msgs.len());
         for (i, m) in msgs.iter_mut().enumerate() {
-            if i >= self.contents.len() || self.contents[i].0 != m.content {
+            let seen = Seen::of(&m.content);
+            if i >= self.contents.len() || self.contents[i].content != seen {
                 let redacted = match redact(&m.content) {
                     Cow::Owned(s) => Some(s),
                     Cow::Borrowed(_) => None,
                 };
-                let entry = (m.content.clone(), redacted);
+                let entry = Redacted {
+                    content: seen,
+                    redacted,
+                    arguments: Vec::new(),
+                };
                 if i < self.contents.len() {
                     self.contents[i] = entry;
                 } else {
                     self.contents.push(entry);
                 }
             }
-            if let Some(s) = &self.contents[i].1 {
+            let entry = &mut self.contents[i];
+            if let Some(s) = &entry.redacted {
                 m.content.clone_from(s);
             }
-            for c in &mut m.tool_calls {
-                redact_value(&mut c.arguments);
+            entry.arguments.truncate(m.tool_calls.len());
+            for (j, c) in m.tool_calls.iter_mut().enumerate() {
+                if entry
+                    .arguments
+                    .get(j)
+                    .is_none_or(|(orig, _)| *orig != c.arguments)
+                {
+                    let mut redacted = c.arguments.clone();
+                    redact_value(&mut redacted);
+                    let redacted = (redacted != c.arguments).then_some(redacted);
+                    let cached = (c.arguments.clone(), redacted);
+                    if j < entry.arguments.len() {
+                        entry.arguments[j] = cached;
+                    } else {
+                        entry.arguments.push(cached);
+                    }
+                }
+                if let Some(r) = &entry.arguments[j].1 {
+                    c.arguments.clone_from(r);
+                }
             }
         }
     }
@@ -862,6 +938,20 @@ mod tests {
         check(&mut cache, &msgs);
         msgs[0].tool_calls[0].arguments = serde_json::json!({"nested": ["later-known-secret"]});
         check(&mut cache, &msgs);
+        // Unchanged arguments holding a secret learned since: masked now too.
+        msgs[0].tool_calls.push(crate::llm::ToolCall {
+            id: "2".into(),
+            name: "Read".into(),
+            arguments: serde_json::json!({"file_path": "/x/second-secret-value"}),
+        });
+        check(&mut cache, &msgs);
+        with_values(&[
+            ("NEW_KEY", "later-known-secret"),
+            ("SECOND", "second-secret-value"),
+        ]);
+        check(&mut cache, &msgs);
+        msgs[0].tool_calls.truncate(1);
+        check(&mut cache, &msgs);
         msgs.remove(0);
         check(&mut cache, &msgs);
         msgs.clear();
@@ -871,6 +961,32 @@ mod tests {
         check(&mut cache, &msgs);
         ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
         check(&mut cache, &msgs);
+        with_values(&[]);
+    }
+
+    #[test]
+    fn a_message_counts_as_unchanged_only_with_the_same_content() {
+        let a = Seen::of("token = abc123");
+        assert!(matches!(a, Seen::Tag(14, _)));
+        assert!(a == Seen::of("token = abc123"));
+        // Same length, one byte different.
+        assert!(a != Seen::of("token = abc124"));
+        assert!(Seen::of("") != Seen::of("\0"));
+        // A same-length edit to an earlier message is scanned again.
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        with_values(&[("KEY", "secret-value-1")]);
+        let mut cache = MessageRedactor::default();
+        let mut msgs = vec![crate::llm::Message::user("plain-value-1 here")];
+        cache.redact(&mut msgs.clone());
+        msgs[0].content = "secret-value-1 her".into();
+        assert_eq!(msgs[0].content.len(), "plain-value-1 here".len());
+        let mut sent = msgs.clone();
+        cache.redact(&mut sent);
+        assert!(
+            !sent[0].content.contains("secret-value-1"),
+            "{}",
+            sent[0].content
+        );
         with_values(&[]);
     }
 

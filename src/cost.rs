@@ -739,20 +739,40 @@ fn write_log(
     event: &str,
     data: Value,
 ) -> anyhow::Result<()> {
-    static LOCK: Mutex<()> = Mutex::new(());
-    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    // The directory a log was last pruned in, and on which day: pruning once a
+    // day per process keeps two weeks of logs without listing the directory
+    // on every model and tool call. And the log file last written, kept open:
+    // a model call and its tool calls write several lines a turn.
+    struct State {
+        pruned: Option<(PathBuf, chrono::NaiveDate)>,
+        open: Option<(PathBuf, std::fs::File)>,
+    }
+    static LOCK: Mutex<State> = Mutex::new(State {
+        pruned: None,
+        open: None,
+    });
+    let mut state = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let State { pruned, open } = &mut *state;
     let path = log_path(root);
-    std::fs::create_dir_all(path.parent().unwrap())?;
-    for entry in std::fs::read_dir(path.parent().unwrap())?.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if let Some(date) = name
-            .strip_prefix("chanto-")
-            .and_then(|n| n.strip_suffix(".log"))
-            .and_then(|n| chrono::NaiveDate::parse_from_str(n, "%Y-%m-%d").ok())
-            && date < chrono::Local::now().date_naive() - chrono::Duration::days(13)
-        {
-            let _ = std::fs::remove_file(entry.path());
+    let dir = path.parent().unwrap();
+    let today = chrono::Local::now().date_naive();
+    if pruned
+        .as_ref()
+        .is_none_or(|(d, day)| d != dir || *day != today)
+    {
+        std::fs::create_dir_all(dir)?;
+        for entry in std::fs::read_dir(dir)?.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if let Some(date) = name
+                .strip_prefix("chanto-")
+                .and_then(|n| n.strip_suffix(".log"))
+                .and_then(|n| chrono::NaiveDate::parse_from_str(n, "%Y-%m-%d").ok())
+                && date < today - chrono::Duration::days(13)
+            {
+                let _ = std::fs::remove_file(entry.path());
+            }
         }
+        *pruned = Some((dir.to_path_buf(), today));
     }
     fn scrub(value: &mut Value) {
         match value {
@@ -764,7 +784,10 @@ fn write_log(
     }
     let mut record = json!({"time": chrono::Utc::now().to_rfc3339(), "level": level, "session_id": session, "event": event, "data": data});
     scrub(&mut record);
-    let line = record.to_string();
+    // One write per line: appends from concurrent sessions can't interleave
+    // mid-line.
+    let mut line = record.to_string();
+    line.push('\n');
     let mut options = std::fs::OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -772,10 +795,36 @@ fn write_log(
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path)?;
-    writeln!(file, "{line}")?;
+    // A new day's file, or the old one deleted from under us: open it again.
+    let reusable = |(p, f): &(PathBuf, std::fs::File)| {
+        *p == path && {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::MetadataExt;
+                f.metadata().is_ok_and(|m| m.nlink() > 0)
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = f;
+                path.exists()
+            }
+        }
+    };
+    if !open.as_ref().is_some_and(reusable) {
+        let file = match options.open(&path) {
+            // The directory went away since it was pruned.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                std::fs::create_dir_all(dir)?;
+                options.open(&path)?
+            }
+            file => file?,
+        };
+        *open = Some((path.clone(), file));
+    }
+    let mut file = &open.as_ref().unwrap().1;
+    file.write_all(line.as_bytes())?;
     if DEBUG.load(Ordering::Relaxed) {
-        eprintln!("{line}");
+        eprint!("{line}");
     }
     Ok(())
 }
@@ -1039,6 +1088,26 @@ mod tests {
             a.check().is_err(),
             "daily spend must include other sessions' model-call logs"
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn a_log_deleted_while_open_is_written_again() {
+        let root = std::env::temp_dir().join(format!("chanto-log-{}", uuid::Uuid::new_v4()));
+        let lines = || {
+            std::fs::read_to_string(log_path(&root))
+                .unwrap_or_default()
+                .lines()
+                .count()
+        };
+        write_log(&root, "s", "info", "one", json!({})).unwrap();
+        write_log(&root, "s", "info", "two", json!({})).unwrap();
+        assert_eq!(lines(), 2);
+        std::fs::remove_file(log_path(&root)).unwrap();
+        write_log(&root, "s", "info", "three", json!({})).unwrap();
+        assert_eq!(lines(), 1, "a fresh file, not the deleted one");
+        std::fs::remove_dir_all(&root).unwrap();
+        write_log(&root, "s", "info", "four", json!({})).unwrap();
+        assert_eq!(lines(), 1, "the directory comes back too");
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]

@@ -92,6 +92,7 @@ impl Shadow {
             lock.lock()?;
             if !s.repo.join("HEAD").exists() {
                 s.git(&["init", "--bare", s.repo.to_str().unwrap()])?;
+                CREATED.lock().unwrap().insert(s.repo.clone());
             }
         }
         s.clear_stale_locks(Duration::from_secs(120));
@@ -328,18 +329,26 @@ impl Shadow {
             }
             std::thread::sleep(Duration::from_millis(2));
         }
+        // Checked under the lock: with no index before this snapshot, the
+        // index ends up holding exactly the paths added, so none need removing.
+        let fresh = !self.index.exists();
         let mut paths = self.paths()?;
         let result = self.add_paths(&mut paths);
         if !paths.is_empty() {
             result?;
         }
-        let present: std::collections::BTreeSet<_> = paths.iter().map(String::as_bytes).collect();
-        let indexed = self.git(&["ls-files", "-z"])?;
-        let removed: Vec<u8> = indexed
-            .split(|b| *b == 0)
-            .filter(|p| !p.is_empty() && !present.contains(p))
-            .flat_map(|p| p.iter().copied().chain(std::iter::once(0)))
-            .collect();
+        let removed: Vec<u8> = if fresh {
+            Vec::new()
+        } else {
+            let present: std::collections::BTreeSet<_> =
+                paths.iter().map(String::as_bytes).collect();
+            let indexed = self.git(&["ls-files", "-z"])?;
+            indexed
+                .split(|b| *b == 0)
+                .filter(|p| !p.is_empty() && !present.contains(p))
+                .flat_map(|p| p.iter().copied().chain(std::iter::once(0)))
+                .collect()
+        };
         if !removed.is_empty() {
             // Linear, like `add_paths` (`git rm --pathspec-from-file` isn't).
             self.git_with_input(
@@ -582,6 +591,11 @@ impl Shadow {
     }
 }
 
+/// Shadow repositories this process created: every checkpoint in one belongs
+/// to a session still running here, so there is nothing to prune in it yet.
+static CREATED: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
+    std::sync::Mutex::new(std::collections::BTreeSet::new());
+
 /// Prune unreachable checkpoint refs after saving, at most once a day per project.
 pub fn maintain(root: &Path, config: &HistoryConfig) -> Result<()> {
     let shadow = Shadow::new(root, config)?;
@@ -596,22 +610,24 @@ pub fn maintain(root: &Path, config: &HistoryConfig) -> Result<()> {
     }
     let cutoff =
         chrono::Utc::now() - chrono::Duration::days(config.retention_days.min(36500) as i64);
-    let live: std::collections::HashSet<_> = crate::session::Session::list(root)
-        .into_iter()
-        .filter(|s| chrono::DateTime::parse_from_rfc3339(&s.updated).is_ok_and(|t| t > cutoff))
-        .flat_map(|s| s.checkpoints.into_iter().filter_map(|c| c.tree))
-        .collect();
-    let refs = String::from_utf8(shadow.git(&[
-        "for-each-ref",
-        "--format=%(refname)",
-        "refs/checkpoints/",
-    ])?)?;
-    for reference in refs.lines() {
-        if !live.contains(reference.trim_start_matches("refs/checkpoints/")) {
-            shadow.git(&["update-ref", "-d", reference])?;
+    if !CREATED.lock().unwrap().contains(&shadow.repo) {
+        let live: std::collections::HashSet<_> = crate::session::Session::list(root)
+            .into_iter()
+            .filter(|s| chrono::DateTime::parse_from_rfc3339(&s.updated).is_ok_and(|t| t > cutoff))
+            .flat_map(|s| s.checkpoints.into_iter().filter_map(|c| c.tree))
+            .collect();
+        let refs = String::from_utf8(shadow.git(&[
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/checkpoints/",
+        ])?)?;
+        for reference in refs.lines() {
+            if !live.contains(reference.trim_start_matches("refs/checkpoints/")) {
+                shadow.git(&["update-ref", "-d", reference])?;
+            }
         }
+        shadow.git(&["gc", "--auto"])?;
     }
-    shadow.git(&["gc", "--auto"])?;
     std::fs::write(&marker, b"")?;
     std::fs::write(
         shadow.repo.join("project"),

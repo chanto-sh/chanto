@@ -3,10 +3,15 @@
 //! TUI and the spinner honor. Both can be set by config, a flag or an env var,
 //! and reduced motion also follows the system's "Reduce motion" setting.
 
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static SCREEN_READER: AtomicBool = AtomicBool::new(false);
 static REDUCE_MOTION: AtomicBool = AtomicBool::new(false);
+/// Nothing explicit decided reduced motion, so it follows the system setting,
+/// read on first use (see `reduce_motion`).
+static FOLLOW_SYSTEM: AtomicBool = AtomicBool::new(false);
+static SYSTEM_REDUCE_MOTION: OnceLock<bool> = OnceLock::new();
 
 /// Line-based output, no in-place redraws, and an audible cue: for screen
 /// readers and anyone who needs strictly linear output.
@@ -18,6 +23,8 @@ pub fn screen_reader() -> bool {
 /// on screen readers, slow links, and eyes that dislike motion.
 pub fn reduce_motion() -> bool {
     REDUCE_MOTION.load(Ordering::Relaxed)
+        || (FOLLOW_SYSTEM.load(Ordering::Relaxed)
+            && *SYSTEM_REDUCE_MOTION.get_or_init(system_reduce_motion))
 }
 
 /// Resolve once at startup, before the frontend is chosen or any spinner starts.
@@ -27,10 +34,17 @@ pub fn reduce_motion() -> bool {
 pub fn init(screen_reader: Option<bool>, animations: Option<bool>) {
     let env_on = |k: &str| std::env::var_os(k).is_some_and(|v| !v.is_empty() && v != "0");
     // The system check spawns `defaults`, so it is lazy: an explicit config,
-    // flag or env var answers the question without it.
-    let (sr, motion_off) = resolve(screen_reader, animations, env_on, system_reduce_motion);
+    // flag or env var answers the question without it, and otherwise it waits
+    // for the first animation that asks (print mode without a terminal never
+    // does).
+    let follow = std::cell::Cell::new(false);
+    let (sr, motion_off) = resolve(screen_reader, animations, env_on, || {
+        follow.set(true);
+        false
+    });
     SCREEN_READER.store(sr, Ordering::Relaxed);
     REDUCE_MOTION.store(motion_off, Ordering::Relaxed);
+    FOLLOW_SYSTEM.store(follow.get(), Ordering::Relaxed);
     if sr {
         // Subagents and hooks are child processes (some written for Claude Code,
         // which names this variable): let both inherit the mode.
