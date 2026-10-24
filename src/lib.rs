@@ -2581,7 +2581,8 @@ pub async fn run() {
         let fe = Arc::new(plain::PlainFrontend::new(plain::OutputFormat::Text, false));
         match setup(&cli, fe, false).await {
             Ok(Setup { env, agent, .. }) => {
-                let sys = &agent.messages[0].content;
+                // As the model gets it: secrets masked, as in every request.
+                let sys = secrets::redact(&agent.messages[0].content);
                 let specs = serde_json::to_string(&env.tools.specs(&|_| true)).unwrap_or_default();
                 println!(
                     "{sys}\n\n--- system: {} chars (~{} tok) · tools: {} chars (~{} tok)",
