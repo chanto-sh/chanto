@@ -244,7 +244,10 @@ fn sandbox_profile_with_port(
 /// sandbox: the project's git internals (hooks and config drive the next
 /// `git` command) and the bin/config files of the package-manager caches we
 /// let builds write. Denied for writing even though their parent is writable.
-fn write_deny_paths(cwd: &std::path::Path, home: &std::path::Path) -> Vec<std::path::PathBuf> {
+pub(crate) fn write_deny_paths(
+    cwd: &std::path::Path,
+    home: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
     let mut out = vec![cwd.join(".git/hooks"), cwd.join(".git/config")];
     for rel in [
         ".cargo/bin",
@@ -260,7 +263,7 @@ fn write_deny_paths(cwd: &std::path::Path, home: &std::path::Path) -> Vec<std::p
     out
 }
 
-fn sandbox_profile_with_paths(
+pub(crate) fn sandbox_profile_with_paths(
     writable: &[String],
     home: &std::path::Path,
     cfg: &crate::config::SandboxConfig,
@@ -286,10 +289,11 @@ fn sandbox_profile_with_paths(
         .first()
         .map(std::path::PathBuf::from)
         .unwrap_or_default();
+    // Seatbelt checks resolved paths, so a deny names the resolved path even
+    // when it doesn't exist yet: a raw `~/.cargo/bin` under a symlinked
+    // `~/.cargo` would never match, and a command could create it.
     for p in write_deny_paths(&cwd_guess, &canon_home) {
-        let p = crate::util::canonical(&p)
-            .map(|c| c.display().to_string())
-            .unwrap_or_else(|_| p.display().to_string());
+        let p = crate::permissions::normalize(&p).display().to_string();
         prof.push_str(&format!(
             "(deny file-write* (subpath \"{}\"))\n",
             sbpl_quote(&p)
@@ -297,15 +301,18 @@ fn sandbox_profile_with_paths(
     }
     for (regex, p) in secret_read_denies(&canon_home, &cfg.deny_read) {
         if regex {
+            // An ordinary string, not a `#"…"` literal: those are raw, so the
+            // escaped backslashes made `\\.ssh` match no key at all.
             prof.push_str(&format!(
-                "(deny file-read* (regex #\"{}\"))\n",
+                "(deny file-read* (regex \"{}\"))\n",
                 sbpl_quote(&p)
             ));
         } else {
-            // Seatbelt compares resolved paths (e.g. /tmp is /private/tmp).
-            let p = crate::util::canonical(&p)
-                .map(|p| p.display().to_string())
-                .unwrap_or(p);
+            // Seatbelt compares resolved paths (e.g. /tmp is /private/tmp),
+            // also for a denied path that doesn't exist yet.
+            let p = crate::permissions::normalize(std::path::Path::new(&p))
+                .display()
+                .to_string();
             prof.push_str(&format!(
                 "(deny file-read* (subpath \"{}\"))\n",
                 sbpl_quote(&p)
@@ -1858,6 +1865,9 @@ mod cwd_tests {
 }
 
 #[cfg(test)]
+mod profile_tests;
+
+#[cfg(test)]
 fn test_sandbox_available() -> bool {
     if !sandbox_available() {
         return false;
@@ -2234,9 +2244,13 @@ mod network_tests {
     fn profile_denies_writes_to_execution_paths_in_writable_trees() {
         let cwd = std::env::temp_dir().join(format!("chanto-wd-{}", uuid::Uuid::new_v4()));
         let profile = sandbox_profile(&cwd, &SandboxConfig::default());
-        // The project tree is writable, but its git internals are not.
+        // The project tree is writable, but its git internals are not. The
+        // deny names the resolved path (temp_dir is under a symlink here),
+        // since that is what Seatbelt matches.
         let allow_at = profile.find("(allow file-write*").unwrap();
-        let git = format!("{}/.git/hooks", cwd.display());
+        let git = crate::permissions::normalize(&cwd.join(".git/hooks"))
+            .display()
+            .to_string();
         let deny = format!("(deny file-write* (subpath \"{}\"))", sbpl_quote(&git));
         assert!(
             profile.contains(&deny),
@@ -2266,9 +2280,10 @@ mod network_tests {
         };
         let profile = sandbox_profile_with_paths(&writable, &home, &cfg, Some(12345));
         assert!(profile.contains(&format!("(subpath \"{}\")", sbpl_quote(&writable[0]))));
+        let resolved = crate::permissions::normalize(std::path::Path::new(&secret));
         assert!(profile.contains(&format!(
             "(deny file-read* (subpath \"{}\"))",
-            sbpl_quote(&secret)
+            sbpl_quote(&resolved.display().to_string())
         )));
         assert!(profile.contains("(deny network*)"));
         assert!(profile.contains("(remote ip \"localhost:12345\")"));
