@@ -107,7 +107,7 @@ EOF
 # leak is caught before it's ever committed rather than after it's pushed.
 if command -v gitleaks >/dev/null 2>&1; then
     if ! gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner . >/dev/null 2>&1; then
-        gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner . >&2 || true
+        gitleaks git --pre-commit --staged --config .gitleaks.toml --redact --no-banner --verbose . >&2 || true
         echo "error: gitleaks found a secret in the staged changes" >&2
         status=1
     fi

@@ -42,6 +42,11 @@ CI exercises the full suite on macOS, Linux, and Windows, plus the wire types
 and the editor extension. A green local run of the three commands above covers the
 common cases.
 
+Changing credentials, permissions, the sandbox or `unsafe` code? Every pull
+request is scanned with CodeQL, and one that adds a high-severity finding can't
+merge. To see the findings before you push, run `scripts/codeql.sh` (needs the
+CodeQL CLI, `brew install --cask codeql`; about ten minutes for the Rust code).
+
 ### Wire type changes
 
 The wire types in `proto/` are shared with the hosted service and have their
