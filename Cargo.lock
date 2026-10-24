@@ -470,6 +470,7 @@ dependencies = [
  "dirs",
  "dunce",
  "futures",
+ "getrandom 0.4.3",
  "globset",
  "htmd",
  "ignore",

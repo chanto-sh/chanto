@@ -2211,13 +2211,20 @@ mod tests {
         });
         let mut registry = Registry::builtin();
         registry.tools.push(tool.clone());
+        // Its own empty project: the shared temp directory can hold gigabytes
+        // that the turn's secret scan and snapshot would otherwise walk.
+        let cwd = std::env::temp_dir().join(format!(
+            "chanto-remote-tool-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&cwd).unwrap();
         let env = Env::new(EnvInit {
             config: crate::config::Config::default(),
             provider: Provider::new(ProviderKind::Openai, &base, None, 32768),
             model: "mock".into(),
             mode: crate::permissions::Mode::Bypass,
             vision: false,
-            cwd: std::env::temp_dir(),
+            cwd: cwd.clone(),
             tools: registry,
             mcp: vec![],
             frontend: fe,
@@ -2309,5 +2316,6 @@ mod tests {
         assert!(pending.lock().unwrap().is_empty());
         assert!(short.run(json!({}), &ctx).await.unwrap().is_error);
         assert!(pending.lock().unwrap().is_empty());
+        let _ = std::fs::remove_dir_all(&cwd);
     }
 }

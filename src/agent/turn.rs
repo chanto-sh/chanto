@@ -448,7 +448,10 @@ impl Agent {
         let mut empty_retries = 0;
         self.output_cap_boost = 0;
         self.think_less = 0;
-        let mut recent_calls: Vec<(String, String)> = Vec::new();
+        // The last batch's calls and results, and how many batches in a row
+        // matched them exactly. Only that trailing run counts toward a loop,
+        // so earlier batches (with all their output) aren't kept.
+        let mut recent_calls: Option<((String, String), usize)> = None;
         let mut watch = crate::loopwatch::LoopWatch::default();
         let mut loop_strikes = 0;
         let mut exhausted = true;
@@ -1222,18 +1225,22 @@ impl Agent {
                 .map(|(_, _, content)| content.as_str())
                 .collect::<Vec<_>>()
                 .join("|");
-            recent_calls.push((sig.clone(), result_sig.clone()));
-            let repeats = recent_calls
-                .iter()
-                .rev()
-                .take_while(|(s, r)| *s == sig && *r == result_sig)
-                .count();
+            let repeats = match &mut recent_calls {
+                Some((last, n)) if last.0 == sig && last.1 == result_sig => {
+                    *n += 1;
+                    *n
+                }
+                _ => {
+                    recent_calls = Some(((sig.clone(), result_sig), 1));
+                    1
+                }
+            };
             let looping = watch
                 .observe(&batch, &results, &cwd)
                 .or_else(|| (repeats >= 3).then(|| format!("the same tool call has been made {repeats} times in a row with identical arguments and output")));
             if let Some(reason) = looping {
                 loop_strikes += 1;
-                recent_calls.clear();
+                recent_calls = None;
                 if loop_strikes >= 2 {
                     self.emit(Event::Warn(format!(
                         "Stopped: still going in circles ({reason})."

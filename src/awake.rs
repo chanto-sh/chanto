@@ -4,7 +4,8 @@
 //! last one lets the machine sleep again, so Chanto never keeps it up while
 //! it sits at the prompt waiting for you.
 //!
-//! macOS: `caffeinate -i -w <pid>` (idle sleep only; it also exits if Chanto
+//! macOS: an IOKit power assertion against idle sleep, what `caffeinate -i`
+//! takes, without starting a process for it (the system drops it if Chanto
 //! dies). Linux: `systemd-inhibit --what=idle:sleep`. Windows:
 //! `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` on a thread that lives as long
 //! as the hold. None of these can stop a laptop lid from forcing sleep.
@@ -113,17 +114,61 @@ fn release(s: &mut State) {
 
 /// The platform's keep-awake mechanism; dropping it lets the machine sleep.
 enum Inhibitor {
-    #[cfg_attr(windows, allow(dead_code))]
+    #[cfg_attr(any(windows, target_os = "macos"), allow(dead_code))]
     Child(std::process::Child),
     #[cfg(windows)]
     Thread(std::sync::mpsc::Sender<()>),
+    #[cfg(target_os = "macos")]
+    Assertion(u32),
+}
+
+#[cfg(target_os = "macos")]
+mod iokit {
+    use std::ffi::c_void;
+    #[link(name = "IOKit", kind = "framework")]
+    unsafe extern "C" {
+        pub fn IOPMAssertionCreateWithName(
+            kind: *const c_void,
+            level: u32,
+            name: *const c_void,
+            id: *mut u32,
+        ) -> i32;
+        pub fn IOPMAssertionRelease(id: u32) -> i32;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFStringCreateWithBytes(
+            alloc: *const c_void,
+            bytes: *const u8,
+            len: isize,
+            encoding: u32,
+            external: u8,
+        ) -> *const c_void;
+        pub fn CFRelease(cf: *const c_void);
+    }
+    /// A CFString the caller releases.
+    pub fn cfstr(s: &str) -> *const c_void {
+        const UTF8: u32 = 0x0800_0100;
+        unsafe { CFStringCreateWithBytes(std::ptr::null(), s.as_ptr(), s.len() as isize, UTF8, 0) }
+    }
 }
 
 impl Inhibitor {
     #[cfg(target_os = "macos")]
     fn start() -> Option<Self> {
-        let pid = std::process::id().to_string();
-        quiet(std::process::Command::new("caffeinate").args(["-i", "-w", &pid])).map(Self::Child)
+        // `kIOPMAssertionTypePreventUserIdleSystemSleep` at `kIOPMAssertionLevelOn`.
+        let kind = iokit::cfstr("PreventUserIdleSystemSleep");
+        let name = iokit::cfstr("chanto is working");
+        if kind.is_null() || name.is_null() {
+            return None;
+        }
+        let mut id = 0u32;
+        let ok = unsafe { iokit::IOPMAssertionCreateWithName(kind, 255, name, &mut id) } == 0;
+        unsafe {
+            iokit::CFRelease(kind);
+            iokit::CFRelease(name);
+        }
+        ok.then_some(Self::Assertion(id))
     }
 
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -168,11 +213,13 @@ impl Inhibitor {
             Self::Child(_) => true,
             #[cfg(windows)]
             Self::Thread(_) => true,
+            #[cfg(target_os = "macos")]
+            Self::Assertion(_) => true,
         }
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(unix, not(target_os = "macos")))]
 fn quiet(cmd: &mut std::process::Command) -> Option<std::process::Child> {
     use std::process::Stdio;
     cmd.stdin(Stdio::null())
@@ -193,6 +240,10 @@ impl Drop for Inhibitor {
             Self::Thread(tx) => {
                 let _ = tx.send(());
             }
+            #[cfg(target_os = "macos")]
+            Self::Assertion(id) => unsafe {
+                iokit::IOPMAssertionRelease(*id);
+            },
         }
     }
 }
@@ -208,6 +259,23 @@ mod tests {
         assert_eq!(Policy::parse("always"), Some(Policy::Always));
         assert_eq!(Policy::parse("off"), Some(Policy::Never));
         assert_eq!(Policy::parse("sometimes"), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_assertion_holds_until_dropped() {
+        let listed = || {
+            std::process::Command::new("pmset")
+                .args(["-g", "assertions"])
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains("chanto is working"))
+                .unwrap_or(false)
+        };
+        let i = Inhibitor::start().expect("power assertion");
+        assert!(matches!(i, Inhibitor::Assertion(_)));
+        assert!(listed(), "pmset lists the assertion while it's held");
+        drop(i);
+        assert!(!listed(), "released on drop");
     }
 
     #[test]

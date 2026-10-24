@@ -38,7 +38,7 @@ pub struct ToolCall {
     pub arguments: Value,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     #[serde(default)]
@@ -64,6 +64,51 @@ pub struct ProviderItems {
     pub kind: ProviderKind,
     pub model: String,
     pub items: Vec<Value>,
+}
+
+// By hand for `clone_from`, which the derive leaves at its default (a fresh
+// clone): refreshing a copy of the conversation (`publish_conversation`)
+// then reuses each message's buffers instead of reallocating them all.
+// Destructured without `..`, so a new field fails to compile until it's here.
+impl Clone for Message {
+    fn clone(&self) -> Self {
+        let Message {
+            role,
+            content,
+            images,
+            tool_calls,
+            tool_call_id,
+            tool_name,
+            provider_items,
+        } = self;
+        Message {
+            role: *role,
+            content: content.clone(),
+            images: images.clone(),
+            tool_calls: tool_calls.clone(),
+            tool_call_id: tool_call_id.clone(),
+            tool_name: tool_name.clone(),
+            provider_items: provider_items.clone(),
+        }
+    }
+    fn clone_from(&mut self, source: &Self) {
+        let Message {
+            role,
+            content,
+            images,
+            tool_calls,
+            tool_call_id,
+            tool_name,
+            provider_items,
+        } = self;
+        *role = source.role;
+        content.clone_from(&source.content);
+        images.clone_from(&source.images);
+        tool_calls.clone_from(&source.tool_calls);
+        tool_call_id.clone_from(&source.tool_call_id);
+        tool_name.clone_from(&source.tool_name);
+        provider_items.clone_from(&source.provider_items);
+    }
 }
 
 impl Message {
@@ -969,7 +1014,6 @@ impl Provider {
     async fn first_token_openai(&self, req: &ChatRequest) -> Option<(Vec<(String, f64)>, Usage)> {
         let mut body = json!({
             "model": self.wire_model(&req.model),
-            "messages": Self::openai_messages(&req.messages, &req.model),
             "stream": false,
             "max_tokens": 1,
             "logprobs": true,
@@ -985,7 +1029,10 @@ impl Provider {
             body["reasoning_effort"] = json!("none");
             body["thinking"] = json!({"type": "disabled"});
         }
-        let resp = self.post_openai(&body).await.ok()?;
+        let resp = self
+            .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+            .await
+            .ok()?;
         if !resp.status().is_success() {
             return None;
         }
@@ -1475,49 +1522,21 @@ impl Provider {
     /// Chat-completions messages. Tool calls that came back with
     /// `extra_content` (Gemini's thought signatures) carry it again on later
     /// requests to the same model.
-    fn openai_messages(msgs: &[Message], model: &str) -> Vec<Value> {
-        msgs.iter()
-            .map(|m| {
-                let extra = m.provider_items.as_ref().filter(|p| p.kind == ProviderKind::Openai && p.model == model);
-                let content = if m.images.is_empty() {
-                    json!(m.content)
-                } else {
-                    let mut parts = vec![json!({"type":"text","text": m.content})];
-                    for img in &m.images {
-                        parts.push(json!({"type":"image_url","image_url":{"url": format!("data:{};base64,{img}", sniff_mime(img))}}));
-                    }
-                    Value::Array(parts)
-                };
-                let mut o = json!({ "role": m.role, "content": content });
-                if !m.tool_calls.is_empty() {
-                    o["tool_calls"] = Value::Array(
-                        m.tool_calls
-                            .iter()
-                            .map(|c| {
-                                let mut v = json!({"id": c.id, "type":"function","function":{"name": c.name, "arguments": c.arguments.to_string()}});
-                                if let Some(e) = extra.and_then(|p| p.items.iter().find(|i| i["id"] == c.id.as_str())) {
-                                    v["extra_content"] = e["extra_content"].clone();
-                                }
-                                v
-                            })
-                            .collect(),
-                    );
-                }
-                if let Some(id) = &m.tool_call_id {
-                    o["tool_call_id"] = json!(id);
-                }
-                if let Some(r) = extra.and_then(|p| p.items.iter().find_map(|i| i["reasoning_content"].as_str())) {
-                    o["reasoning_content"] = json!(r);
-                }
-                o
-            })
-            .collect()
+    /// The `/chat/completions` request: `fields` (everything but the
+    /// messages) and the messages, written straight from the conversation.
+    /// Building them as a `Value` first copied the whole history into a tree
+    /// on every call only to serialize and drop it.
+    fn openai_body<'a>(fields: &'a Value, msgs: &'a [Message], model: &'a str) -> OpenaiBody<'a> {
+        OpenaiBody {
+            fields,
+            messages: OpenaiMessages { msgs, model },
+        }
     }
 
     /// POST a chat completion. Rate limits and overloads (429, 529, 5xx) are
     /// retried like [`Provider::post_retrying`]; other errors come back as the
     /// response, for the caller's optional-parameter handling.
-    async fn post_openai(&self, body: &Value) -> Result<reqwest::Response> {
+    async fn post_openai(&self, body: &OpenaiBody<'_>) -> Result<reqwest::Response> {
         let mut attempt = 0u32;
         loop {
             let mut rb = self
@@ -1595,7 +1614,6 @@ impl Provider {
     ) -> Result<ChatResponse> {
         let mut body = json!({
             "model": self.wire_model(&req.model),
-            "messages": Self::openai_messages(&req.messages, &req.model),
             "stream": true,
             "stream_options": {"include_usage": true},
         });
@@ -1636,7 +1654,9 @@ impl Provider {
         if minimax_host(&self.base_url) {
             body["reasoning_split"] = json!(true);
         }
-        let mut resp = self.post_openai(&body).await?;
+        let mut resp = self
+            .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+            .await?;
         // A server that rejects an optional parameter (a thinking switch, a
         // sampling setting a reasoning model doesn't take) gets the request
         // again without it.
@@ -1671,7 +1691,9 @@ impl Provider {
             {
                 body["thinking"] = json!({"type": "disabled"});
                 body.as_object_mut().unwrap().remove("reasoning_effort");
-                resp = self.post_openai(&body).await?;
+                resp = self
+                    .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+                    .await?;
                 continue;
             }
             let optional = [
@@ -1692,7 +1714,9 @@ impl Provider {
                 bail!("API error {status}: {text}");
             };
             body.as_object_mut().unwrap().remove(*param);
-            resp = self.post_openai(&body).await?;
+            resp = self
+                .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+                .await?;
         }
         if !resp.status().is_success() {
             let status = resp.status();
@@ -2161,9 +2185,227 @@ pub fn estimate_tokens(msgs: &[Message]) -> u64 {
     (chars as f64 / 3.5) as u64
 }
 
+/// A `/chat/completions` body: the request's own fields, then its messages.
+struct OpenaiBody<'a> {
+    fields: &'a Value,
+    messages: OpenaiMessages<'a>,
+}
+
+impl Serialize for OpenaiBody<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let fields = self.fields.as_object();
+        let mut map = s.serialize_map(Some(fields.map_or(0, |f| f.len()) + 1))?;
+        for (k, v) in fields.into_iter().flatten() {
+            map.serialize_entry(k, v)?;
+        }
+        map.serialize_entry("messages", &self.messages)?;
+        map.end()
+    }
+}
+
+/// The conversation as `/chat/completions` messages. Replayed provider items
+/// (a call's `extra_content`, a reply's `reasoning_content`) go back only to
+/// the provider and model that produced them.
+struct OpenaiMessages<'a> {
+    msgs: &'a [Message],
+    model: &'a str,
+}
+
+impl Serialize for OpenaiMessages<'_> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::{SerializeMap, SerializeSeq};
+        struct Content<'a>(&'a Message);
+        impl Serialize for Content<'_> {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                s: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                let m = self.0;
+                if m.images.is_empty() {
+                    return s.serialize_str(&m.content);
+                }
+                let mut parts = s.serialize_seq(Some(m.images.len() + 1))?;
+                parts.serialize_element(&json!({"type": "text", "text": m.content}))?;
+                for img in &m.images {
+                    parts.serialize_element(&json!({"type": "image_url", "image_url": {"url": format!("data:{};base64,{img}", sniff_mime(img))}}))?;
+                }
+                parts.end()
+            }
+        }
+        struct Calls<'a>(&'a [ToolCall], Option<&'a ProviderItems>);
+        impl Serialize for Calls<'_> {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                s: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                struct Function<'a>(&'a ToolCall);
+                impl Serialize for Function<'_> {
+                    fn serialize<S: serde::Serializer>(
+                        &self,
+                        s: S,
+                    ) -> std::result::Result<S::Ok, S::Error> {
+                        let mut f = s.serialize_map(Some(2))?;
+                        f.serialize_entry("name", &self.0.name)?;
+                        f.serialize_entry("arguments", &self.0.arguments.to_string())?;
+                        f.end()
+                    }
+                }
+                let mut seq = s.serialize_seq(Some(self.0.len()))?;
+                for c in self.0 {
+                    struct Call<'a>(&'a ToolCall, Option<&'a Value>);
+                    impl Serialize for Call<'_> {
+                        fn serialize<S: serde::Serializer>(
+                            &self,
+                            s: S,
+                        ) -> std::result::Result<S::Ok, S::Error> {
+                            let mut m = s.serialize_map(None)?;
+                            m.serialize_entry("id", &self.0.id)?;
+                            m.serialize_entry("type", "function")?;
+                            m.serialize_entry("function", &Function(self.0))?;
+                            if let Some(e) = self.1 {
+                                m.serialize_entry("extra_content", &e["extra_content"])?;
+                            }
+                            m.end()
+                        }
+                    }
+                    let extra = self
+                        .1
+                        .and_then(|p| p.items.iter().find(|i| i["id"] == c.id.as_str()));
+                    seq.serialize_element(&Call(c, extra))?;
+                }
+                seq.end()
+            }
+        }
+        let mut seq = s.serialize_seq(Some(self.msgs.len()))?;
+        for m in self.msgs {
+            struct Msg<'a>(&'a Message, Option<&'a ProviderItems>);
+            impl Serialize for Msg<'_> {
+                fn serialize<S: serde::Serializer>(
+                    &self,
+                    s: S,
+                ) -> std::result::Result<S::Ok, S::Error> {
+                    let (m, extra) = (self.0, self.1);
+                    let mut o = s.serialize_map(None)?;
+                    o.serialize_entry("role", &m.role)?;
+                    o.serialize_entry("content", &Content(m))?;
+                    if !m.tool_calls.is_empty() {
+                        o.serialize_entry("tool_calls", &Calls(&m.tool_calls, extra))?;
+                    }
+                    if let Some(id) = &m.tool_call_id {
+                        o.serialize_entry("tool_call_id", id)?;
+                    }
+                    if let Some(r) = extra
+                        .and_then(|p| p.items.iter().find_map(|i| i["reasoning_content"].as_str()))
+                    {
+                        o.serialize_entry("reasoning_content", r)?;
+                    }
+                    o.end()
+                }
+            }
+            let extra = m
+                .provider_items
+                .as_ref()
+                .filter(|p| p.kind == ProviderKind::Openai && p.model == self.model);
+            seq.serialize_element(&Msg(m, extra))?;
+        }
+        seq.end()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The messages as the request built them before `OpenaiMessages`: the
+    /// reference it must match.
+    fn reference_openai_messages(msgs: &[Message], model: &str) -> Vec<Value> {
+        msgs.iter()
+            .map(|m| {
+                let extra = m.provider_items.as_ref().filter(|p| p.kind == ProviderKind::Openai && p.model == model);
+                let content = if m.images.is_empty() {
+                    json!(m.content)
+                } else {
+                    let mut parts = vec![json!({"type":"text","text": m.content})];
+                    for img in &m.images {
+                        parts.push(json!({"type":"image_url","image_url":{"url": format!("data:{};base64,{img}", sniff_mime(img))}}));
+                    }
+                    Value::Array(parts)
+                };
+                let mut o = json!({ "role": m.role, "content": content });
+                if !m.tool_calls.is_empty() {
+                    o["tool_calls"] = Value::Array(
+                        m.tool_calls
+                            .iter()
+                            .map(|c| {
+                                let mut v = json!({"id": c.id, "type":"function","function":{"name": c.name, "arguments": c.arguments.to_string()}});
+                                if let Some(e) = extra.and_then(|p| p.items.iter().find(|i| i["id"] == c.id.as_str())) {
+                                    v["extra_content"] = e["extra_content"].clone();
+                                }
+                                v
+                            })
+                            .collect(),
+                    );
+                }
+                if let Some(id) = &m.tool_call_id {
+                    o["tool_call_id"] = json!(id);
+                }
+                if let Some(r) = extra.and_then(|p| p.items.iter().find_map(|i| i["reasoning_content"].as_str())) {
+                    o["reasoning_content"] = json!(r);
+                }
+                o
+            })
+            .collect()
+    }
+
+    #[test]
+    fn openai_messages_serialize_as_the_value_tree_did() {
+        let call = |id: &str, args: Value| ToolCall {
+            id: id.into(),
+            name: "Read".into(),
+            arguments: args,
+        };
+        let mut assistant = Message::assistant("reading \"two\" files\n\u{1}");
+        assistant.tool_calls = vec![
+            call("c1", json!({"file_path": "a.rs"})),
+            call(
+                "c2",
+                json!({"file_path": "b.rs", "limit": 5, "nested": [1, null, {"x": "é"}]}),
+            ),
+        ];
+        assistant.provider_items = Some(ProviderItems {
+            kind: ProviderKind::Openai,
+            model: "m".into(),
+            items: vec![
+                json!({"id": "c1", "extra_content": {"google": {"thought_signature": "sig"}}}),
+                json!({"id": "c2"}),
+                json!({"reasoning_content": "thought about it"}),
+            ],
+        });
+        let mut other_model = assistant.clone();
+        other_model.provider_items.as_mut().unwrap().model = "other".into();
+        let mut image = Message::user("look");
+        image.images = vec!["iVBORw0KGgo=".into(), "/9j/4AAQ".into()];
+        let msgs = vec![
+            Message::system("sys"),
+            Message::user(""),
+            image,
+            assistant.clone(),
+            Message::tool(&assistant.tool_calls[0], "fn a() {}"),
+            Message::tool(&assistant.tool_calls[1], ""),
+            other_model,
+            Message::assistant("done"),
+        ];
+        for model in ["m", "other"] {
+            let fields = json!({"model": model, "stream": true, "max_tokens": 10});
+            let mut expected = fields.clone();
+            expected["messages"] = Value::Array(reference_openai_messages(&msgs, model));
+            let body = Provider::openai_body(&fields, &msgs, model);
+            assert_eq!(serde_json::to_value(&body).unwrap(), expected);
+            let text = serde_json::to_string(&body).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+        }
+    }
 
     #[test]
     fn fallback_triggers() {

@@ -250,7 +250,11 @@ impl Session {
     /// The marker beside this session's file, or `None` when none is left.
     pub fn in_flight(&self) -> Option<InFlight> {
         let b = std::fs::read(self.in_flight_path()).ok()?;
-        serde_json::from_slice(&b).ok()
+        // The first value only: see `mark_in_flight` for what can follow it.
+        serde_json::Deserializer::from_slice(&b)
+            .into_iter()
+            .next()?
+            .ok()
     }
 
     /// Note that a tool batch is about to run, before it touches anything. One
@@ -268,10 +272,24 @@ impl Session {
         let Ok(bytes) = serde_json::to_vec(&f) else {
             return;
         };
-        let _ = std::fs::create_dir_all(p.parent().unwrap());
-        let tmp = p.with_extension("inflight.tmp");
-        if std::fs::write(&tmp, &bytes).is_ok() {
-            let _ = std::fs::rename(&tmp, &p);
+        // Rewritten in place: a temp file and a rename cost several times as
+        // much (on APFS especially), before every tool batch. The one write
+        // lands whole even if Chanto is killed; a kill between it and the
+        // truncate can leave the end of a longer earlier marker after it,
+        // which `in_flight` ignores.
+        let write = |p: &Path| -> std::io::Result<()> {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .open(p)?;
+            file.write_all(&bytes)?;
+            file.set_len(bytes.len() as u64)
+        };
+        if write(&p).is_err() {
+            let _ = std::fs::create_dir_all(p.parent().unwrap());
+            let _ = write(&p);
         }
     }
 
@@ -1014,6 +1032,52 @@ mod tests {
         assert!(!meta2.title.contains(&key), "{}", meta2.title);
         assert!(back[1].images.is_empty() && back[1].content.contains("1 image(s) omitted"));
         assert_eq!(back[2].content, "ok");
+        unsafe {
+            if let Some(previous) = previous {
+                std::env::set_var("CHANTO_HOME", previous);
+            } else {
+                std::env::remove_var("CHANTO_HOME");
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn in_flight_marker_is_rewritten_in_place() {
+        let _g = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let home =
+            std::env::temp_dir().join(format!("chanto-sess-inflight-{}", std::process::id()));
+        let previous = std::env::var_os("CHANTO_HOME");
+        // SAFETY: test-only, under TEST_HOME_LOCK.
+        unsafe { std::env::set_var("CHANTO_HOME", &home) };
+        let s = Session::new(&home.join("proj"), "m");
+        assert!(s.interrupted().is_none());
+        // The session's directory doesn't exist yet.
+        s.mark_in_flight(
+            vec!["Bash: a long command".repeat(4)],
+            vec!["src/a.rs".into()],
+        );
+        let first = s.interrupted().unwrap();
+        assert!(
+            first.contains("a long command") && first.contains("src/a.rs"),
+            "{first}"
+        );
+        // A shorter marker replaces a longer one whole.
+        s.mark_in_flight(vec!["Read: b.rs".into()], vec![]);
+        let f = s.in_flight().unwrap();
+        assert_eq!(f.running, ["Read: b.rs"]);
+        assert!(f.files.is_empty());
+        // Killed between the write and the truncate: the earlier marker's
+        // tail after the new one is ignored.
+        let p = s.in_flight_path();
+        let mut b = std::fs::read(&p).unwrap();
+        b.extend_from_slice(b"ommand\"],\"files\":[\"src/a.rs\"]}");
+        std::fs::write(&p, b).unwrap();
+        assert_eq!(s.in_flight().unwrap().running, ["Read: b.rs"]);
+        s.clear_in_flight();
+        assert!(s.interrupted().is_none());
         unsafe {
             if let Some(previous) = previous {
                 std::env::set_var("CHANTO_HOME", previous);

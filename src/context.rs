@@ -1336,6 +1336,10 @@ pub fn scoped_foreign_rules(cwd: &Path) -> Vec<(PathBuf, Vec<String>)> {
 
 /// Read files, skipping duplicates (same file via symlink, or identical text).
 fn load_unique(paths: Vec<PathBuf>, project: &Path) -> Vec<(PathBuf, String)> {
+    // Most tool calls find no new instruction files: skip the trust lookup.
+    if paths.is_empty() {
+        return Vec::new();
+    }
     // Files the user owns (outside the project) may import anything; project
     // files only from inside the project unless the folder is trusted.
     let given = project;
@@ -1405,6 +1409,42 @@ fn rule_paths(text: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Directories seen holding none of the entries path-scoped rules live under,
+/// with their modification time then.
+static NO_RULES: std::sync::Mutex<
+    Option<std::collections::HashMap<PathBuf, std::time::SystemTime>>,
+> = std::sync::Mutex::new(None);
+
+/// Whether `base` may hold path-scoped rules (`.claude/rules`, Cursor's or
+/// Copilot's). Every file-touching tool call asks, for each directory from the
+/// git root down; most hold none of them, and looking costs several failed
+/// lookups each. Creating one changes the directory's modification time, so a
+/// directory seen empty is skipped until that changes. A time within a couple
+/// of seconds of now could hide a change made in the same clock tick, so only
+/// an older one is trusted (as git does with its index).
+fn may_hold_rules(base: &Path) -> bool {
+    let Ok(mtime) = std::fs::metadata(base).and_then(|m| m.modified()) else {
+        return true;
+    };
+    let mut cache = NO_RULES.lock().unwrap();
+    let cache = cache.get_or_insert_with(Default::default);
+    if cache.get(base) == Some(&mtime) {
+        return false;
+    }
+    let any = [".claude", ".cursor", ".cursorrules", ".github"]
+        .iter()
+        .any(|n| std::fs::symlink_metadata(base.join(n)).is_ok());
+    if any {
+        cache.remove(base);
+    } else if mtime
+        .elapsed()
+        .is_ok_and(|age| age > std::time::Duration::from_secs(2))
+    {
+        cache.insert(base.to_path_buf(), mtime);
+    }
+    any
+}
+
 /// Instruction files in subdirectories between the startup directory and a
 /// file the agent just touched (loaded on demand, like Claude Code's nested
 /// CLAUDE.md and Codex's per-directory AGENTS.md scopes). `loaded` tracks
@@ -1423,14 +1463,17 @@ pub fn nested_instructions(
     let mut dir = cwd.to_path_buf();
     let mut paths = Vec::new();
     let comps: Vec<_> = rel.components().collect();
-    let compat = crate::compat::enabled();
+    // Read from the config file, so only once something needs scanning: most
+    // calls touch directories already handled.
+    let compat = std::cell::OnceCell::new();
+    let compat = || compat.get_or_init(crate::compat::enabled);
     // Other tools' files here need folder trust (checked only when there are any).
     let mut foreign = Vec::new();
     for c in comps.iter().take(comps.len().saturating_sub(1)) {
         dir.push(c);
         if loaded.insert(dir.clone()) {
             paths.extend(dir_instruction_files(&dir));
-            foreign.extend(crate::compat::foreign_dir_files(&dir, &compat));
+            foreign.extend(crate::compat::foreign_dir_files(&dir, compat()));
         }
     }
     // Path-scoped Claude Code rules (.claude/rules/**/*.md with `paths:` globs,
@@ -1443,6 +1486,9 @@ pub fn nested_instructions(
         let Ok(rel) = file.strip_prefix(base) else {
             continue;
         };
+        if !may_hold_rules(base) {
+            continue;
+        }
         for (p, _) in md_files(&base.join(".claude").join("rules")) {
             if loaded.contains(&p) {
                 continue;
@@ -1461,7 +1507,7 @@ pub fn nested_instructions(
             }
         }
         // Cursor `globs` and Copilot `applyTo` rules.
-        for r in crate::compat::rule_files(base, &compat) {
+        for r in crate::compat::rule_files(base, compat()) {
             let crate::compat::Apply::Globs(globs) = &r.apply else {
                 continue;
             };
@@ -1502,7 +1548,24 @@ fn git_info(cwd: &Path) -> Option<String> {
     }
 }
 
+/// Whether git could find a repository from `cwd`. False only when it surely
+/// can't: no `GIT_DIR`/`GIT_WORK_TREE` pointing elsewhere, and no `.git` or
+/// bare repository in `cwd` or any directory above it. Saves spawning git
+/// processes that would only fail.
+fn may_be_in_git_repo(cwd: &Path) -> bool {
+    if std::env::var_os("GIT_DIR").is_some() || std::env::var_os("GIT_WORK_TREE").is_some() {
+        return true;
+    }
+    cwd.ancestors().any(|d| {
+        d.join(".git").exists()
+            || (d.join("HEAD").is_file() && d.join("objects").is_dir() && d.join("refs").is_dir())
+    })
+}
+
 fn git_info_now(cwd: &Path) -> Option<String> {
+    if !may_be_in_git_repo(cwd) {
+        return None;
+    }
     let run = |args: &[&str]| -> Option<String> {
         let o = std::process::Command::new("git")
             .args(args)
@@ -1671,6 +1734,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn git_runs_only_where_a_repository_can_be_found() {
+        let d = std::env::temp_dir().join(format!("chanto-git-{}", uuid::Uuid::new_v4().simple()));
+        let sub = d.join("a/b");
+        std::fs::create_dir_all(&sub).unwrap();
+        let env_points_elsewhere =
+            std::env::var_os("GIT_DIR").is_some() || std::env::var_os("GIT_WORK_TREE").is_some();
+        let outside = std::env::temp_dir()
+            .ancestors()
+            .any(|a| a.join(".git").exists());
+        if !env_points_elsewhere && !outside {
+            assert!(!may_be_in_git_repo(&sub));
+        }
+        // A work tree (`.git` is a directory, or a file in a linked worktree)
+        // found from any directory below it.
+        std::fs::write(d.join(".git"), "gitdir: /elsewhere\n").unwrap();
+        assert!(may_be_in_git_repo(&sub));
+        std::fs::remove_file(d.join(".git")).unwrap();
+        // A bare repository.
+        std::fs::create_dir_all(d.join("objects")).unwrap();
+        std::fs::create_dir_all(d.join("refs")).unwrap();
+        std::fs::write(d.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        assert!(may_be_in_git_repo(&d));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
     fn instruction_files_have_a_total_budget() {
         let d = std::env::temp_dir().join(format!(
             "chanto-ctx-budget-{}",
@@ -1778,6 +1867,38 @@ mod tests {
         );
         let n = nested_instructions(&d, &d.join("web/app.ts"), &mut loaded);
         assert!(n.iter().any(|(_, t)| t.contains("ts rule")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_rule_added_after_a_directory_was_seen_empty_is_found() {
+        let d = std::env::temp_dir().join(format!(
+            "chanto-ctx-norules-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+        let d = d.canonical().unwrap();
+        // Untouched for an hour: old enough for "no rules here" to be remembered.
+        let hour_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        let age = |p: &Path| {
+            std::fs::File::open(p)
+                .unwrap()
+                .set_modified(hour_ago)
+                .unwrap()
+        };
+        age(&d);
+        let mut loaded = std::collections::HashSet::new();
+        assert!(nested_instructions(&d, &d.join("a.ts"), &mut loaded).is_empty());
+        assert!(!may_hold_rules(&d), "remembered as holding no rules");
+        std::fs::create_dir_all(d.join(".claude/rules")).unwrap();
+        std::fs::write(
+            d.join(".claude/rules/ts.md"),
+            "---\npaths:\n  - \"**/*.ts\"\n---\nts rule",
+        )
+        .unwrap();
+        let n = nested_instructions(&d, &d.join("b.ts"), &mut loaded);
+        assert!(n.iter().any(|(_, t)| t.contains("ts rule")), "{n:?}");
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
