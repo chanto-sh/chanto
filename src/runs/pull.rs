@@ -143,15 +143,8 @@ fn parse(args: &[String]) -> Result<Opts> {
         .with_context(|| format!("which server? pass its URL\n{USAGE}"))?
         .trim_end_matches('/')
         .to_string();
-    if !o.url.starts_with("https://")
-        && !o.url.starts_with("http://localhost")
-        && !o.url.starts_with("http://127.0.0.1")
-    {
-        bail!(
-            "{} must use https:// (plain http only for localhost)",
-            o.url
-        );
-    }
+    // By the host the URL parser reads: `http://localhost.evil.com` is remote.
+    super::cloud::check_url(&o.url)?;
     if let Some(m) = &o.mode
         && crate::permissions::Mode::parse(m).is_none()
     {

@@ -537,6 +537,7 @@ fn connect_flags() {
     let err = |a: &[&str]| format!("{:#}", parse(&args(a)).err().unwrap());
     assert!(err(&[]).starts_with("which server?"));
     assert!(err(&["http://example.com"]).contains("must use https://"));
+    assert!(err(&["http://localhost.evil.example"]).contains("must use https://"));
     assert!(err(&["https://x", "--mode", "wild"]).contains("unknown mode wild"));
     assert!(err(&["https://x", "--name"]).contains("--name needs a value"));
     assert!(err(&["https://x", "--bogus"]).starts_with("unknown flag --bogus"));
