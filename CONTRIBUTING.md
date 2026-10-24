@@ -110,6 +110,22 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 `.githooks/commit-msg` enforces this locally, and the `pr-title` workflow runs
 the same script on pull request titles.
 
+## Signing off commits
+
+Every commit needs a sign-off certifying the
+[Developer Certificate of Origin](https://developercertificate.org): that you
+wrote the change, or otherwise have the right to submit it under the
+project's license. Commit with `git commit -s`, which adds a line with your
+name and the email address the commit is made with:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+To sign off commits you've already made: `git rebase --signoff main`. The
+commit-msg hook asks for the line, and the `DCO sign-off` check rejects a pull
+request with a commit that lacks it (bots such as Dependabot are exempt).
+
 ## Reporting bugs and requesting features
 
 Open an issue using the templates under
@@ -126,4 +142,6 @@ participating you agree to uphold it.
 Chanto is licensed under [Apache-2.0](LICENSE). Unless you explicitly state
 otherwise, any contribution you intentionally submit for inclusion in the work,
 as defined in the Apache-2.0 license, shall be licensed as above, without any
-additional terms or conditions. No separate CLA is required.
+additional terms or conditions. No separate CLA is required; the sign-off on
+each commit (see [Signing off commits](#signing-off-commits)) is your
+certification that you may contribute it.
