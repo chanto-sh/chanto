@@ -569,14 +569,16 @@ async fn notifications_carry_state_and_link_but_no_task_or_code() {
     assert_eq!(got.len(), 4, "{got:?}");
     for req in &got {
         assert!(req.contains(&run.id), "{req}");
-        for secret in [
-            "SECRET_TASK_TEXT",
-            "SECRET_BUILD_TARGET",
-            "SECRET_CODE",
-            "fn main",
-            "src/main.rs",
+        // Report what leaked and where, without echoing the leaked text.
+        let request_line = req.lines().next().unwrap_or_default();
+        for (what, private) in [
+            ("the task", "SECRET_TASK_TEXT"),
+            ("a command", "SECRET_BUILD_TARGET"),
+            ("the model's code", "SECRET_CODE"),
+            ("the model's code", "fn main"),
+            ("a file path", "src/main.rs"),
         ] {
-            assert!(!req.contains(secret), "{secret} leaked: {req}");
+            assert!(!req.contains(private), "{what} leaked into {request_line}");
         }
     }
     let ntfy: Vec<&String> = got

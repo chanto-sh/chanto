@@ -1052,21 +1052,36 @@ mod tests {
     fn masks_token_formats_but_not_ordinary_code() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         with_values(&[]);
-        for secret in [
-            "AKIAIOSFODNN7EXAMPLE",
-            "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB",
-            "xoxb-1234567890-abcdefghij",
+        // A failure names the format; the sample itself stays out of the log.
+        for (format, sample) in [
+            ("AWS access key", "AKIAIOSFODNN7EXAMPLE"),
+            ("GitHub token", "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"),
+            ("Slack token", "xoxb-1234567890-abcdefghij"),
             // Formats whose last character can be `-`.
-            "xoxb-123456789-",
-            "glpat-abcdefghij012345678-",
-            "AIzaSyA0123456789abcdefghijklmnopqrstu-",
-            "SG.abcdefghij0123456789ab.abcdefghij0123456789abcdefghij0123456789ab-",
-            "sk-ant-api03-abcdefghijklmnopqrstuv",
-            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
-            "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+            ("Slack token ending in -", "xoxb-123456789-"),
+            ("GitLab token ending in -", "glpat-abcdefghij012345678-"),
+            (
+                "Google API key ending in -",
+                "AIzaSyA0123456789abcdefghijklmnopqrstu-",
+            ),
+            (
+                "SendGrid key ending in -",
+                "SG.abcdefghij0123456789ab.abcdefghij0123456789abcdefghij0123456789ab-",
+            ),
+            ("Anthropic key", "sk-ant-api03-abcdefghijklmnopqrstuv"),
+            (
+                "JWT",
+                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
+            ),
+            (
+                "OpenSSH private key",
+                "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
+            ),
         ] {
-            let out = redact(secret);
-            assert!(out.starts_with("[REDACTED:"), "{secret} -> {out}");
+            assert!(
+                redact(sample).starts_with("[REDACTED:"),
+                "{format} not redacted"
+            );
         }
         assert_eq!(
             redact("postgres://app:s3cretPass@db:5432/x"),

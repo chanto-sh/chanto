@@ -850,11 +850,10 @@ mod tests {
         assert!(matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key == "gsk_work"));
         assert_eq!(token("groqtest").await.unwrap(), "gsk_work");
         assert_eq!(account_label("groqtest").as_deref(), Some("work"));
+        // No table in the failure messages: if it is wrong it may hold a key.
         let table = accounts_table();
-        assert!(
-            table.contains("*work") && !table.contains("gsk_"),
-            "{table}"
-        );
+        assert!(table.contains("*work"), "the table marks `work` active");
+        assert!(!table.contains("gsk_"), "the table shows a key");
         switch_account("groqtest", DEFAULT_ACCOUNT).unwrap();
         assert!(
             matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key == "gsk_personal")
@@ -862,7 +861,7 @@ mod tests {
         let msg = cli(&["logout".into(), "groqtest".into(), "--as=work".into()])
             .await
             .unwrap();
-        assert!(msg.contains("as account \"work\""), "{msg}");
+        assert_eq!(msg, "Logged out of groqtest as account \"work\".");
         assert!(get("groqtest").is_some() && !accounts()["groqtest"].contains(&"work".to_string()));
         SESSION_ACCOUNTS.lock().unwrap().remove("groqtest");
         unsafe {

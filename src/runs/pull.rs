@@ -1621,13 +1621,15 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = format!("http://{}/acme/app.git", listener.local_addr().unwrap());
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-        let auth = super::super::git::auth_env(&url, "x-access-token", "ghs_secret");
+        // A fresh token per run: nothing else in the output can match it by chance.
+        let token = format!("ghs_{}", uuid::Uuid::new_v4().simple());
+        let auth = super::super::git::auth_env(&url, "x-access-token", &token);
         let u = url.clone();
         let err = tokio::task::spawn_blocking(move || default_branch(&u, &auth))
             .await
             .unwrap()
             .unwrap_err();
-        assert!(!format!("{err:#}").contains("ghs_secret"));
+        assert!(!format!("{err:#}").contains(&token));
         let seen = seen.lock().unwrap();
         assert!(
             seen.iter()
@@ -1637,7 +1639,7 @@ mod tests {
         use base64::Engine as _;
         let expected = format!(
             "Basic {}",
-            base64::engine::general_purpose::STANDARD.encode("x-access-token:ghs_secret")
+            base64::engine::general_purpose::STANDARD.encode(format!("x-access-token:{token}"))
         );
         assert!(seen.iter().all(|(_, a)| *a == expected), "{seen:?}");
     }

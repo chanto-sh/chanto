@@ -570,6 +570,14 @@ mod tests {
         response
     }
 
+    /// A raw response's status line and body. Tests compare these with
+    /// `assert_eq!`, whose failure report escapes them (`{:?}`): a response
+    /// is network input, and printed raw it could forge lines in the log.
+    pub(super) fn status_and_body(response: &str) -> (&str, &str) {
+        let (head, body) = response.split_once("\r\n\r\n").unwrap_or((response, ""));
+        (head.lines().next().unwrap_or_default(), body)
+    }
+
     #[tokio::test]
     async fn plain_http_allows_exact_host_and_ip_when_listed() {
         let port = server().await;
@@ -584,8 +592,7 @@ mod tests {
                 &format!("GET http://{host}:{port}/path?q=1 HTTP/1.1\r\nHost: {host}:{port}"),
             )
             .await;
-            assert!(out.starts_with("HTTP/1.1 200"), "{out}");
-            assert!(out.ends_with("fixture"));
+            assert_eq!(status_and_body(&out), ("HTTP/1.1 200 OK", "fixture"));
         }
         assert!(lease.take_blocked().is_empty());
     }
@@ -600,13 +607,14 @@ mod tests {
                 format!("CONNECT 127.0.0.1:{port} HTTP/1.1"),
             ] {
                 let out = request(&lease, &req).await;
-                assert!(out.starts_with("HTTP/1.1 403"), "{out}");
+                let (status, body) = status_and_body(&out);
+                assert_eq!(status, "HTTP/1.1 403 Forbidden");
                 assert!(
-                    out.contains(
+                    body.contains(
                         "network access to 127.0.0.1 was blocked by the sandbox allowlist"
                     )
                 );
-                assert!(out.contains("allowed_domains"));
+                assert!(body.contains("allowed_domains"));
                 assert_eq!(lease.take_blocked(), ["127.0.0.1"]);
             }
         }
@@ -748,7 +756,10 @@ mod framing_tests {
         let mut out = String::new();
         let read = client.read_to_string(&mut out).await;
         match read {
-            Ok(_) => assert!(out.ends_with("ok"), "{out}"),
+            Ok(_) => assert_eq!(
+                super::tests::status_and_body(&out),
+                ("HTTP/1.1 200 OK", "ok")
+            ),
             // Closing with unread pipelined bytes can reset the client socket.
             Err(e) => assert_eq!(e.kind(), std::io::ErrorKind::ConnectionReset),
         }
