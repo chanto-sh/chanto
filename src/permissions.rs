@@ -1314,20 +1314,10 @@ pub fn is_protected_path(p: &Path) -> bool {
     protected_as_written(p) || real_path(p).is_some_and(|r| r != p && protected_as_written(&r))
 }
 
-/// Where `p` really leads: its nearest existing ancestor with symlinks
-/// resolved, plus the components that don't exist yet.
+/// Where `p` really leads: symlinks resolved (dangling ones included) and
+/// `..` applied after them, plus the components that don't exist yet.
 pub fn real_path(p: &Path) -> Option<std::path::PathBuf> {
-    let mut rest = Vec::new();
-    let mut cur = p;
-    loop {
-        if let Ok(real) = std::fs::canonicalize(cur) {
-            let mut out = dunce::simplified(&real).to_path_buf();
-            out.extend(rest.iter().rev());
-            return Some(out);
-        }
-        rest.push(cur.file_name()?.to_os_string());
-        cur = cur.parent()?;
-    }
+    Some(normalize(p))
 }
 
 fn protected_as_written(p: &Path) -> bool {
@@ -1371,9 +1361,13 @@ pub fn extra_dirs() -> Vec<std::path::PathBuf> {
     EXTRA_DIRS.read().unwrap().clone()
 }
 
+/// Where a file tool's `path` argument leads, as [`in_workspace`] judges it.
+pub(crate) fn workspace_path(path: &Path, cwd: &Path) -> std::path::PathBuf {
+    normalize(&crate::util::resolve(cwd, &path.to_string_lossy()))
+}
+
 pub fn in_workspace(path: &Path, cwd: &Path) -> bool {
-    let abs = crate::util::resolve(cwd, &path.to_string_lossy());
-    let abs = normalize(&abs);
+    let abs = workspace_path(path, cwd);
     let root = project_root().unwrap_or_else(|| normalize(cwd));
     abs.starts_with(&root)
         || EXTRA_DIRS
@@ -1407,17 +1401,48 @@ pub fn normalize(p: &Path) -> std::path::PathBuf {
     if let Ok(c) = p.canonical() {
         return c;
     }
-    // Canonicalize the deepest existing ancestor and append the rest.
+    // Resolve one component at a time, as the OS does: a symlink is replaced
+    // by its target before a later `..` applies, so `link/../x` leaves from
+    // where `link` points, not from the directory holding it. A dangling link
+    // counts too (writing through it creates its target). Components that
+    // don't exist yet are taken as written.
+    use std::path::Component;
     let mut out = std::path::PathBuf::new();
-    for comp in p.components() {
-        match comp {
-            std::path::Component::ParentDir => {
-                out.pop();
+    let mut todo: Vec<std::path::PathBuf> =
+        p.components().rev().map(|c| c.as_os_str().into()).collect();
+    let mut links = 0;
+    while let Some(piece) = todo.pop() {
+        match piece.components().next() {
+            Some(Component::ParentDir) => {
+                if matches!(
+                    out.components().next_back(),
+                    None | Some(Component::ParentDir)
+                ) {
+                    out.push("..");
+                } else {
+                    out.pop();
+                }
             }
-            std::path::Component::CurDir => {}
-            c => out.push(c),
+            Some(Component::Normal(name)) => {
+                let next = out.join(name);
+                let target = std::fs::symlink_metadata(&next)
+                    .is_ok_and(|m| m.file_type().is_symlink())
+                    .then(|| std::fs::read_link(&next).ok())
+                    .flatten();
+                match target {
+                    // Past the OS's own limit the path doesn't open at all.
+                    Some(t) if links < 40 => {
+                        links += 1;
+                        todo.extend(t.components().rev().map(|c| c.as_os_str().into()));
+                    }
+                    _ => out = next,
+                }
+            }
+            Some(Component::CurDir) | None => {}
+            Some(c) => out.push(c),
         }
     }
+    // Canonicalize the deepest existing ancestor and append the rest.
     let mut existing = out.clone();
     let mut tail = Vec::new();
     while !existing.exists() {
@@ -2556,6 +2581,70 @@ mod claude_rule_tests {
             );
         }
         assert!(!is_protected_path(&d.join("src/new.rs")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// `..` after a symlink leaves from the link's target, as the OS
+    /// resolves it, not from the directory holding the link.
+    #[cfg(unix)]
+    #[test]
+    fn dotdot_after_a_symlink_leaves_from_its_target() {
+        let d = normalize(
+            &std::env::temp_dir().join(format!("chanto-dotdot-{}", uuid::Uuid::new_v4().simple())),
+        );
+        let (proj, out) = (d.join("proj"), d.join("out/deep"));
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::create_dir_all(&out).unwrap();
+        std::os::unix::fs::symlink(&out, proj.join("link")).unwrap();
+        // The file doesn't exist yet, so the check can't just canonicalize it.
+        let p = proj.join("link/../new.txt");
+        assert_eq!(normalize(&p), d.join("out/new.txt"));
+        // Where a write really lands.
+        std::fs::write(&p, "x").unwrap();
+        assert!(d.join("out/new.txt").exists() && !proj.join("new.txt").exists());
+        // Missing directories created on the way don't change that.
+        assert_eq!(normalize(&proj.join("a/../link/../b/c")), d.join("out/b/c"));
+        assert_eq!(normalize(&proj.join("a/b/../../c")), proj.join("c"));
+        // Through the scratch-dir rule: a link in temp to a system directory,
+        // then `..` out of it.
+        let sys = d.join("sys");
+        std::os::unix::fs::symlink("/usr/bin", &sys).unwrap();
+        let cwd = std::env::current_dir().unwrap();
+        assert!(!in_workspace(&sys.join("../chanto-escape-test"), &cwd));
+        let a = serde_json::json!({"file_path": sys.join("../chanto-escape-test"), "content": "x"});
+        assert_ne!(
+            static_decision(Mode::AcceptEdits, ToolKind::Edit, "Write", &a, &cwd),
+            Some(Decision::Allow)
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A dangling symlink is judged by where writing through it lands.
+    #[cfg(unix)]
+    #[test]
+    fn dangling_symlinks_are_judged_by_their_target() {
+        let d = normalize(
+            &std::env::temp_dir().join(format!("chanto-dangle-{}", uuid::Uuid::new_v4().simple())),
+        );
+        std::fs::create_dir_all(d.join(".git/hooks")).unwrap();
+        std::os::unix::fs::symlink("/usr/chanto-escape-test", d.join("dangle")).unwrap();
+        std::os::unix::fs::symlink("missing/x", d.join("rel")).unwrap();
+        std::os::unix::fs::symlink(".git/hooks/pre-commit", d.join("notes")).unwrap();
+        assert_eq!(
+            normalize(&d.join("dangle")),
+            Path::new("/usr/chanto-escape-test")
+        );
+        assert_eq!(normalize(&d.join("rel")), d.join("missing/x"));
+        let cwd = std::env::current_dir().unwrap();
+        assert!(!in_workspace(&d.join("dangle"), &cwd));
+        // Writing `notes` would create the hook.
+        assert!(is_protected_path(&d.join("notes")));
+        // A missing directory, then `..`, then a link into `.git`.
+        std::os::unix::fs::symlink(".git", d.join("docs")).unwrap();
+        assert!(is_protected_path(&d.join("new/../docs/hooks/pre-commit")));
+        // A link loop resolves to nothing the OS would open.
+        std::os::unix::fs::symlink(d.join("loop"), d.join("loop")).unwrap();
+        let _ = normalize(&d.join("loop/x"));
         let _ = std::fs::remove_dir_all(&d);
     }
 

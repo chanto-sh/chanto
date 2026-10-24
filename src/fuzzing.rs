@@ -51,3 +51,18 @@ pub fn proxy_authority(s: &str, default_port: u16) -> Option<(String, u16)> {
 pub fn webfetch_domain(url: &str) -> String {
     crate::tools::web::domain_of(url)
 }
+
+/// Whether a file tool's `path` argument (resolved against `cwd`) is inside
+/// the project at `root`: the project test of
+/// [`crate::permissions::in_workspace`], with the root it would have after
+/// [`crate::permissions::set_project_root`].
+pub fn in_project(path: &str, cwd: &std::path::Path, root: &std::path::Path) -> bool {
+    crate::permissions::workspace_path(std::path::Path::new(path), cwd)
+        .starts_with(crate::permissions::normalize(root))
+}
+
+/// The absolute path a file tool opens for its `path` argument
+/// ([`crate::util::resolve`]).
+pub fn tool_path(path: &str, cwd: &std::path::Path) -> std::path::PathBuf {
+    crate::util::resolve(cwd, path)
+}
