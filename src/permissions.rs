@@ -172,7 +172,7 @@ pub fn url_needs_approval(url: &str, cwd: &Path) -> bool {
     // reads too, not only the one read from the text below.
     if let Ok(parsed) = reqwest::Url::parse(u)
         && let Some(host) = parsed.host_str()
-        && metadata_host(host.trim_start_matches('[').trim_end_matches(']'))
+        && guarded_host(host.trim_start_matches('[').trim_end_matches(']'))
     {
         return true;
     }
@@ -195,7 +195,33 @@ pub fn url_needs_approval(url: &str, cwd: &Path) -> bool {
         .rsplit_once(':')
         .filter(|(h, _)| !h.contains(':'))
         .map_or(host, |(h, _)| h);
-    metadata_host(host)
+    guarded_host(host)
+}
+
+/// A host a fetch must ask about: cloud instance metadata, or this machine
+/// itself, whose local services (admin pages, databases' HTTP APIs, model
+/// servers) a prompt-injected model could read or poke. A
+/// `WebFetch(domain:localhost)` allow rule covers a dev server.
+fn guarded_host(host: &str) -> bool {
+    metadata_host(host) || loopback_host(host)
+}
+
+/// A host that names this machine: `localhost` and `*.localhost`, a
+/// loopback address in any encoding the URL parser accepts, or the
+/// unspecified address, which connects locally.
+fn loopback_host(host: &str) -> bool {
+    let host = host.trim_end_matches('.');
+    host == "localhost"
+        || host.ends_with(".localhost")
+        || host_ip(host).is_some_and(|ip| {
+            let ip = match ip {
+                std::net::IpAddr::V6(v6) => v6
+                    .to_ipv4_mapped()
+                    .map_or(std::net::IpAddr::V6(v6), std::net::IpAddr::V4),
+                v4 => v4,
+            };
+            ip.is_loopback() || ip.is_unspecified()
+        })
 }
 
 /// A host naming cloud instance metadata, by name or by address.
@@ -1558,9 +1584,10 @@ pub fn static_decision(
                 }
                 if mode != Mode::Default && inside {
                     Some(Decision::Allow)
-                } else if mode == Mode::Auto {
-                    None
                 } else {
+                    // Outside the project a human decides, in auto mode too:
+                    // the classifier is a model, and a model that's been
+                    // talked into the write is what this guards against.
                     Some(Decision::Ask)
                 }
             }
@@ -2489,13 +2516,23 @@ mod claude_rule_tests {
     }
 
     #[test]
+    fn a_domain_rule_lets_a_dev_server_be_fetched_without_asking() {
+        // Loopback fetches ask, but the user's own allow rule is checked first.
+        let rules = Rules::new(&["WebFetch(domain:localhost)".into()], &[], &[]);
+        let subjects = vec![crate::tools::web::domain_of("http://localhost:3000/")];
+        assert_eq!(rules.check("WebFetch", &subjects), Some(Decision::Allow));
+        let other = vec![crate::tools::web::domain_of("http://127.0.0.1:3000/")];
+        assert_eq!(rules.check("WebFetch", &other), None);
+    }
+
+    #[test]
     fn urls_that_reach_local_files_or_instance_metadata_ask() {
         let cwd =
             std::env::temp_dir().join(format!("chanto-url-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(&cwd).unwrap();
         for u in [
             "https://docs.rs/serde",
-            "http://localhost:3000/",
+            "https://localhost.example.com/",
             "example.com",
             "about:blank",
         ] {
@@ -2517,6 +2554,18 @@ mod claude_rule_tests {
             "http://169.254.169.254/",
             "http://[::ffff:169.254.169.254]/",
             "http://100.100.100.200/",
+            // This machine's own services, in any spelling.
+            "http://localhost:3000/",
+            "http://LOCALHOST./admin",
+            "http://app.localhost:8080/",
+            "http://127.0.0.1:11434/api/tags",
+            "http://127.1.2.3/",
+            "http://2130706433/",
+            "http://0x7f000001/",
+            "http://[::1]:8080/",
+            "http://[::ffff:127.0.0.1]/",
+            "http://0.0.0.0:5432/",
+            "http://user@localhost/",
             // Spellings the URL parser cleans up before it connects: control
             // characters around the URL, tabs inside it, `%`-escapes and a
             // trailing dot in the host.
@@ -2717,9 +2766,10 @@ mod claude_rule_tests {
         assert_eq!(d(&inside), Some(Decision::Allow));
         assert_eq!(d(&outside), Some(Decision::Ask));
         assert_eq!(d(&empty), Some(Decision::Ask));
+        // Auto mode doesn't hand outside writes to the classifier.
         assert_eq!(
             static_decision(Mode::Auto, ToolKind::Edit, "apply_patch", &outside, &cwd),
-            None
+            Some(Decision::Ask)
         );
     }
 
