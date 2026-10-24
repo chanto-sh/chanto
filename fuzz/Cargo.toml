@@ -39,3 +39,10 @@ path = "fuzz_targets/url_checks.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "path_checks"
+path = "fuzz_targets/path_checks.rs"
+test = false
+doc = false
+bench = false
