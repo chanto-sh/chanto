@@ -1988,6 +1988,16 @@ mod tests {
             std::fs::write(&bin, "#!/bin/sh\ntest -s \"$4\" && echo \"$4\"\n").unwrap();
             std::fs::set_permissions(&bin, std::os::unix::fs::PermissionsExt::from_mode(0o755))
                 .unwrap();
+            // A file just written can briefly be "busy" for exec while another
+            // test's fork still holds it open (ETXTBSY on Linux).
+            for _ in 0..50 {
+                match std::process::Command::new(&bin).status() {
+                    Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                        std::thread::sleep(std::time::Duration::from_millis(20))
+                    }
+                    _ => break,
+                }
+            }
             let local = crate::voice::Backend::Local {
                 bin,
                 model: "m.bin".into(),
