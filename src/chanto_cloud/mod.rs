@@ -55,8 +55,8 @@ pub fn gateway_error(status: u16, text: &str) -> String {
 pub fn provider(model: &str) -> Option<crate::llm::Provider> {
     let c = Cloud::signed_in().ok()?;
     // So the cost of its calls is known: the gateway publishes what it charges.
-    crate::cost::refresh_gateway_prices(&c.url, c.token());
-    Some(provider_for(&c.url, c.token(), default_org(), model))
+    crate::cost::refresh_gateway_prices(c.url(), c.token());
+    Some(provider_for(c.url(), c.token(), default_org(), model))
 }
 
 /// Claude models go to the gateway's Anthropic API, others to its
@@ -103,9 +103,9 @@ pub fn credential_source() -> Option<String> {
 pub fn provider_status() -> String {
     match (credential_source(), Cloud::signed_in()) {
         (Some(source), Ok(c)) if source.starts_with("env:") => {
-            format!("token from CHANTO_CLOUD_TOKEN · {}", c.url)
+            format!("token from CHANTO_CLOUD_TOKEN · {}", c.url())
         }
-        (Some(_), Ok(c)) => format!("signed in · {}", c.url),
+        (Some(_), Ok(c)) => format!("signed in · {}", c.url()),
         _ => "chanto cloud login".into(),
     }
 }
@@ -115,7 +115,7 @@ pub fn provider_status() -> String {
 pub fn doctor_info() -> Value {
     let c = Cloud::signed_in().ok();
     json!({
-        "url": c.as_ref().map(|c| c.url.clone()),
+        "url": c.as_ref().map(|c| c.url().to_string()),
         "credential_source": credential_source(),
         "org": default_org().unwrap_or_else(|| "personal".into()),
     })

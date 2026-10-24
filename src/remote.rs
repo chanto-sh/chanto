@@ -1046,7 +1046,10 @@ async fn start_cloud() -> String {
         Err(e) => return format!("Couldn't start remote control through Chanto cloud: {e:#}"),
     };
     let crypto = Arc::new(RemoteCrypto::with_parts(&created.id, bootstrap, handshake));
-    let session = crate::runs::cloud::Cloud::new(&account.url, &created.token);
+    let session = match crate::runs::cloud::Cloud::new(account.url(), &created.token) {
+        Ok(c) => c,
+        Err(e) => return format!("Couldn't start remote control through Chanto cloud: {e:#}"),
+    };
     let path = format!("/v1/remote/sessions/{}", created.id);
     let token = uuid::Uuid::new_v4().simple().to_string();
     let hub = Hub::new(SESSION_ID, &token, host.clone(), None);

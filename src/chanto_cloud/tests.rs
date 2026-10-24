@@ -184,7 +184,7 @@ async fn run_server(statuses: Vec<RunStatus>) -> (Cloud, Arc<std::sync::Mutex<Ve
             };
             Json(json!({"events": events}))
         }));
-    (Cloud::new(&serve(app).await, "cb_tok"), seen)
+    (Cloud::new(&serve(app).await, "cb_tok").unwrap(), seen)
 }
 
 #[tokio::test]
