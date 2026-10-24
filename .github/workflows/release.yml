@@ -104,17 +104,27 @@ jobs:
           esac
       # GitHub only stores attestations for public (or organization) repositories.
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        id: attest
         if: ${{ !github.event.repository.private }}
         with:
           subject-path: |
             dist/*.tar.gz
             dist/*.zip
+      # The same provenance as a release asset, where verifiers and scanners
+      # look for it (`*.intoto.jsonl`); `gh attestation verify --bundle` checks it.
+      - if: ${{ !github.event.repository.private }}
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          TARGET: ${{ matrix.target }}
+        run: jq -c . "$BUNDLE" > "dist/chanto-${GITHUB_REF_NAME}-${TARGET}.intoto.jsonl"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: ${{ matrix.target }}
           path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.intoto.jsonl
 
   release:
     # The desktop app and editor plugins aren't released yet; only the CLI is.
@@ -147,6 +157,7 @@ jobs:
           fi
           assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
           [ -f dist/SHA256SUMS.sig ] && assets+=(dist/SHA256SUMS.sig)
+          compgen -G 'dist/*.intoto.jsonl' > /dev/null && assets+=(dist/*.intoto.jsonl)
           awk -v h="## $GITHUB_REF_NAME " 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' \
             CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
