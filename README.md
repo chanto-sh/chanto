@@ -14,22 +14,17 @@
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-f59e0b">
   <a href="https://scorecard.dev/viewer/?uri=github.com/chanto-sh/chanto"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/chanto-sh/chanto/badge"></a>
   <a href="https://www.bestpractices.dev/projects/15833"><img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/15833/badge"></a>
-  <img alt="Rust" src="https://img.shields.io/badge/Rust-1.95%2B-000000?logo=rust&logoColor=white">
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue">
-  <img alt="Local models" src="https://img.shields.io/badge/local-Ollama%20·%20llama.cpp%20·%20vLLM-10b981">
-  <img alt="MCP" src="https://img.shields.io/badge/MCP-client%20%2B%20server-6C47FF">
-  <img alt="Setup" src="https://img.shields.io/badge/setup-imports%20your%20existing%20config-6C47FF">
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20·%20Linux%20·%20Windows-0078D6">
 </p>
 
 > [!NOTE]
-> **Chanto is in alpha.** Expect rough edges and breaking changes before 1.0.
-> [Issues](https://github.com/chanto-sh/chanto/issues) and feedback are welcome.
-> It's built by one developer with a lot of help from AI coding agents; CI
-> runs the tests on Linux, macOS and Windows with code scanning, and the
-> [security model](docs/security-model.md) explains how it protects you.
-
-> Switching from another agent? Chanto reads the config you already have, so you don't start over.
+> **Chanto is in alpha:** expect rough edges and breaking changes before 1.0.
+> It's built by one developer with a lot of help from AI coding agents; CI runs
+> the tests on Linux, macOS and Windows, and the [security model](docs/security-model.md)
+> explains how it protects you. [Issues](https://github.com/chanto-sh/chanto/issues)
+> and feedback are welcome. Switching from another agent? Chanto reads the config
+> you already have.
 
 <p align="center">
   <a href="docs/reference.md"><b>Docs</b></a> ·
@@ -42,32 +37,14 @@
 
 ## Install
 
-macOS and Linux:
-
 ```sh
-curl -fsSL https://chanto.sh/install.sh | sh
+curl -fsSL https://chanto.sh/install.sh | sh      # macOS and Linux
+brew install chanto-sh/tap/chanto                 # Homebrew
+npm i -g @chanto/cli                              # npm
+cargo install chanto --locked                     # from source (Rust 1.95+)
 ```
 
-Homebrew (macOS and Linux):
-
-```sh
-brew install chanto-sh/tap/chanto
-```
-
-npm, or Cargo (builds from source, needs Rust 1.95+):
-
-```sh
-npm i -g @chanto/cli
-cargo install chanto --locked
-```
-
-Windows (PowerShell):
-
-```powershell
-irm https://chanto.sh/install.ps1 | iex
-```
-
-The installer checks the download's checksum and puts `chanto` in `~/.local/bin` (it tells you if that isn't on your `PATH`). Update later with `chanto upgrade`. To build from a checkout instead: `./install.sh --from-source` (needs Rust 1.95+).
+On Windows (PowerShell): `irm https://chanto.sh/install.ps1 | iex`. The installers check the download's checksum and put `chanto` in `~/.local/bin`; `chanto upgrade` updates it.
 
 ## First run
 
@@ -114,7 +91,7 @@ In a session:
 
 | | |
 |---|---|
-| **Fast and lean** | One native binary that starts instantly and stays light on CPU and memory while it works, with fewer tokens per task than most agents ([benchmarks](https://github.com/chanto-sh/benchmarks/blob/main/RESULTS.md)) |
+| **Fast and lean** | One native binary that starts instantly and stays light on CPU and memory while it works ([benchmarks](#benchmarks)) |
 | **Any model** | Free to start (OpenRouter's free models, Gemini's free tier, or a local model); Ollama, llama.cpp, vLLM and other OpenAI-compatible servers; OpenAI, Anthropic, OpenRouter, DeepSeek and more; your ChatGPT login; Amazon Bedrock, Google Vertex AI and Azure with your cloud credentials |
 | **Safe by default** | Shell commands run in a sandbox on macOS and Linux (on Windows it confines writes only: reads and network aren't restricted), with optional network domain allowlists on macOS and Linux; risky actions need your OK, and auto mode screens commands for you |
 | **Undo** | `/rewind` restores files (including what shell commands changed) and the conversation to any earlier prompt |
@@ -197,38 +174,33 @@ Every action goes through a permission check first, and secrets are masked befor
 
 ## Benchmarks
 
-Same model, same tasks and same rules for every agent. Tasks come from a public set, not ones written for Chanto.
+Two things are measured, each with the same rules for every agent:
 
-The suite, every raw result and how to audit them live in [chanto-sh/benchmarks](https://github.com/chanto-sh/benchmarks).
-Results and caveats: [RESULTS.md](https://github.com/chanto-sh/benchmarks/blob/main/RESULTS.md).
+- **Overhead:** the CPU time and memory an agent spends per turn on its own work, with the model taken out (a local mock answers instantly), every agent at a pinned version.
+- **Task results:** pass rates on coding tasks from public sets (SWE-bench, HumanEval, DS-1000 and others) with the same model for every agent.
 
----
+Results, versions and caveats are in [RESULTS.md](https://github.com/chanto-sh/benchmarks/blob/main/RESULTS.md), with every raw result behind them. To check the overhead numbers on your own machine:
 
-## Repository
-
-```
-src/          the agent (Rust)
-proto/        wire types shared by the CLI and the hosted service (chanto-proto)
-classifier/   auto mode's command classifier
-docs/         full reference
+```sh
+git clone https://github.com/chanto-sh/benchmarks.git && cd benchmarks
+python3 reproduce.py --quick    # 6 native agents in a few minutes; drop --quick for all 18
 ```
 
 ---
 
 ## Development
 
-Needs Rust 1.95 or newer (`rustup update stable`).
+`src/` is the agent, `proto/` the wire types shared with the hosted service, `classifier/` auto mode's command classifier, and `docs/` the reference. It needs Rust 1.95 or newer:
 
 ```sh
 cargo build                 # add --release for target/release/chanto
 cargo test
 ```
 
-Day-to-day commands and architecture notes are in [AGENTS.md](AGENTS.md); how to
-contribute, report a vulnerability, and behave are in [CONTRIBUTING.md](CONTRIBUTING.md),
-[SECURITY.md](SECURITY.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md). How the
-project is run and where it's going: [GOVERNANCE.md](GOVERNANCE.md) and
-[ROADMAP.md](ROADMAP.md); how Chanto defends you: [docs/security-model.md](docs/security-model.md).
+[AGENTS.md](AGENTS.md) has the day-to-day commands and architecture; [CONTRIBUTING.md](CONTRIBUTING.md),
+[SECURITY.md](SECURITY.md) and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) cover contributing, reporting a
+vulnerability and behaviour; [GOVERNANCE.md](GOVERNANCE.md) and [ROADMAP.md](ROADMAP.md) cover how the
+project is run and where it's going.
 
 ---
 
