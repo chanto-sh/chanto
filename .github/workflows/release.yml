@@ -149,15 +149,23 @@ jobs:
           set -euo pipefail
           (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
           # Sign the checksum file so self-update can verify it (see src/update.rs
-          # RELEASE_PUBKEY_B64). Dormant until the RELEASE_SIGNING_KEY secret is set.
-          if [ -n "${RELEASE_SIGNING_KEY:-}" ]; then
-            printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.pem"
-            openssl pkeyutl -sign -inkey "$RUNNER_TEMP/release.pem" -rawin -in dist/SHA256SUMS | base64 -w0 > dist/SHA256SUMS.sig
-            rm -f "$RUNNER_TEMP/release.pem"
+          # RELEASE_PUBKEY_B64). `chanto upgrade` refuses an unsigned release, so
+          # no release goes out without the signature.
+          if [ -z "${RELEASE_SIGNING_KEY:-}" ]; then
+            echo "::error::RELEASE_SIGNING_KEY isn't set; refusing to publish an unsigned release"
+            exit 1
           fi
-          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS)
-          [ -f dist/SHA256SUMS.sig ] && assets+=(dist/SHA256SUMS.sig)
-          compgen -G 'dist/*.intoto.jsonl' > /dev/null && assets+=(dist/*.intoto.jsonl)
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.pem"
+          openssl pkeyutl -sign -inkey "$RUNNER_TEMP/release.pem" -rawin -in dist/SHA256SUMS | base64 -w0 > dist/SHA256SUMS.sig
+          rm -f "$RUNNER_TEMP/release.pem"
+          # Every archive carries its build provenance (attested in the build job).
+          for a in dist/*.tar.gz dist/*.zip; do
+            if [ ! -f "${a%.*}.intoto.jsonl" ] && [ ! -f "${a%.tar.gz}.intoto.jsonl" ]; then
+              echo "::error::no provenance for $a; refusing to publish"
+              exit 1
+            fi
+          done
+          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sig dist/*.intoto.jsonl)
           awk -v h="## $GITHUB_REF_NAME " 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' \
             CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
