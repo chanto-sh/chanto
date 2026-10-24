@@ -19,6 +19,7 @@ A fast, local-first agentic coding CLI written in Rust, built around one rule: i
 Cycle with `shift+tab`: `default` → `acceptEdits` → `plan` → `auto`, plus `bypassPermissions`.
 
 - **Auto mode** runs autonomously. Read-only and in-project actions run immediately, known-dangerous commands are hard-blocked, and anything else is screened by an LLM safety classifier. The classifier sees only your requests and the proposed action, never tool output, so prompt injection can't talk it into approving. After 3 blocks in a row, the decision falls back to you. Optional, experimental: `permissions.fast_path = true` clears routine shell commands with a small built-in model in microseconds instead of a model call (it can only allow, never block; see [classifier/](../classifier/README.md) for how it's measured).
+- **Always a human's call**, in every mode but `bypassPermissions`: reading secret files (`.env`, keys, `~/.ssh`, `~/.aws`), writing files outside the project or ones that make git or Chanto run commands (`.git/hooks`, hooks config), turning the command sandbox off, and fetching cloud instance metadata, this machine's own services (`localhost`, `127.0.0.1`, `::1`) or local files outside the project. An allow rule you write still covers its case, for example `WebFetch(domain:localhost)` for your dev server.
 
 ## Tools
 
