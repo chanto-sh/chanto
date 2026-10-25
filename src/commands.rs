@@ -2247,7 +2247,13 @@ pub async fn handle(agent: &mut Agent, line: &str) -> Outcome {
         "diff" => {
             let cwd = env.cwd();
             let git = |args: &[&str]| {
-                std::process::Command::new("git").args(args).current_dir(&cwd).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+                let mut c = crate::hostgit::command(&cwd);
+                c.args(args);
+                // A repository's diff drivers are programs too.
+                if args[0] == "diff" {
+                    c.args(crate::hostgit::DIFF_ARGS);
+                }
+                c.output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             };
             let Some(diff) = git(&["diff", "HEAD"]).or_else(|| git(&["diff"])) else {
                 return Outcome::Show("Not a git repository.".into());

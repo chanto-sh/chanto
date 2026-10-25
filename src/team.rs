@@ -691,10 +691,15 @@ fn run_body(team: &Team, t: &SubTask) -> Value {
 /// Ask the lead's model to accept or reject a finished sub-task.
 async fn review(env: &Env, team: &Team, t: &SubTask, run: &Run) -> (bool, String) {
     let (r2, b, br) = (team.repo.clone(), run.base.clone(), run.branch.clone());
-    let diff =
-        tokio::task::spawn_blocking(move || git::git(&r2, &["diff", &b, &br]).unwrap_or_default())
-            .await
-            .unwrap_or_default();
+    let diff = tokio::task::spawn_blocking(move || {
+        git::git(
+            &r2,
+            &[&["diff"][..], &crate::hostgit::DIFF_ARGS, &[&b, &br]].concat(),
+        )
+        .unwrap_or_default()
+    })
+    .await
+    .unwrap_or_default();
     if diff.trim().is_empty() {
         return (false, "it made no changes".into());
     }
@@ -997,7 +1002,7 @@ async fn drive_inner(
             status(env, ctl, team, &[]);
             let rid = team.subtasks[i].runs.last().cloned().unwrap_or_default();
             let r = host.get(&rid).await?;
-            match cherry_pick(&team.worktree, &r).await? {
+            match cherry_pick(&team.repo, &team.worktree, &r).await? {
                 Ok(()) => team.subtasks[i].state = SubState::Merged,
                 Err(files) => {
                     // Re-delegate once, on top of the merged work.
@@ -1017,10 +1022,11 @@ async fn drive_inner(
                         team.save()?;
                         continue;
                     }
-                    let wt = team.worktree.clone();
-                    let tip =
-                        tokio::task::spawn_blocking(move || git::git(&wt, &["rev-parse", "HEAD"]))
-                            .await??;
+                    let (repo, wt) = (team.repo.clone(), team.worktree.clone());
+                    let tip = tokio::task::spawn_blocking(move || {
+                        git::wt_git(&repo, &wt, &["rev-parse", "HEAD"])
+                    })
+                    .await??;
                     {
                         let t = &mut team.subtasks[i];
                         t.start = Some(tip);
@@ -1058,7 +1064,7 @@ async fn drive_inner(
                             done.state.label()
                         ));
                     } else {
-                        match cherry_pick(&team.worktree, &done).await? {
+                        match cherry_pick(&team.repo, &team.worktree, &done).await? {
                             Ok(()) => {
                                 t.state = SubState::Merged;
                                 t.note = Some(format!("re-delegated after conflicts in {files}"));
@@ -1101,23 +1107,27 @@ async fn drive_inner(
 
 /// Cherry-pick a run's own commits onto the team branch. Err(files) on a
 /// conflict (the cherry-pick is aborted, leaving the branch as it was).
-async fn cherry_pick(worktree: &Path, run: &Run) -> Result<std::result::Result<(), String>> {
-    let (wt, r) = (worktree.to_path_buf(), run.clone());
+async fn cherry_pick(
+    repo: &Path,
+    worktree: &Path,
+    run: &Run,
+) -> Result<std::result::Result<(), String>> {
+    let (repo, wt, r) = (repo.to_path_buf(), worktree.to_path_buf(), run.clone());
     tokio::task::spawn_blocking(move || -> Result<std::result::Result<(), String>> {
-        git::finalize(&r.worktree, &r.id, &r.task)?;
-        if git::commit_count(&wt, &r.base, &r.branch) == 0 {
+        git::finalize(&r.source.path, &r.worktree, &r.id, &r.task)?;
+        if git::commit_count(&repo, &r.base, &r.branch) == 0 {
             return Ok(Ok(()));
         }
         let range = format!("{}..{}", r.base, r.branch);
-        if git::git_ident(&wt, &["cherry-pick", "--allow-empty", &range]).is_ok() {
+        if git::wt_git_ident(&repo, &wt, &["cherry-pick", "--allow-empty", &range]).is_ok() {
             return Ok(Ok(()));
         }
-        let files = git::git(&wt, &["diff", "--name-only", "--diff-filter=U"])
+        let files = git::wt_git(&repo, &wt, &["diff", "--name-only", "--diff-filter=U"])
             .unwrap_or_default()
             .lines()
             .collect::<Vec<_>>()
             .join(", ");
-        let _ = git::git(&wt, &["cherry-pick", "--abort"]);
+        let _ = git::wt_git(&repo, &wt, &["cherry-pick", "--abort"]);
         Ok(Err(if files.is_empty() {
             "(unknown files)".into()
         } else {

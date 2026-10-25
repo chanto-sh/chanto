@@ -39,6 +39,7 @@ mod goal;
 mod guardrails;
 mod history;
 mod hooks;
+mod hostgit;
 mod http;
 mod ide;
 mod insights;
@@ -1094,6 +1095,7 @@ async fn setup_session(
         cfg.sandbox.enabled && tools::bash::sandbox_available(),
         std::sync::atomic::Ordering::Relaxed,
     );
+    guardrails::set_policy(&cfg.sandbox, &cfg.secrets);
     if cfg.sandbox.enabled {
         tools::bash::start_sandbox_probe();
     }

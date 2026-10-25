@@ -193,7 +193,7 @@ async fn a_model_run_is_pushed_as_a_branch_and_reported() {
     let c = client(&serve_queue(q.clone()).await);
     let mut job = job_for(&origin, "create hello.txt");
     job.checks = Some(vec!["true".into()]);
-    let status = execute(&c, &m, &job, None, false).await.unwrap();
+    let status = execute(&c, &m, &job, None, false, true).await.unwrap();
     assert_eq!(status, RunStatus::Succeeded);
     let done = q.complete();
     assert_eq!(done.status, RunStatus::Succeeded);
@@ -231,7 +231,7 @@ async fn unattended_runs_deny_prompts_and_report_no_changes() {
     let c = client(&serve_queue(q.clone()).await);
     let mut job = job_for(&origin, "build it");
     job.git_ref = Some("main".into());
-    let status = execute(&c, &m, &job, Some("acceptEdits".into()), false)
+    let status = execute(&c, &m, &job, Some("acceptEdits".into()), false, true)
         .await
         .unwrap();
     assert_eq!(status, RunStatus::Succeeded);
@@ -260,7 +260,7 @@ async fn runs_that_cannot_start_are_reported_failed() {
     q.creds_status.store(403, Ordering::SeqCst);
     let job = job_for(&origin, "x");
     assert_eq!(
-        execute(&c, &m, &job, None, false).await.unwrap(),
+        execute(&c, &m, &job, None, false, true).await.unwrap(),
         RunStatus::Failed
     );
     let done = q.completes.lock().unwrap().pop().unwrap();
@@ -274,7 +274,7 @@ async fn runs_that_cannot_start_are_reported_failed() {
     );
     // Another runner holds it: nothing is reported.
     q.creds_status.store(409, Ordering::SeqCst);
-    let e = execute(&c, &m, &job, None, false).await.unwrap_err();
+    let e = execute(&c, &m, &job, None, false, true).await.unwrap_err();
     assert!(is_lost_lease(&e), "{e:#}");
     assert!(q.completes.lock().unwrap().is_empty());
 
@@ -282,7 +282,7 @@ async fn runs_that_cannot_start_are_reported_failed() {
     q.creds_status.store(404, Ordering::SeqCst);
     let job = job_for(&home.dir.join("no-such-repo"), "x");
     assert_eq!(
-        execute(&c, &m, &job, None, false).await.unwrap(),
+        execute(&c, &m, &job, None, false, true).await.unwrap(),
         RunStatus::Failed
     );
     let done = q.completes.lock().unwrap().pop().unwrap();
@@ -296,7 +296,7 @@ async fn runs_that_cannot_start_are_reported_failed() {
     job.script = Some("echo hi".into());
     job.git_ref = Some("no-such-branch".into());
     assert_eq!(
-        execute(&c, &m, &job, None, false).await.unwrap(),
+        execute(&c, &m, &job, None, false, true).await.unwrap(),
         RunStatus::Failed
     );
     let done = q.completes.lock().unwrap().pop().unwrap();
@@ -312,6 +312,38 @@ async fn runs_that_cannot_start_are_reported_failed() {
 }
 
 #[tokio::test]
+async fn scripts_need_the_runners_opt_in() {
+    let (home, m) = runner_home("pull-noscript", "http://127.0.0.1:1/v1");
+    let origin = make_repo(&home);
+    let q = Queue::new();
+    let c = client(&serve_queue(q.clone()).await);
+    let marker = home.dir.join("script-ran");
+    let mut job = job_for(&origin, "");
+    job.script = Some(format!("touch '{}'", marker.display()));
+    assert_eq!(
+        execute(&c, &m, &job, None, false, false).await.unwrap(),
+        RunStatus::Failed
+    );
+    let done = q.completes.lock().unwrap().pop().unwrap();
+    assert!(
+        done.result.summary.contains("--allow-scripts"),
+        "{}",
+        done.result.summary
+    );
+    assert!(!marker.exists());
+    assert!(m.list().is_empty());
+    m.close().await;
+}
+
+#[test]
+fn run_ids_from_a_server_are_checked() {
+    assert!(valid_run_id("01HZX4-abc_9"));
+    for bad in ["", "../x", "a/b", "a b", "é", &"x".repeat(65)] {
+        assert!(!valid_run_id(bad), "{bad}");
+    }
+}
+
+#[tokio::test]
 async fn script_only_runs_push_their_changes() {
     let (home, m) = runner_home("pull-script", "http://127.0.0.1:1/v1");
     let origin = make_repo(&home);
@@ -322,7 +354,7 @@ async fn script_only_runs_push_their_changes() {
     let mut job = job_for(&origin, "");
     job.script = Some("echo fresh > data.txt\necho wrote it".into());
     assert_eq!(
-        execute(&c, &m, &job, None, false).await.unwrap(),
+        execute(&c, &m, &job, None, false, true).await.unwrap(),
         RunStatus::Succeeded
     );
     let done = q.completes.lock().unwrap().pop().unwrap();
@@ -359,7 +391,7 @@ async fn script_only_runs_push_their_changes() {
     job.script = Some("echo checking\nexit 3".into());
     job.model_runs = ModelRuns::OnChange;
     assert_eq!(
-        execute(&c, &m, &job, None, false).await.unwrap(),
+        execute(&c, &m, &job, None, false, true).await.unwrap(),
         RunStatus::Failed
     );
     let done = q.completes.lock().unwrap().pop().unwrap();
@@ -385,7 +417,7 @@ async fn the_model_continues_from_the_scripts_commit() {
     job.script = Some("echo step1 > step.txt".into());
     job.model_runs = ModelRuns::OnChange;
     assert_eq!(
-        execute(&c, &m, &job, None, false).await.unwrap(),
+        execute(&c, &m, &job, None, false, true).await.unwrap(),
         RunStatus::Succeeded
     );
     let done = q.complete();
@@ -429,10 +461,13 @@ async fn cancelling_and_losing_the_lease_stop_the_run() {
     q.cancel.store(true, Ordering::SeqCst);
     let mut job = job_for(&origin, "long task");
     job.lease_secs = 3;
-    let status = tokio::time::timeout(Duration::from_secs(60), execute(&c, &m, &job, None, false))
-        .await
-        .unwrap()
-        .unwrap();
+    let status = tokio::time::timeout(
+        Duration::from_secs(60),
+        execute(&c, &m, &job, None, false, true),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(status, RunStatus::Cancelled);
     assert_eq!(
         q.completes.lock().unwrap().pop().unwrap().status,
@@ -443,10 +478,13 @@ async fn cancelling_and_losing_the_lease_stop_the_run() {
     let mut job = job_for(&origin, "");
     job.lease_secs = 3;
     job.script = Some("sleep 30".into());
-    let status = tokio::time::timeout(Duration::from_secs(20), execute(&c, &m, &job, None, false))
-        .await
-        .unwrap()
-        .unwrap();
+    let status = tokio::time::timeout(
+        Duration::from_secs(20),
+        execute(&c, &m, &job, None, false, true),
+    )
+    .await
+    .unwrap()
+    .unwrap();
     assert_eq!(status, RunStatus::Cancelled);
     let done = q.completes.lock().unwrap().pop().unwrap();
     assert_eq!(done.result.summary, "Cancelled while its script ran.");
@@ -458,10 +496,13 @@ async fn cancelling_and_losing_the_lease_stop_the_run() {
     q.heartbeat_status.store(409, Ordering::SeqCst);
     let mut job = job_for(&origin, "long task");
     job.lease_secs = 3;
-    let e = tokio::time::timeout(Duration::from_secs(60), execute(&c, &m, &job, None, false))
-        .await
-        .unwrap()
-        .unwrap_err();
+    let e = tokio::time::timeout(
+        Duration::from_secs(60),
+        execute(&c, &m, &job, None, false, true),
+    )
+    .await
+    .unwrap()
+    .unwrap_err();
     assert!(is_lost_lease(&e), "{e:#}");
     assert!(q.completes.lock().unwrap().is_empty());
     for r in m.list() {
@@ -699,6 +740,7 @@ fn refs_resolve_against_the_remote() {
 fn script_outcomes_read_well() {
     let o = |ok, code, output: &str, changed| ScriptOutcome {
         dir: PathBuf::from("/nowhere"),
+        git_dir: PathBuf::from("/nowhere.git"),
         ok,
         code,
         output: output.into(),

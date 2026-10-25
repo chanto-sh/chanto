@@ -87,6 +87,24 @@ Landlock and bubblewrap on Linux, a write-restricted token on Windows):
 The permission layer and the sandbox are independent, so a mistake in one is
 still contained by the other.
 
+Commands Chanto runs from project content rather than from the model also
+run under the sandbox and without secret-named variables: verified-mode,
+goal, outcome and team checks, formatters, and the scripts a runner takes
+from a server (only with `chanto runner connect --allow-scripts`). Language
+servers start without secret-named variables.
+
+Git that Chanto runs on the host, outside the sandbox (the startup status,
+the branch shown in the TUI, `/diff`, worktrees and background runs), turns
+off what a repository's own config could make it run: the fsmonitor hook,
+hooks, signing, external diff and textconv drivers, the repository's filter
+and merge drivers (Git LFS's standard commands are kept), and submodules.
+Bare repositories are never found by walking up from the working directory.
+For a worktree, the git directory comes from the repository's own records,
+which must name it exactly once and lead back to that repository; the
+worktree's `.git` file, which commands in the worktree can rewrite, is never
+followed, and file tools ask before writing any `.git` (including its Windows
+spellings such as `.git.` and `GIT~1`).
+
 ### 3. Project files ↔ your settings: folder trust
 
 Settings in a project that could run code or widen permissions (hooks, MCP

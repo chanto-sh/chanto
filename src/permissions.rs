@@ -1346,10 +1346,29 @@ pub fn real_path(p: &Path) -> Option<std::path::PathBuf> {
     Some(normalize(p))
 }
 
+/// A path component as Windows resolves it: no `:stream` suffix, no
+/// trailing dots or spaces, and `.git`'s 8.3 short name (`GIT~1`) spelled
+/// out, so `.git.`, `.git::$INDEX_ALLOCATION` and `git~1` all name `.git`.
+/// Applied everywhere: on other systems it only protects a little more.
+fn component_name(c: &str) -> String {
+    let c = c.to_lowercase();
+    let c = match c.split_once(':') {
+        // A drive prefix (`c:`) keeps its colon.
+        Some((name, _)) if !name.is_empty() && !(name.len() == 1 && c.len() == 2) => name,
+        _ => c.as_str(),
+    };
+    let c = c.trim_end_matches(['.', ' ']);
+    match c {
+        "git~1" => ".git".to_string(),
+        "" => String::new(),
+        c => c.to_string(),
+    }
+}
+
 fn protected_as_written(p: &Path) -> bool {
     let comps: Vec<String> = p
         .components()
-        .map(|c| c.as_os_str().to_string_lossy().to_lowercase())
+        .map(|c| component_name(&c.as_os_str().to_string_lossy()))
         .collect();
     // Isolated agents' worktrees live under .chanto/worktrees and are fair game.
     let in_worktree = comps
@@ -1357,7 +1376,10 @@ fn protected_as_written(p: &Path) -> bool {
         .any(|w| w[0] == ".chanto" && w[1] == "worktrees");
     let name = comps.last().map(String::as_str).unwrap_or("");
     let has = |d: &str| comps.iter().rev().skip(1).any(|c| c == d);
-    if comps.iter().rev().skip(1).any(|c| c == ".git") || name == ".git" && p.is_dir() {
+    // `.git` itself too, as a file: a worktree's `.git` file says where its
+    // git directory is, and pointing it at another repository makes the next
+    // git call run that repository's hooks and fsmonitor.
+    if comps.iter().rev().skip(1).any(|c| c == ".git") || name == ".git" {
         return true;
     }
     // A background run's worktree (under `<home>/runs/worktrees/`) is a
@@ -2732,6 +2754,29 @@ mod claude_rule_tests {
             .join("ab12cd34");
         assert!(is_protected_path(&wt.join(".chanto/config.toml")));
         assert!(!is_protected_path(&wt.join("src/a.rs")));
+        // A worktree's `.git` is a file naming its git directory: rewriting
+        // it would point the host's next git call at another repository.
+        assert!(is_protected_path(&wt.join(".git")));
+        assert!(is_protected_path(Path::new(
+            "/r/.chanto/worktrees/agent-1/.git"
+        )));
+        assert!(is_protected_path(Path::new("/r/.git")));
+        // Windows spellings of `.git` (trailing dots and spaces, streams, the
+        // 8.3 short name).
+        for p in [
+            "/r/.git.",
+            "/r/.git ",
+            "/r/.GIT. ./config",
+            "/r/.git::$INDEX_ALLOCATION/config",
+            "/r/.git:stream",
+            "/r/GIT~1/hooks/pre-commit",
+            "/r/.chanto./config.toml",
+        ] {
+            assert!(is_protected_path(Path::new(p)), "{p}");
+        }
+        assert_eq!(component_name("c:"), "c:");
+        assert_eq!(component_name(".."), "");
+        assert!(!is_protected_path(Path::new("/r/src/git.rs")));
         // So do the worktrees of runs a runner takes from a server.
         let pulled = crate::runs::pull::store_dir()
             .join("worktrees")

@@ -686,9 +686,10 @@ impl Manager {
         // before anyone sees it as done.
         if state == RunState::Done {
             let r = h.run.lock().unwrap().clone();
-            if let Ok(Err(e)) =
-                tokio::task::spawn_blocking(move || git::finalize(&r.worktree, &r.id, &r.task))
-                    .await
+            if let Ok(Err(e)) = tokio::task::spawn_blocking(move || {
+                git::finalize(&r.source.path, &r.worktree, &r.id, &r.task)
+            })
+            .await
             {
                 self.publish(h, json!({"type": "warning", "message": format!("could not commit the run's changes: {e:#}")}));
             }
