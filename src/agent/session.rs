@@ -360,7 +360,16 @@ impl Agent {
     pub fn restore_todos(&mut self) {
         let mut acp_session = None;
         if let Some(session) = &self.session {
-            if let Some(mode) = session.settings["mode"].as_str().and_then(Mode::parse) {
+            // Bypass is never restored from a session file: it has to be
+            // chosen again (`--dangerously-skip-permissions`, shift+tab) in
+            // the session that uses it. A managed policy mode outranks the
+            // saved one, as it does at startup.
+            if let Some(mode) = self.env.config.policy_mode.or_else(|| {
+                session.settings["mode"]
+                    .as_str()
+                    .and_then(Mode::parse)
+                    .filter(|m| *m != Mode::Bypass)
+            }) {
                 self.env.set_mode(mode);
             }
             if let Some(think) = session.settings["think"].as_bool() {

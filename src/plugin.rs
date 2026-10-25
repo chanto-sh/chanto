@@ -92,6 +92,24 @@ fn copy(src: &Path, dst: &Path) -> Result<()> {
     }
     Ok(())
 }
+/// A cloned plugin must not carry symlinks, as copied ones can't: a
+/// `SKILL.md` linked to `~/.aws/credentials` would hand that file to the model.
+fn reject_symlinks(dir: &Path) -> Result<()> {
+    for e in fs::read_dir(dir)? {
+        let e = e?;
+        if e.file_name() == ".git" {
+            continue;
+        }
+        let ty = e.file_type()?;
+        if ty.is_symlink() {
+            bail!("Plugin contains symlink: {}", e.path().display());
+        }
+        if ty.is_dir() {
+            reject_symlinks(&e.path())?;
+        }
+    }
+    Ok(())
+}
 fn marketplace(path: &Path) -> Result<Value> {
     let m = read(&path.join(".claude-plugin/marketplace.json"))?;
     name(m["name"].as_str().context("Marketplace needs a name")?)?;
@@ -320,6 +338,7 @@ pub fn run(base: &Path, args: &[String], confirm: &mut dyn FnMut(&str) -> bool) 
                         }
                         git(&["-C", stage.to_str().unwrap(), "checkout", "--detach", rev])?;
                     }
+                    reject_symlinks(&stage)?;
                 }
                 let mut manifest = entry.clone();
                 let path = stage.join(".claude-plugin/plugin.json");
@@ -340,7 +359,7 @@ pub fn run(base: &Path, args: &[String], confirm: &mut dyn FnMut(&str) -> bool) 
                 let (summary, risky) = plugin.contents();
                 if risky && !yes && !confirm(&summary) {
                     bail!(
-                        "Install cancelled; hooks/MCP/LSP require confirmation or --yes\n{summary}"
+                        "Install cancelled; hooks, MCP/LSP servers and skills or commands that run commands require confirmation or --yes\n{summary}"
                     );
                 }
                 fs::create_dir_all(base.join("installed"))?;
@@ -403,7 +422,7 @@ mod tests {
         };
         write(
             ".claude-plugin/marketplace.json",
-            r#"{"name":"local","owner":{"name":"test"},"plugins":[{"name":"hello","source":"./hello","description":"Greeting","version":"1"},{"name":"risky","source":"./risky","mcpServers":{"test":{"command":"false"}}},{"name":"escape","source":"../../"}]}"#,
+            r#"{"name":"local","owner":{"name":"test"},"plugins":[{"name":"hello","source":"./hello","description":"Greeting","version":"1"},{"name":"risky","source":"./risky","mcpServers":{"test":{"command":"false"}}},{"name":"escape","source":"../../"},{"name":"inline","source":"./inline"},{"name":"grants","source":"./grants"}]}"#,
         );
         write("hello/.claude-plugin/plugin.json", r#"{"name":"hello"}"#);
         write(
@@ -415,6 +434,15 @@ mod tests {
             "---\nname: greeting\ndescription: Greeting skill\n---\nSay hello.",
         );
         write("risky/.claude-plugin/plugin.json", r#"{"name":"risky"}"#);
+        // Skills and commands that run something when invoked ask, too.
+        write(
+            "inline/skills/s/SKILL.md",
+            "---\nname: s\n---\nContext: !`curl example.com`",
+        );
+        write(
+            "grants/commands/c.md",
+            "---\nallowed-tools: Bash(*)\n---\nDo it.",
+        );
         let base = root();
         let run = |args: &[&str]| {
             run(
@@ -434,6 +462,16 @@ mod tests {
                 .contains("require confirmation")
         );
         assert!(!base.join("installed/risky@local").exists());
+        for (id, shows) in [
+            ("inline@local", "!`curl example.com`"),
+            ("grants@local", "allowed-tools"),
+        ] {
+            let e = run(&["install", id]).unwrap_err().to_string();
+            assert!(
+                e.contains("require confirmation") && e.contains(shows),
+                "{e}"
+            );
+        }
         run(&["install", "risky@local", "--yes"]).unwrap();
         run(&["uninstall", "risky"]).unwrap();
         let summary = run(&["install", "hello@local"]).unwrap();

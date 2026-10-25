@@ -87,6 +87,11 @@ pub struct Fire {
     pub prompt: String,
     /// One line for the transcript, e.g. "Scheduled task ab12cd34 fired".
     pub note: String,
+    /// Send `prompt` to the model as it is: never run it as a slash command,
+    /// `!shell` or `#note`. Set for everything the user didn't type: the
+    /// model's CronCreate tasks and the default loop prompt (`loop.md` may
+    /// come from the project).
+    pub literal: bool,
 }
 
 #[derive(Debug, Default)]
@@ -436,11 +441,16 @@ impl Scheduler {
         ))
     }
 
-    /// CronCreate.
+    /// CronCreate. The model writes these prompts, so one that would read as
+    /// typed input (`!shell`, `/command`, `#note`) is refused; the frontends
+    /// also send cron fires to the model literally ([`Fire::literal`]).
     pub fn create(&self, cron: &str, prompt: &str, recurring: bool) -> Result<Task, String> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
             return Err("`prompt` is empty.".into());
+        }
+        if prompt.starts_with(['!', '/', '#']) {
+            return Err("A scheduled prompt is sent to the model as plain text, so it can't start with `!`, `/` or `#` (those run shell commands, slash commands and memory notes only when the user types them). Describe the task in words instead, e.g. \"run the test suite and report failures\".".into());
         }
         let parsed = Cron::parse(cron).map_err(|e| format!("{e:#}"))?;
         let now = Local::now();
@@ -540,6 +550,7 @@ impl Scheduler {
             Source::Loop => Fire {
                 id: t.id.clone(),
                 source: Source::Loop,
+                literal: t.prompt.is_none(),
                 prompt: t.prompt.clone().unwrap_or_else(|| default_prompt(cwd)),
                 note: format!("↻ Loop iteration{ending}"),
             },
@@ -553,6 +564,7 @@ impl Scheduler {
                 Fire {
                     id: t.id.clone(),
                     source: Source::Wakeup,
+                    literal: prompt.is_none(),
                     prompt: self_paced_prompt(prompt, cwd),
                     note: "↻ Loop iteration".into(),
                 }
@@ -560,6 +572,7 @@ impl Scheduler {
             Source::Cron => Fire {
                 id: t.id.clone(),
                 source: Source::Cron,
+                literal: true,
                 prompt: format!(
                     "{}\n\n<system-reminder>This prompt was scheduled with CronCreate (task {}, {}){}.</system-reminder>",
                     t.prompt_text(),
@@ -719,6 +732,26 @@ mod tests {
         s.start_loop(Some(Duration::from_secs(60)), Some("x".into()));
         s.stop_loop();
         assert_eq!(s.tasks().len(), 1);
+    }
+
+    #[test]
+    fn model_scheduled_prompts_never_read_as_typed_input() {
+        let s = Scheduler::default();
+        for p in ["!touch /tmp/x", " /review", "#remember this", "\n!id"] {
+            assert!(s.create("* * * * *", p, true).is_err(), "{p:?}");
+        }
+        s.create("* * * * *", "run the tests", false).unwrap();
+        let later = Local::now() + ChronoDuration::minutes(2);
+        assert!(s.take_due(later, &dir()).unwrap().literal);
+        // The user's own `/loop 5m /cmd` may run a command; the default
+        // prompt (which `loop.md` in the project can supply) may not.
+        s.start_loop(Some(Duration::from_secs(300)), Some("/babysit".into()));
+        assert!(!s.take_due(Local::now(), &dir()).unwrap().literal);
+        s.start_loop(Some(Duration::from_secs(300)), None);
+        assert!(s.take_due(Local::now(), &dir()).unwrap().literal);
+        s.start_loop(None, None);
+        assert!(s.take_due(Local::now(), &dir()).unwrap().literal);
+        s.stop_loop();
     }
 
     #[test]

@@ -129,10 +129,20 @@ pub fn import(path: &Path, cwd: &Path) -> Result<Session> {
     };
     let mut data: SessionFile = serde_json::from_str(json)
         .map_err(|e| anyhow::anyhow!("{} isn't a chanto session: {e}", path.display()))?;
+    // Only the transcript, title, model and stats come across: a shared file
+    // is someone else's, so nothing in it may set this session's permission
+    // mode, tool policy or output style, claim a pull request or a parent
+    // session, or sort itself to the top of `-r` with a future date.
     let fresh = Session::new(cwd, &data.meta.model);
     data.meta.id = fresh.id;
     data.meta.cwd = cwd.into();
     data.meta.created = fresh.created;
+    data.meta.updated = fresh.updated;
+    data.meta.settings = serde_json::Value::Null;
+    data.meta.pull_requests.clear();
+    data.meta.parent_id = None;
+    data.meta.fork_point = None;
+    data.meta.archived = false;
     data.meta.checkpoints.clear();
     data.meta.rewind_undo = None;
     crate::secrets::redact_messages(&mut data.messages);
@@ -286,6 +296,41 @@ mod tests {
         }
         // Best-effort: on Windows another process (a scanner or indexer) can
         // still hold a file we just wrote, and the temp dir is cleaned anyway.
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn import_drops_settings_links_and_future_dates() {
+        let _home = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("chanto-share-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe {
+            std::env::set_var("CHANTO_HOME", &dir);
+        }
+        let mut session = Session::new(&dir, "test-model");
+        session.settings =
+            serde_json::json!({"mode": "bypass", "acp_session": "x", "tool_policy": {}});
+        session.pull_requests = vec!["https://github.com/o/r/pull/1".into()];
+        session.parent_id = Some("other".into());
+        session.fork_point = Some(3);
+        session.updated = "2999-01-01T00:00:00+00:00".into();
+        let file = SessionFile {
+            meta: session,
+            messages: vec![Message::user("hi")],
+        };
+        let path = dir.join("shared.json");
+        std::fs::write(&path, serde_json::to_string(&file).unwrap()).unwrap();
+        let imported = import(&path, &dir).unwrap();
+        let (back, _) = Session::load(&dir, &imported.id).unwrap();
+        assert!(back.settings.is_null(), "{}", back.settings);
+        assert!(back.pull_requests.is_empty());
+        assert!(back.parent_id.is_none() && back.fork_point.is_none());
+        assert!(back.updated <= chrono::Local::now().to_rfc3339());
+        unsafe {
+            std::env::remove_var("CHANTO_HOME");
+        }
         let _ = std::fs::remove_dir_all(dir);
     }
 

@@ -1566,7 +1566,14 @@ pub fn static_decision(
         },
         Mode::Default | Mode::AcceptEdits | Mode::Auto => match kind {
             ToolKind::ReadOnly => Some(Decision::Allow),
-            ToolKind::Edit if tool == "Memory" => Some(Decision::Allow),
+            // Project memory stays with the project; user memory reaches every
+            // later session in every project, so a human approves it (the
+            // agent fills in the configured scope before asking this).
+            ToolKind::Edit if tool == "Memory" => Some(if args["scope"] == "project" {
+                Decision::Allow
+            } else {
+                Decision::Ask
+            }),
             ToolKind::Edit => {
                 // Every file the edit touches must be inside the workspace.
                 let paths: Vec<String> = match tool {

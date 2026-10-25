@@ -151,6 +151,84 @@ pub(super) fn permission(proposed: Option<&str>) -> PermissionRequest {
 // ------------------------------------------------------------------ tests
 
 #[tokio::test]
+async fn literal_turns_do_not_expand_mentions_or_dispatch_commands() {
+    use crate::agent::tests::mock_server;
+    use serde_json::json;
+
+    let mut t = test_app();
+    let outside = tmpdir("literal-mention-outside");
+    let secret = outside.join("credentials.txt");
+    std::fs::write(&secret, "literal-mention-secret").unwrap();
+    let prompts = [
+        format!(
+            "summarize @{} [Image #1] @server:resource",
+            secret.display()
+        ),
+        "/exit".to_string(),
+        format!("!touch {}", t.dir.join("executed").display()),
+        "#--agents injected note".to_string(),
+    ];
+    let (base, seen) =
+        mock_server(prompts.iter().map(|_| json!({"content": "done"})).collect()).await;
+    let env = make_env_with(&base, &t.dir, Mode::Default, 32768, |_| {});
+    t.env = env.clone();
+    t.agent = Arc::new(AsyncMutex::new(Agent::new(env)));
+    t.images.push(secret.clone());
+    for prompt in &prompts {
+        t.start_hidden(prompt.clone(), true);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                match t.rx.recv().await.unwrap() {
+                    AppMsg::TurnDone(err) => {
+                        assert!(err.is_none(), "{err:?}");
+                        break;
+                    }
+                    AppMsg::Exit => panic!("literal /exit was dispatched"),
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .unwrap();
+    }
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), prompts.len());
+    for (request, prompt) in requests.iter().zip(&prompts) {
+        let messages = request["messages"].as_array().unwrap();
+        assert!(messages.iter().any(|m| {
+            m["role"] == "user"
+                && m["content"]
+                    .as_str()
+                    .is_some_and(|text| text.contains(prompt.as_str()))
+        }));
+        assert!(!request.to_string().contains("literal-mention-secret"));
+    }
+    assert_eq!(t.images, vec![secret]);
+    assert!(!t.dir.join("executed").exists());
+    assert!(!t.dir.join("AGENTS.md").exists());
+    std::fs::remove_dir_all(outside).unwrap();
+}
+
+#[tokio::test]
+async fn a_users_own_loop_prompt_still_runs_as_typed() {
+    // `/loop 5m !cmd` fires with `literal: false`: the user typed it.
+    let mut t = test_app();
+    let ran = t.dir.join("ran");
+    // A redirect works in sh, cmd and PowerShell alike; `touch` doesn't.
+    t.start_hidden(format!("!echo x > \"{}\"", ran.display()), false);
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            if let AppMsg::TurnDone(_) = t.rx.recv().await.unwrap() {
+                break;
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert!(ran.exists());
+}
+
+#[tokio::test]
 async fn a_new_app_starts_idle_on_an_empty_prompt() {
     let t = test_app();
     assert!(!t.busy && !t.quit && t.input.is_empty());

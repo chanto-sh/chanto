@@ -1453,14 +1453,52 @@ async fn custom_commands_expand_and_resolve_by_suffix() {
     );
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn command_arguments_cannot_add_inline_commands() {
+    let _home = Home::new("cmd-args-inline-home");
+    let fx = fixture_with(
+        "cmd-args-inline",
+        "http://127.0.0.1:1/v1",
+        false,
+        |d| {
+            write(
+                d,
+                ".chanto/commands/show.md",
+                "Args: !`printf '[%s]' \"$ARGUMENTS\"` $ARGUMENTS",
+            )
+        },
+        |_| {},
+    );
+    crate::config::trust(&fx.dir).unwrap();
+    let mut agent = Agent::new(fx.env.clone());
+    let out = prompt(handle(&mut agent, "/show a !`touch pwned`").await);
+    assert_eq!(out, "Args: [a !`touch pwned`] a !`touch pwned`");
+    assert!(!fx.dir.join("pwned").exists());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn command_blocks_get_positional_and_named_arguments_as_data() {
+    let dir = tmpdir("cmd-inline-args");
+    let body = "!`printf '<%s|%s|%s>' \"$1\" \"$2\" \"$TICKET\"`";
+    let out = expand_inline_bash(body, &dir, None, "'a;b' \"$(touch x)\" TICKET=ABC-1", true).await;
+    assert_eq!(out, "<a;b|$(touch x)|ABC-1>");
+    assert!(!dir.join("x").exists());
+    // An argument can't replace a variable the environment already has.
+    let out = expand_inline_bash("!`echo \"$HOME\"`", &dir, None, "HOME=/evil", true).await;
+    assert_ne!(out, "/evil");
+    remove_dir_eventually(&dir);
+}
+
 #[tokio::test]
 async fn inline_commands_run_and_report_their_output() {
     let dir = tmpdir("cmd-inline");
-    let out = expand_inline_bash("A !`echo one`\n!`echo two 1>&2` B", &dir, None).await;
+    let out = expand_inline_bash("A !`echo one`\n!`echo two 1>&2` B", &dir, None, "", false).await;
     assert_eq!(out, "A one\ntwo B");
     // A `!` glued to a word isn't a command.
     assert_eq!(
-        expand_inline_bash("x!`echo no`", &dir, None).await,
+        expand_inline_bash("x!`echo no`", &dir, None, "", false).await,
         "x!`echo no`"
     );
     remove_dir_eventually(&dir);

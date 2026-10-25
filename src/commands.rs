@@ -2322,9 +2322,11 @@ pub async fn handle(agent: &mut Agent, line: &str) -> Outcome {
                 };
             }
             if let Some(c) = found {
-                let body = expand_args(&c.body, arg);
                 activate_skill(&env, &c.name, &c.meta, c.project, true, false);
-                return Outcome::Prompt(inline_bash(&env, body, c.project, name, c.meta.shell.as_deref()).await);
+                // The !`cmd` blocks run before the arguments go in, so an
+                // argument can't add a command (a block reads them from $ARGUMENTS).
+                let body = inline_bash(&env, c.body.clone(), c.project, name, c.meta.shell.as_deref(), arg, true).await;
+                return Outcome::Prompt(expand_args(&body, arg));
             }
             // A command the external agent advertised runs there, with its
             // arguments, as an ordinary prompt.
@@ -2526,19 +2528,25 @@ pub async fn render_skill(
         sk.project,
         &sk.name,
         sk.meta.shell.as_deref(),
+        arg,
+        false,
     )
     .await;
     let body = expand_skill_args(&body.replace("${CLAUDE_SKILL_DIR}", &dir), arg);
     Ok(format!("Base directory for this skill: {dir}\n\n{body}"))
 }
 
-/// Run a template's !`cmd` blocks; a project-defined one's only in a trusted folder.
+/// Run a template's !`cmd` blocks; a project-defined one's only in a trusted
+/// folder. `args` reach the blocks as data, never as code: see
+/// [`expand_inline_bash`]. `positional`: a command file's `$1`.. and `$NAME`.
 async fn inline_bash(
     env: &Env,
     body: String,
     project: bool,
     name: &str,
     shell: Option<&str>,
+    args: &str,
+    positional: bool,
 ) -> String {
     if !body.contains("!`") {
         return body;
@@ -2547,7 +2555,7 @@ async fn inline_bash(
         env.emit(Event::Warn(format!("/{name} is defined by this project, which isn't trusted; its !`command` blocks were not run (chanto --trust to allow).")));
         return body;
     }
-    expand_inline_bash(&body, &env.cwd(), shell).await
+    expand_inline_bash(&body, &env.cwd(), shell, args, positional).await
 }
 
 /// The process for one !`cmd` block: the session's shell, or PowerShell for
@@ -2567,10 +2575,29 @@ fn inline_command(cmd: &str, shell: Option<&str>) -> tokio::process::Command {
 }
 
 /// Replace !`cmd` occurrences (at the start of a line or after whitespace)
-/// in command templates with the command's output.
-async fn expand_inline_bash(body: &str, cwd: &std::path::Path, shell: Option<&str>) -> String {
+/// in command templates with the command's output. The invocation's
+/// arguments are in the `ARGUMENTS` environment variable, so the shell never
+/// parses them as code. With `positional` (command files) a POSIX shell also
+/// gets the words as `$1`, `$2`.., and each `NAME=value` argument whose
+/// `$NAME` a block uses becomes that environment variable, unless the
+/// environment already has one (so `PATH=` can't redirect the command).
+async fn expand_inline_bash(
+    body: &str,
+    cwd: &std::path::Path,
+    shell: Option<&str>,
+    args: &str,
+    positional: bool,
+) -> String {
     static RE: std::sync::LazyLock<regex::Regex> =
         std::sync::LazyLock::new(|| regex::Regex::new(r"(^|\s)!`([^`]+)`").unwrap());
+    let words = if positional {
+        shell_words::split(args)
+            .unwrap_or_else(|_| args.split_whitespace().map(str::to_string).collect())
+    } else {
+        Vec::new()
+    };
+    let posix = !shell.is_some_and(|s| s.eq_ignore_ascii_case("powershell"))
+        && crate::shell::flavor() == crate::shell::Flavor::Posix;
     let mut out = String::new();
     let mut last = 0;
     for cap in RE.captures_iter(body) {
@@ -2578,7 +2605,24 @@ async fn expand_inline_bash(body: &str, cwd: &std::path::Path, shell: Option<&st
         out.push_str(&body[last..m.start()]);
         out.push_str(&cap[1]);
         let cmd = &cap[2];
-        let res = inline_command(cmd, shell).current_dir(cwd).output().await;
+        let mut c = inline_command(cmd, shell);
+        c.current_dir(cwd).env("ARGUMENTS", args);
+        if positional && posix {
+            // `sh -c script $0 $1 ...`
+            c.arg("chanto").args(&words);
+        }
+        for w in &words {
+            if let Some((k, v)) = w.split_once('=')
+                && !k.is_empty()
+                && k.chars()
+                    .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                && (cmd.contains(&format!("${k}")) || cmd.contains(&format!("${{{k}}}")))
+                && std::env::var_os(k).is_none()
+            {
+                c.env(k, v);
+            }
+        }
+        let res = c.output().await;
         let text = match res {
             Ok(o) => format!(
                 "{}{}",
