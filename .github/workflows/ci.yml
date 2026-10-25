@@ -149,6 +149,10 @@ jobs:
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+  installer-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # install.ps1 under Windows PowerShell 5.1, verified by the OpenSSH
       # client's ssh-keygen and by Git for Windows' OpenSSL, against the
       # fixture tests/install.sh uses (built here with Git Bash).

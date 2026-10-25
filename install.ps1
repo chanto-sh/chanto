@@ -36,7 +36,17 @@ try {
         $psi.RedirectStandardInput = $true
         $psi.RedirectStandardOutput = $true
         $psi.RedirectStandardError = $true
-        $proc = [Diagnostics.Process]::Start($psi)
+        # Windows PowerShell's .NET Framework creates the stdin writer with
+        # Console.InputEncoding and flushes its BOM before BaseStream writes.
+        # Use a BOM-free encoding while creating the pipe so signed bytes stay
+        # exact, then restore the caller's console encoding.
+        $inputEncoding = [Console]::InputEncoding
+        try {
+            [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+            $proc = [Diagnostics.Process]::Start($psi)
+        } finally {
+            [Console]::InputEncoding = $inputEncoding
+        }
         $out = $proc.StandardOutput.ReadToEndAsync()
         $err = $proc.StandardError.ReadToEndAsync()
         if ($stdin) {
