@@ -4783,6 +4783,11 @@ async fn rewind_conversation_leaves_out_of_project_files_alone() {
 
 #[tokio::test]
 async fn rewind_undoes_an_accidental_clear() {
+    // The cleared session is saved and found again under the Chanto home:
+    // keep tests that move it from doing so in between.
+    let _home = crate::compat::TEST_HOME_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
     let dir = tmpdir("undo-clear");
     let (base, _) = mock_server(vec![json!({"content": "first answer"})]).await;
     let env = make_env(&base, &dir, Mode::Default, 32768);

@@ -822,7 +822,17 @@ async fn slash_commands_start_list_follow_and_stop_runs() {
     assert!(list.contains("needs-input"), "{list}");
     let show = slash_runs(&env, &id).await;
     assert!(show.contains(&format!("Run {id}  needs-input")), "{show}");
-    assert_eq!(slash_runs(&env, &format!("show {id}")).await, show);
+    // The same, but for the running clock (a second can pass in between).
+    let timeless = |s: &str| {
+        s.lines()
+            .filter(|l| !l.starts_with("Duration:"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    assert_eq!(
+        timeless(&slash_runs(&env, &format!("show {id}")).await),
+        timeless(&show)
+    );
     assert!(slash_runs(&env, "show zzzz").await.contains("no run"));
     assert!(slash_runs(&env, "a b c").await.starts_with("Usage: `/runs"));
     assert_eq!(slash_runs(&env, "detach").await, "Not attached to a run.");

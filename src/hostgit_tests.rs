@@ -3,7 +3,7 @@ use super::*;
 fn scratch() -> PathBuf {
     let d = std::env::temp_dir().join(format!("chanto-hostgit-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&d).unwrap();
-    std::fs::canonicalize(&d).unwrap()
+    crate::util::canonical(&d).unwrap()
 }
 
 fn sh(dir: &Path, args: &[&str]) {

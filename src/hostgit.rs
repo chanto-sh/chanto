@@ -159,8 +159,10 @@ fn common_dir(repo: &Path) -> Result<PathBuf> {
     Ok(canonical(&common))
 }
 
+/// Canonical, without Windows' `\\?\` prefix: git refuses a verbatim
+/// path as `--git-dir`.
 fn canonical(p: &Path) -> PathBuf {
-    std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf())
+    crate::util::canonical(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
 /// The git directory the repository at `repo` keeps for its linked worktree

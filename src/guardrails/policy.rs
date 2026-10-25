@@ -66,8 +66,17 @@ fn check_command_with(
     if !cwd.starts_with(&root) {
         sandbox.allow_write.push(cwd.display().to_string());
     }
-    let (mut c, lease, _) =
-        crate::tools::bash::build_command_with(cmd, cwd, Some(&sandbox), Some(secrets), false)?;
+    // Windows' sandbox starts commands by relaunching the Chanto executable,
+    // which a test binary isn't; tests there run checks unsandboxed (still
+    // without secrets). Everywhere else the sandbox applies when it's on.
+    let unsandboxed = cfg!(all(test, windows));
+    let (mut c, lease, _) = crate::tools::bash::build_command_with(
+        cmd,
+        cwd,
+        Some(&sandbox),
+        Some(secrets),
+        unsandboxed,
+    )?;
     c.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     Ok((c, lease))
 }

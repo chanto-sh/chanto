@@ -44,7 +44,9 @@ async fn checks_do_not_see_secret_env() {
 
 #[tokio::test]
 async fn checks_run_in_the_bash_sandbox() {
-    if !crate::tools::bash::sandbox_available() {
+    // Windows' sandbox relaunches the Chanto executable, which a test binary
+    // isn't.
+    if cfg!(windows) || !crate::tools::bash::sandbox_available() {
         return;
     }
     let _g = crate::tools::bash::SANDBOX_TEST_LOCK
