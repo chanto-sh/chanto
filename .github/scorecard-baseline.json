@@ -1,0 +1,20 @@
+{
+  "Binary-Artifacts": 10,
+  "Branch-Protection": 4,
+  "CI-Tests": 10,
+  "CII-Best-Practices": 5,
+  "Code-Review": 0,
+  "Contributors": 0,
+  "Dangerous-Workflow": 10,
+  "Dependency-Update-Tool": 10,
+  "Fuzzing": 10,
+  "License": 10,
+  "Maintained": 0,
+  "Packaging": 10,
+  "Pinned-Dependencies": 10,
+  "SAST": 9,
+  "Security-Policy": 10,
+  "Signed-Releases": 10,
+  "Token-Permissions": 10,
+  "Vulnerabilities": 10
+}
