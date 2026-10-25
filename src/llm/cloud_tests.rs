@@ -703,15 +703,12 @@ async fn live_cloud_smoke() {
             .chat(&r, &mut |_| {})
             .await
             .unwrap_or_else(|e| panic!("{id}/{model}: {e:#}"));
-        eprintln!(
-            "{id}/{model}: {:?} ({} in, {} out)",
-            out.text, out.usage.prompt_tokens, out.usage.completion_tokens
-        );
+        // Live responses may contain private data; report only the verdict.
         assert!(
             out.text.to_ascii_uppercase().contains("OK"),
-            "{id}: {:?}",
-            out.text
+            "{id}/{model}: response did not contain the expected OK"
         );
+        eprintln!("{id}/{model}: live request succeeded");
         ran += 1;
     }
     assert!(
