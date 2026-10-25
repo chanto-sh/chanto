@@ -1707,7 +1707,7 @@ impl App {
             pal().dim,
         );
         self.loop_turn = fire.source != crate::cron::Source::Cron;
-        self.start_hidden(fire.prompt);
+        self.start_hidden(fire.prompt, fire.literal);
     }
 
     // ------------------------------------------------------------ actions
@@ -2120,15 +2120,18 @@ impl App {
     fn deliver_notifications(&mut self) {
         let pending: Vec<String> = self.env.notifications.lock().unwrap().drain(..).collect();
         if !pending.is_empty() {
-            self.start_hidden(pending.join("\n\n"));
+            self.start_hidden(pending.join("\n\n"), true);
         }
     }
 
-    /// Start a turn whose user block is already shown.
-    fn start_hidden(&mut self, text: String) {
+    /// Start a turn whose user block is already shown. `literal`: the text
+    /// goes to the model as it is, never run as a `/command`, `!shell` or
+    /// `#note` (for text the user didn't type: reports, the model's
+    /// scheduled prompts).
+    fn start_hidden(&mut self, text: String, literal: bool) {
         let n = self.blocks.len();
         self.agent_input = true;
-        crate::remote::quietly(|| self.start(text));
+        crate::remote::quietly(|| self.start_as(text, literal));
         self.agent_input = false;
         if let Some(Kind::User(_)) = self.blocks.get(n).map(|b| &b.kind) {
             self.blocks.remove(n);
@@ -2136,14 +2139,22 @@ impl App {
     }
 
     fn start(&mut self, text: String) {
+        self.start_as(text, false)
+    }
+
+    fn start_as(&mut self, text: String, literal: bool) {
         let trimmed = text.trim().to_string();
-        if self.open_picker(&trimmed) {
+        if !literal && self.open_picker(&trimmed) {
             return;
         }
         // `[Image #N]` tags are expanded to `@path` for the model once the prompt
         // is final, but the transcript keeps the readable tag.
-        let image_paths = std::mem::take(&mut self.images);
-        let mut agent_input = self.agent_input;
+        let image_paths = if literal {
+            Vec::new()
+        } else {
+            std::mem::take(&mut self.images)
+        };
+        let mut agent_input = self.agent_input || literal;
         let tx = self.tx.clone();
         let agent = self.agent.clone();
         let cancel = CancellationToken::new();
@@ -2157,7 +2168,7 @@ impl App {
         self.current_tool = None;
         self.turned = false;
         self.spinner_i = (self.spinner_i + 1) % VERBS.len();
-        if trimmed.starts_with('/') {
+        if literal || trimmed.starts_with('/') {
             self.push(Kind::User(trimmed.clone()));
         } else if let Some(cmd) = trimmed.strip_prefix('!') {
             self.push(Kind::User(trimmed.clone()));
@@ -2215,7 +2226,7 @@ impl App {
         tokio::spawn(async move {
             let mut a = agent.lock().await;
             let mut prompt = trimmed.clone();
-            if trimmed.starts_with('/') {
+            if !literal && trimmed.starts_with('/') {
                 let outcome = commands::handle(&mut a, &trimmed).await;
                 let _ = tx.send(AppMsg::Completions(commands::completions(&a)));
                 match outcome {
@@ -2265,8 +2276,12 @@ impl App {
                     }
                 }
             }
-            let prompt = expand_image_tags(&prompt, &image_paths);
-            let (text, images) = commands::expand_mentions(&a, &prompt).await;
+            let (text, images) = if literal {
+                (prompt, Vec::new())
+            } else {
+                let prompt = expand_image_tags(&prompt, &image_paths);
+                commands::expand_mentions(&a, &prompt).await
+            };
             a.typed_input = !agent_input;
             let res = a.run_turn(&text, images, cancel).await;
             a.save_session();

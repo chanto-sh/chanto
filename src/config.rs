@@ -401,6 +401,10 @@ pub struct SandboxConfig {
     /// Extra paths sandboxed commands can't read (private keys and
     /// credential files are always included).
     pub deny_read: Vec<String>,
+    /// Let sandboxed commands use the SSH agent (`SSH_AUTH_SOCK`), for git
+    /// over SSH. Off by default: any sandboxed command could then sign with
+    /// the user's keys.
+    pub allow_ssh_agent: bool,
 }
 
 impl Default for SandboxConfig {
@@ -415,6 +419,7 @@ impl Default for SandboxConfig {
             allowed_domains: None,
             denied_domains: vec![],
             deny_read: vec![],
+            allow_ssh_agent: false,
         }
     }
 }
@@ -1730,6 +1735,9 @@ impl Config {
             if sb.contains_key("allowed_domains") {
                 self.sandbox.allowed_domains = o.sandbox.allowed_domains;
             }
+            if sb.contains_key("allow_ssh_agent") {
+                self.sandbox.allow_ssh_agent = o.sandbox.allow_ssh_agent;
+            }
             self.sandbox.denied_domains.extend(o.sandbox.denied_domains);
             self.sandbox.allow_write.extend(o.sandbox.allow_write);
             self.sandbox.deny_read.extend(o.sandbox.deny_read);
@@ -1993,6 +2001,7 @@ auto_allow = false              # auto mode: sandboxed commands skip the classif
 # network = "allow"             # allow | deny | allowlist (deny_network is a legacy alias)
 # allowed_domains = ["github.com", "*.npmjs.org", "pypi.org"]
 # denied_domains = []
+# allow_ssh_agent = false       # let sandboxed commands use the SSH agent (git over SSH)
 
 # Background runs (`chanto run --bg`, `&task` in the TUI): each in its own git worktree.
 # [background]

@@ -38,7 +38,9 @@ Every tool call the model makes goes through one decision point before it runs.
   before any shell command not known to be read-only; *acceptEdits* allows edits
   inside the project; *plan* allows only read-only actions; *auto* lets a
   separate classifier model judge each command; *bypass* allows everything and
-  must be chosen explicitly. No project file can turn on bypass mode.
+  must be chosen explicitly. No project file can turn on bypass mode, and
+  neither can a session file: resuming or importing a session never restores
+  bypass, and an imported session keeps none of its permission settings.
 - **Shell commands** are parsed before they're judged: split into simple
   commands, with comments, heredoc bodies and escapes read the way bash reads
   them, so text bash treats as data can't hide a command (fixed in v0.1.1).
@@ -86,16 +88,64 @@ Every tool call the model makes goes through one decision point before it runs.
   or loopback services need approval, to counter server-side request forgery.
 - **Your own allow and deny rules** apply to each simple command, and an allow
   rule never vouches for an attached substitution or redirection.
+- **Approval covers the file a path named when it was approved.** Just before
+  each call in a batch starts, the paths in its arguments are resolved again;
+  if a symlink (or the working directory) changed since approval, the call is
+  refused rather than writing or reading wherever the path now points. A shell
+  command is judged again too, and refused if it now reaches a secret file or
+  is no longer allowed outright. The check runs at the start of the call, so a
+  process running concurrently that swaps a link during the call itself
+  isn't caught.
+- **Text the user didn't type is never run as typed input.** A prompt the
+  model scheduled with `CronCreate` (which itself needs approval outside bypass
+  mode), the default `/loop` prompt, background reports and messages left
+  over from a turn that ended before delivering them go to the model as plain
+  text: never run as `!shell`, `/command` or `#note`, and with no `@file`
+  attached. A command's arguments reach its `` !`cmd` `` blocks only as
+  data (environment variables and positional parameters), so they can't add a
+  command.
+- **User memory** is loaded in every project, so the model's saves to it need
+  approval in every mode except bypass; the prompt shows the description and
+  body.
 
 ### 2. Commands ↔ the operating system: the sandbox
 
 Shell commands run inside an OS sandbox by default (Seatbelt on macOS,
-Landlock and bubblewrap on Linux, a write-restricted token on Windows):
+Landlock and seccomp on Linux, a write-restricted token on Windows):
 
-- writes are limited to the project, temporary directories and tool caches;
-- on macOS and Linux, reads of known credential locations are denied, and
-  network access can be turned off or limited to an allowlist of domains (on
-  Windows the sandbox confines writes only);
+- writes are limited to the project, temporary directories and package
+  managers' download caches (named entries only, not all of `~/.cache` or
+  `~/Library/Caches`). Dependency downloads (extracted crates, Go modules,
+  Maven and Gradle jars) are writable, like the project's own `node_modules`;
+  toolchains, installed tools and their settings are not;
+- on macOS, paths inside those trees whose contents run later outside the
+  sandbox stay read-only: the project's `.git` (pinned, so it can't be renamed
+  away or created), its hooks, config and submodule/worktree git dirs, nested
+  repositories' hooks and config, agent and editor settings that carry hooks
+  (`.chanto/`, `.claude/`, `.mcp.json`, `.husky/`, `.githooks/`,
+  `.vscode/{settings,tasks}.json`), Chanto's own home, shell startup files and
+  toolchain bins and settings;
+- on Linux those in-project guards are **not** enforced: Landlock can only
+  grant, and carving `.git` or `.chanto` out of the project would also take
+  away the right to create files at its root or in `.git`, which breaks
+  `git commit` and every build. Shell commands can write them; the
+  permission layer still keeps the file tools from changing them without
+  asking. The home guards apply only where a widened tree (`allow_write`,
+  `--add-dir`) covers them;
+- on macOS and Linux, reads of known credential locations are denied (private
+  keys, cloud and registry logins, Chanto's own token files), and network
+  access can be turned off or limited to an allowlist of domains (on Windows
+  the sandbox confines writes only). The macOS keychain stays reachable, so
+  credential helpers (`git credential-osxkeychain`, `gh auth token`) can still
+  hand out tokens;
+- on macOS, local IPC that would reach a process outside the sandbox is
+  blocked: no controlling terminal, no access to Chanto's or other terminal
+  windows' ttys, no Apple Events, LaunchServices, clipboard or Shortcuts, and
+  Unix sockets only inside the project and the command's own `$TMPDIR`. On
+  Linux only the controlling terminal is taken away (and seccomp refuses
+  TIOCSTI); the SSH, D-Bus, Docker and `XDG_RUNTIME_DIR` variables are
+  removed, but that is advisory, since a command that knows a socket's path
+  can still connect to it;
 - leaving the sandbox (`dangerouslyDisableSandbox`) always needs a human.
 
 The permission layer and the sandbox are independent, so a mistake in one is
@@ -108,7 +158,9 @@ servers, status-line and key-helper commands, environment variables, sandbox
 settings, allow rules, guardrail commands, plugins, language servers, the
 auto-mode classifier's `classifier_model` and `optimize.token_classifier`) are
 ignored until you trust the folder at a prompt. New `.mcp.json` servers also
-need approval.
+need approval. Installing a plugin asks first when it has hooks, MCP or
+language servers, or skills and commands that run `` !`cmd` `` blocks, register
+`hooks` or pre-approve `allowed-tools`; plugins with symlinks are refused.
 
 ### 4. Your secrets ↔ the model and logs
 

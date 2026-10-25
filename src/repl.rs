@@ -82,9 +82,11 @@ pub async fn run(cli: Cli) -> Result<()> {
         } else {
             None
         };
-        // A scheduled task's prompt is not something the user typed now.
         let was_scheduled = pending.is_none() && scheduled.is_some();
-        let line = match pending.take().or(scheduled) {
+        // `literal`: text the user didn't type (reports, the model's
+        // scheduled prompts) goes straight to the model, never run as a
+        // `/command`, `!shell` or `#note`.
+        let (line, literal) = match pending.take().map(|p| (p, false)).or(scheduled) {
             Some(p) => p,
             None => {
                 let prompt = DefaultPrompt::new(
@@ -109,7 +111,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
                 wait = true;
                 match read? {
-                    Signal::Success(s) => s,
+                    Signal::Success(s) => (s, false),
                     Signal::HostCommand(c) if c == "__cycle_mode" => {
                         env.set_mode(env.mode().next());
                         continue;
@@ -120,21 +122,29 @@ pub async fn run(cli: Cli) -> Result<()> {
                 }
             }
         };
-        let prompt = match handle_line(&env, &mut agent, line.trim()).await? {
-            Next::Continue => continue,
-            Next::Exit => break,
-            Next::Turn(p) => p,
+        let prompt = if literal {
+            line.trim().to_string()
+        } else {
+            match handle_line(&env, &mut agent, line.trim()).await? {
+                Next::Continue => continue,
+                Next::Exit => break,
+                Next::Turn(p) => p,
+            }
         };
-        // The user typed the line; a slash command's expansion and a
-        // scheduled task are Chanto's prompts.
-        if !was_scheduled {
+        // Only frontend input counts as the user's request, not scheduled
+        // tasks or a slash command's generated expansion.
+        if !literal && !was_scheduled {
             if line.trim().starts_with('/') && prompt != line.trim() {
                 env.record_user_request(line.trim());
             } else {
                 agent.typed_input = true;
             }
         }
-        let (text, images) = commands::expand_mentions(&agent, &prompt).await;
+        let (text, images) = if literal {
+            (prompt, Vec::new())
+        } else {
+            commands::expand_mentions(&agent, &prompt).await
+        };
         let cancel = CancellationToken::new();
         let c2 = cancel.clone();
         let sig = tokio::spawn(async move {
@@ -296,7 +306,7 @@ async fn next_scheduled(
     env: &Arc<crate::agent::Env>,
     loop_turn: &mut bool,
     wait: &mut bool,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     let mut announced = false;
     loop {
         let reports: Vec<String> = env.notifications.lock().unwrap().drain(..).collect();
@@ -312,7 +322,7 @@ async fn next_scheduled(
                     )));
                 }
             }
-            return Some(reports.join("\n\n"));
+            return Some((reports.join("\n\n"), true));
         }
         if let Some(fire) = env.scheduler.take_due(chrono::Local::now(), &env.cwd()) {
             let shown = fire
@@ -331,7 +341,7 @@ async fn next_scheduled(
                 crate::util::one_line(&shown, 100)
             )));
             *loop_turn = fire.source != crate::cron::Source::Cron;
-            return Some(fire.prompt);
+            return Some((fire.prompt, fire.literal));
         }
         let looping = env.scheduler.loop_active();
         let monitors = crate::tools::monitor::active(env);

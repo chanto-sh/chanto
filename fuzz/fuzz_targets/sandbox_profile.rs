@@ -152,12 +152,18 @@ fn expected(input: &Input, cfg: &SandboxConfig, home: &Path) -> Vec<Sx> {
         .first()
         .map(PathBuf::from)
         .unwrap_or_default();
-    for p in chanto::fuzzing::seatbelt_write_denies(&cwd, &canon_home) {
-        out.push(list(vec![
-            atom("deny"),
-            atom("file-write*"),
-            list(vec![atom("subpath"), Sx::Str(deny_resolved(&p))]),
-        ]));
+    let writable: Vec<String> = input
+        .writable
+        .iter()
+        .map(|p| deny_resolved(Path::new(p)))
+        .collect();
+    for (action, ops, filter, arg) in
+        chanto::fuzzing::seatbelt_guard_rules(&cwd, &canon_home, &writable)
+    {
+        let mut rule = vec![atom(action)];
+        rule.extend(ops.iter().map(|o| atom(o)));
+        rule.push(list(vec![atom(filter), Sx::Str(arg)]));
+        out.push(list(rule));
     }
     for (is_regex, p) in chanto::tools::bash::secret_read_denies(&canon_home, &cfg.deny_read) {
         let filter = if is_regex {
@@ -186,6 +192,39 @@ fn expected(input: &Input, cfg: &SandboxConfig, home: &Path) -> Vec<Sx> {
             ]));
         }
     }
+    // Local IPC: Unix sockets only in the project and the private temp dir.
+    let socket = |action: &str, filter: Vec<Sx>| {
+        let mut remote = vec![atom("remote"), atom("unix-socket")];
+        if !filter.is_empty() {
+            remote.push(list(filter));
+        }
+        list(vec![atom(action), atom("network-outbound"), list(remote)])
+    };
+    out.push(socket("deny", vec![]));
+    for dir in writable
+        .first()
+        .cloned()
+        .into_iter()
+        .chain([chanto::fuzzing::seatbelt_tmpdir()])
+    {
+        out.push(socket("allow", vec![atom("subpath"), Sx::Str(dir)]));
+    }
+    for p in ["/private/var/run/mDNSResponder", "/private/var/run/syslog"] {
+        out.push(socket("allow", vec![atom("path-literal"), Sx::Str(p.into())]));
+    }
+    let (fixed, risky) = chanto::fuzzing::seatbelt_ipc_fixed();
+    out.push(socket(
+        "deny",
+        vec![atom("path-regex"), Sx::Str(risky.into())],
+    ));
+    if let Some(agent) = std::env::var_os("SSH_AUTH_SOCK") {
+        let agent = regex::escape(&deny_resolved(Path::new(&agent)));
+        out.push(socket(
+            "deny",
+            vec![atom("path-regex"), Sx::Str(format!("^{agent}$"))],
+        ));
+    }
+    out.extend(parse(fixed));
     out
 }
 

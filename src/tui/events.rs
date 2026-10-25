@@ -403,7 +403,7 @@ impl App {
                 leftover.extend(self.env.notifications.lock().unwrap().drain(..));
                 if !leftover.is_empty() {
                     // The turn ended before these were delivered: send them now.
-                    self.start_hidden(leftover.join("\n\n"));
+                    self.start_hidden(leftover.join("\n\n"), true);
                 } else if let Some((next, images)) = self.queue.pop_front() {
                     self.images = images;
                     self.start(next);

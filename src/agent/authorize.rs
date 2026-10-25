@@ -47,6 +47,13 @@ impl Agent {
             *env.halt.lock().unwrap() = Some(r.clone());
             return Auth::Deny(format!("Stopped by PreToolUse hook: {r}"));
         }
+        // Memory decides by scope, so make the configured default explicit.
+        if name == "Memory"
+            && let Some(o) = call.arguments.as_object_mut()
+            && !o.get("scope").is_some_and(|v| v.is_string())
+        {
+            o.insert("scope".into(), json!(env.config.memory.scope));
+        }
         let call = &*call;
         let args = &call.arguments;
         let mut hook_ask = None;
@@ -421,6 +428,7 @@ impl Agent {
                     .unwrap_or_default()
             ),
             "Edit" | "MultiEdit" | "Write" => edit_preview(&self.env.cwd(), &name, args),
+            "Memory" => memory_preview(args),
             _ => serde_json::to_string_pretty(args).unwrap_or_default(),
         };
         let subjects = tool.rule_subjects(args);
@@ -449,4 +457,25 @@ impl Agent {
             auto_deny: None,
         }
     }
+}
+
+/// What a Memory save would store, for its permission prompt.
+pub(super) fn memory_preview(args: &Value) -> String {
+    let scope = args["scope"].as_str().unwrap_or("user");
+    let where_ = if scope == "user" {
+        "user memory (loaded in every project)"
+    } else {
+        "project memory"
+    };
+    let action = args["action"].as_str().unwrap_or("save");
+    let name = args["name"].as_str().unwrap_or("");
+    if action == "delete" {
+        return format!("Delete {name} from {where_}");
+    }
+    format!(
+        "{} {name} in {where_}\nDescription: {}\n\n{}",
+        if action == "update" { "Update" } else { "Save" },
+        args["description"].as_str().unwrap_or(""),
+        args["body"].as_str().unwrap_or("")
+    )
 }
