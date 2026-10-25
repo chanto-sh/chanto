@@ -2,7 +2,7 @@
 # Runs CodeQL on this machine with the query suite GitHub's code scanning uses
 # for this repository (security-extended), so a change to credentials,
 # permissions or `unsafe` code can be checked before it's pushed. Pull requests
-# are scanned anyway, and one that adds a high-severity alert can't merge.
+# are scanned anyway, and one that adds a new alert can't merge.
 #
 #   brew install --cask codeql      # or a release from github.com/github/codeql-cli-binaries
 #   scripts/codeql.sh               # Rust: about 10 minutes
