@@ -10,8 +10,8 @@ suggest or argue for something. Larger items get an issue when work starts.
 - **Security hardening.** Finish the fixes from the October 2026 security
   review: stricter rules for which shell commands count as read-only, tighter
   sandbox write rules, and least-privilege CI tokens.
-- **Release integrity.** Sign releases and verify the signature in `chanto
-  upgrade` and the install scripts; make builds reproducible.
+- **Release integrity.** Make builds reproducible (releases are signed, and
+  `chanto upgrade` and the install scripts verify the signature).
 - **Testing.** Measure test coverage and raise it to at least 80%; fuzz the
   shell-command parser that the permission checks rely on.
 - **Windows.** Code-signed Windows binaries.

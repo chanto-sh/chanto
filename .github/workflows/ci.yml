@@ -161,6 +161,23 @@ jobs:
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+  installer-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # install.ps1 under Windows PowerShell 5.1, verified by the OpenSSH
+      # client's ssh-keygen and by Git for Windows' OpenSSL, against the
+      # fixture tests/install.sh uses (built here with Git Bash).
+      - name: Installer fixture
+        shell: bash
+        run: |
+          mkdir -p "$(cygpath -u "$RUNNER_TEMP")/installer"
+          PYTHON=python sh tests/install-fixture.sh "$(cygpath -u "$RUNNER_TEMP")/installer"
+      - name: install.ps1
+        shell: powershell
+        run: ./tests/install-windows.ps1 -Fixture "$env:RUNNER_TEMP\installer"
   proto:
     runs-on: ubuntu-latest
     steps:

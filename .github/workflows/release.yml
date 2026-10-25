@@ -143,6 +143,9 @@ jobs:
           path: dist
           merge-multiple: true
       # dist/ holds the CLI archives; SHA256SUMS covers all of them.
+      # After a security release, raise min_version in install.sh and
+      # $minVersion in install.ps1 to it (tests/install.sh checks they match),
+      # so a hostile host can't serve an older signed release as "latest".
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -158,9 +161,19 @@ jobs:
             echo "::error::RELEASE_SIGNING_KEY isn't set; refusing to publish an unsigned release"
             exit 1
           fi
-          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.pem"
+          trap 'rm -f "$RUNNER_TEMP/release.pem"' EXIT
+          ( umask 077 && printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/release.pem" )
           openssl pkeyutl -sign -inkey "$RUNNER_TEMP/release.pem" -rawin -in dist/SHA256SUMS | base64 -w0 > dist/SHA256SUMS.sig
+          # The same signature in SSH form, for installers without OpenSSL 3
+          # (stock macOS, Windows): they check it with ssh-keygen -Y verify.
+          python3 packaging/sshsig.py "$RUNNER_TEMP/release.pem" dist/SHA256SUMS > dist/SHA256SUMS.sshsig
           rm -f "$RUNNER_TEMP/release.pem"
+          # Both must verify against the pinned public keys the installers carry.
+          openssl base64 -d -A -in dist/SHA256SUMS.sig -out "$RUNNER_TEMP/sig.bin"
+          openssl pkeyutl -verify -pubin -inkey packaging/release-signing-key.pub -rawin \
+            -in dist/SHA256SUMS -sigfile "$RUNNER_TEMP/sig.bin"
+          ssh-keygen -Y verify -f packaging/release-allowed-signers -I chanto-release -n chanto-release \
+            -s dist/SHA256SUMS.sshsig < dist/SHA256SUMS
           # Every archive carries its build provenance (attested in the build job).
           for a in dist/*.tar.gz dist/*.zip; do
             if [ ! -f "${a%.*}.intoto.jsonl" ] && [ ! -f "${a%.tar.gz}.intoto.jsonl" ]; then
@@ -168,7 +181,7 @@ jobs:
               exit 1
             fi
           done
-          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sig dist/*.intoto.jsonl)
+          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.sshsig dist/*.intoto.jsonl)
           awk -v h="## $GITHUB_REF_NAME " 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' \
             CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \

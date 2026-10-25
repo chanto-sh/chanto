@@ -124,7 +124,7 @@ macOS and Linux (arm64 or x86_64):
 ```sh
 curl -fsSL https://chanto.sh/install.sh | sh
 # Pin a release or change the install prefix (binary goes in PREFIX/bin):
-curl -fsSL https://chanto.sh/install.sh | sh -s -- --version v0.1.0 --prefix "$HOME/.local"
+curl -fsSL https://chanto.sh/install.sh | sh -s -- --version v0.1.4 --prefix "$HOME/.local"
 ```
 
 Windows x64, in PowerShell:
@@ -132,12 +132,13 @@ Windows x64, in PowerShell:
 ```powershell
 irm https://chanto.sh/install.ps1 | iex
 # For options, download install.ps1, then:
-./install.ps1 -Version v0.1.0 -Prefix "$env:LOCALAPPDATA/chanto"
+./install.ps1 -Version v0.1.4 -Prefix "$env:LOCALAPPDATA/chanto"
 ```
 
 The shell installer defaults to `~/.local/bin`; PowerShell defaults to
 `$env:LOCALAPPDATA/chanto/bin`. Add that directory to PATH as advised.
-Both verify the archive against the release's `SHA256SUMS` before replacing the
+Both check the release signature (see [Verifying a release](#verifying-a-release))
+and then the archive against the release's `SHA256SUMS` before replacing the
 binary. The shell installer supports curl or wget and requires tar and either
 sha256sum or shasum. Linux binaries use static musl. Windows uses ZIP archives;
 macOS and Linux use `chanto-vX.Y.Z-<target>.tar.gz`. Each `v*` tag publishes them,
@@ -150,9 +151,23 @@ carry build provenance attestations (`gh attestation verify <file> -R chanto-sh/
 
 From v0.1.2 on, every release's `SHA256SUMS` is signed with the project's
 Ed25519 release key, and the signature is published next to it as
-`SHA256SUMS.sig` (base64). `chanto upgrade` refuses a release whose signature is
-missing or doesn't verify, and `install.sh` checks it whenever OpenSSL 3 is
-installed. The public key is
+`SHA256SUMS.sig` (base64). From v0.1.5 on, the same key's signature is also
+published in SSH form as `SHA256SUMS.sshsig`, which `ssh-keygen` can check
+where no OpenSSL 3 is installed (stock macOS ships LibreSSL, which can't verify
+Ed25519; Windows ships the OpenSSH client). `chanto upgrade` refuses a release
+whose signature is missing or doesn't verify. The install scripts check the
+signature before they use anything in `SHA256SUMS`, including the version
+"latest" names: with OpenSSL 3 if there is one (on macOS, also Homebrew's
+`openssl@3`; on Windows, also the one in Git for Windows), otherwise with
+`ssh-keygen` (OpenSSH 8.1+). They stop if the signature is missing or wrong, or
+if neither tool is there; on stock macOS or Windows without OpenSSL 3, that
+means releases before v0.1.5, which have no `SHA256SUMS.sshsig`, can't be
+installed by script. Releases before v0.1.2 aren't signed and can't be
+installed by script at all. A signature can't show that a release is the
+newest, so the scripts also refuse a "latest" older than the floor they carry
+(currently v0.1.5, raised with each security release), in case the download
+host serves an old release; an older release asked for with `--version` /
+`-Version` still installs, with a warning. The public key is
 [`packaging/release-signing-key.pub`](../packaging/release-signing-key.pub):
 
 ```text
@@ -161,15 +176,28 @@ MCowBQYDK2VwAyEAHk8ypq/plTuzCUZ4P9+bmwesZLkwM18CBO7AcUQLGd0=
 -----END PUBLIC KEY-----
 ```
 
-To check a download by hand (OpenSSL 3 or later; on macOS, Homebrew's
-`openssl@3`), put `SHA256SUMS`, `SHA256SUMS.sig`, the archive and the key file
-in one folder, then:
+and, for `ssh-keygen`, [`packaging/release-allowed-signers`](../packaging/release-allowed-signers):
+
+```text
+chanto-release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIB5PMqav6ZU7swlGeD/fm5sHrGS5MDNfAgTuwHFECxnd
+```
+
+To check a download by hand, put `SHA256SUMS`, its signature, the archive and
+the key file in one folder, then, with OpenSSL 3 or later:
 
 ```sh
 openssl base64 -d -A -in SHA256SUMS.sig -out SHA256SUMS.sig.bin
 openssl pkeyutl -verify -pubin -inkey release-signing-key.pub -rawin \
   -in SHA256SUMS -sigfile SHA256SUMS.sig.bin    # prints "Signature Verified Successfully"
 shasum -a 256 -c SHA256SUMS --ignore-missing    # or: sha256sum -c SHA256SUMS --ignore-missing
+```
+
+or with `ssh-keygen` (v0.1.5 and later):
+
+```sh
+ssh-keygen -Y verify -f release-allowed-signers -I chanto-release -n chanto-release \
+  -s SHA256SUMS.sshsig < SHA256SUMS             # prints 'Good "chanto-release" signature ...'
+shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
 The private key never leaves the release workflow's secrets and an offline
