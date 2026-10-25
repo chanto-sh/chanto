@@ -44,7 +44,7 @@ npm i -g @chanto/cli                              # npm
 cargo install chanto --locked                     # from source (Rust 1.95+)
 ```
 
-On Windows (PowerShell): `irm https://chanto.sh/install.ps1 | iex`. The installers check the download's checksum and put `chanto` in `~/.local/bin`; `chanto upgrade` updates it.
+On Windows (PowerShell): `irm https://chanto.sh/install.ps1 | iex`. The installers check the release signature and the download's checksum and put `chanto` in `~/.local/bin`; `chanto upgrade` updates it.
 
 ## First run
 
