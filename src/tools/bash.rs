@@ -92,313 +92,15 @@ pub(crate) fn kill_group(pid: u32) {
         .status();
 }
 
-/// Where sandboxed commands may write: the project, temp dirs, devices and
-/// common tool caches, plus configured and --add-dir paths.
-pub fn writable_paths(cwd: &std::path::Path, cfg: &crate::config::SandboxConfig) -> Vec<String> {
-    let home = sandbox_home();
-    let mut writable: Vec<String> = vec![cwd.display().to_string()];
-    if !cfg!(windows) {
-        writable.push("/dev".into());
-    }
-    if cfg!(target_os = "macos") {
-        writable.extend([
-            "/private/tmp".to_string(),
-            "/private/var/folders".to_string(),
-        ]);
-    } else if cfg!(windows) {
-        writable.push(std::env::temp_dir().display().to_string());
-    } else {
-        writable.extend([
-            "/tmp".to_string(),
-            "/var/tmp".to_string(),
-            "/dev/shm".to_string(),
-        ]);
-        if let Ok(t) = std::env::var("TMPDIR") {
-            writable.push(t);
-        }
-    }
-    if cfg!(windows) {
-        writable.extend(windows_caches(&home));
-    } else {
-        for rel in [
-            ".cache",
-            ".cargo",
-            ".rustup",
-            ".npm",
-            ".bun",
-            ".pnpm-store",
-            "Library/Caches",
-            ".gradle",
-            ".m2",
-            "go/pkg",
-            ".local/share/uv",
-            ".pyenv",
-        ] {
-            writable.push(home.join(rel).display().to_string());
-        }
-    }
-    for p in &cfg.allow_write {
-        writable.push(crate::util::resolve(cwd, p).display().to_string());
-    }
-    writable.extend(
-        crate::permissions::extra_dirs()
-            .iter()
-            .map(|d| d.display().to_string()),
-    );
-    writable
-}
-
-/// The package managers' caches on Windows, as the macOS and Linux sandboxes
-/// allow theirs: some live in the profile, most under %LOCALAPPDATA%.
-fn windows_caches(home: &std::path::Path) -> Vec<String> {
-    let mut out: Vec<String> = [
-        ".cargo",
-        ".rustup",
-        ".gradle",
-        ".m2",
-        ".bun",
-        "go\\pkg",
-        ".nuget\\packages",
-    ]
-    .iter()
-    .map(|r| home.join(r).display().to_string())
-    .collect();
-    if let Some(local) = std::env::var_os("LOCALAPPDATA").map(std::path::PathBuf::from) {
-        for rel in [
-            "npm-cache",
-            "pnpm",
-            "pnpm-cache",
-            "Yarn\\Cache",
-            "pip\\Cache",
-            "uv\\cache",
-            "go-build",
-            "pypoetry\\Cache",
-        ] {
-            out.push(local.join(rel).display().to_string());
-        }
-    }
-    out
-}
-
-/// Windows: grant the sandbox's write access to the tool caches in the
-/// background at startup. The first grant on a big cache (~/.cargo) spreads
-/// to every file in it and can take a while; done here, a command doesn't wait
-/// for it. Later grants only check the existing entry.
-pub fn prime_sandbox_caches(cfg: &crate::config::SandboxConfig) {
-    #[cfg(windows)]
-    if cfg.enabled {
-        let caches: Vec<std::path::PathBuf> = windows_caches(&sandbox_home())
-            .into_iter()
-            .map(std::path::PathBuf::from)
-            .collect();
-        std::thread::spawn(move || {
-            if crate::windows_sandbox::available() {
-                crate::windows_sandbox::prime(&caches);
-            }
-        });
-    }
-    #[cfg(not(windows))]
-    let _ = cfg;
-}
-
-/// Escape a path for a seatbelt string literal. Stripping quotes (the old
-/// behavior) let a path containing `"`, `(` or `)` break out of the string and
-/// inject profile directives — and a directory name is attacker-controllable in
-/// a cloned repo, so escaping is the only safe option.
-fn sbpl_quote(p: &str) -> String {
-    p.replace('\\', "\\\\")
-        .replace('"', "\\\"")
-        .replace('\n', "\\n")
-        .replace('\r', "\\r")
-}
-
-#[cfg(test)]
-pub fn sandbox_profile(cwd: &std::path::Path, cfg: &crate::config::SandboxConfig) -> String {
-    sandbox_profile_with_port(cwd, cfg, None)
-}
-
-fn sandbox_home() -> std::path::PathBuf {
-    // Test fixtures never inspect the real user home. CHANTO_HOME relocates
-    // config, not private keys, so production still protects the OS home.
-    if cfg!(test) {
-        std::env::var_os("CHANTO_HOME")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(std::env::temp_dir)
-    } else {
-        dirs::home_dir().unwrap_or_default()
-    }
-}
-
-fn sandbox_profile_with_port(
-    cwd: &std::path::Path,
-    cfg: &crate::config::SandboxConfig,
-    proxy_port: Option<u16>,
-) -> String {
-    let home = sandbox_home();
-    let writable = writable_paths(cwd, cfg);
-
-    sandbox_profile_with_paths(&writable, &home, cfg, proxy_port)
-}
-
-/// Paths inside the writable trees whose contents run later, outside the
-/// sandbox: the project's git internals (hooks and config drive the next
-/// `git` command) and the bin/config files of the package-manager caches we
-/// let builds write. Denied for writing even though their parent is writable.
-pub(crate) fn write_deny_paths(
-    cwd: &std::path::Path,
-    home: &std::path::Path,
-) -> Vec<std::path::PathBuf> {
-    let mut out = vec![cwd.join(".git/hooks"), cwd.join(".git/config")];
-    for rel in [
-        ".cargo/bin",
-        ".cargo/config.toml",
-        ".cargo/config",
-        ".gradle/init.d",
-        ".bun/bin",
-        ".local/share/uv/tools",
-        ".local/bin",
-    ] {
-        out.push(home.join(rel));
-    }
-    out
-}
-
-pub(crate) fn sandbox_profile_with_paths(
-    writable: &[String],
-    home: &std::path::Path,
-    cfg: &crate::config::SandboxConfig,
-    proxy_port: Option<u16>,
-) -> String {
-    let canon: Vec<String> = writable
-        .iter()
-        .map(|p| {
-            crate::util::canonical(p)
-                .map(|c| c.display().to_string())
-                .unwrap_or_else(|_| p.clone())
-        })
-        .collect();
-    let mut prof =
-        String::from("(version 1)\n(allow default)\n(deny file-write*)\n(allow file-write*\n");
-    for p in canon {
-        prof.push_str(&format!("  (subpath \"{}\")\n", sbpl_quote(&p)));
-    }
-    prof.push_str(")\n");
-    let canon_home = crate::util::canonical(home).unwrap_or_else(|_| home.to_path_buf());
-    // Last match wins in SBPL, so these override the writable grants above.
-    let cwd_guess = writable
-        .first()
-        .map(std::path::PathBuf::from)
-        .unwrap_or_default();
-    // Seatbelt checks resolved paths, so a deny names the resolved path even
-    // when it doesn't exist yet: a raw `~/.cargo/bin` under a symlinked
-    // `~/.cargo` would never match, and a command could create it.
-    for p in write_deny_paths(&cwd_guess, &canon_home) {
-        let p = crate::permissions::normalize(&p).display().to_string();
-        prof.push_str(&format!(
-            "(deny file-write* (subpath \"{}\"))\n",
-            sbpl_quote(&p)
-        ));
-    }
-    for (regex, p) in secret_read_denies(&canon_home, &cfg.deny_read) {
-        if regex {
-            // An ordinary string, not a `#"…"` literal: those are raw, so the
-            // escaped backslashes made `\\.ssh` match no key at all.
-            prof.push_str(&format!(
-                "(deny file-read* (regex \"{}\"))\n",
-                sbpl_quote(&p)
-            ));
-        } else {
-            // Seatbelt compares resolved paths (e.g. /tmp is /private/tmp),
-            // also for a denied path that doesn't exist yet.
-            let p = crate::permissions::normalize(std::path::Path::new(&p))
-                .display()
-                .to_string();
-            prof.push_str(&format!(
-                "(deny file-read* (subpath \"{}\"))\n",
-                sbpl_quote(&p)
-            ));
-        }
-    }
-    if cfg.network_policy() != crate::config::NetworkPolicy::Allow {
-        prof.push_str("(deny network*)\n(allow network* (remote unix-socket))\n");
-        if let Some(port) = proxy_port {
-            prof.push_str(&format!(
-                "(allow network-outbound (remote ip \"localhost:{port}\"))\n"
-            ));
-        }
-    }
-    prof
-}
-
-/// Whether shell commands run sandboxed this session (set at startup from
-/// config and platform support; `/sandbox` toggles it).
-pub static SANDBOX_ACTIVE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
-#[cfg(test)]
-pub(crate) static SANDBOX_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-pub fn sandbox_on() -> bool {
-    SANDBOX_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) && sandbox_works()
-}
-
-/// macOS refuses to start a sandbox inside another one (`sandbox_apply:
-/// Operation not permitted`), e.g. when Chanto itself runs inside another
-/// tool's sandbox. Then every command would fail; instead treat the sandbox as
-/// off (the outer one still applies) so nothing assumes isolation it lacks.
-/// The probe starts at launch in the background; the first check waits for it.
-static PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-static PROBE_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<bool>>> =
-    std::sync::Mutex::new(None);
-static NESTED_WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn start_sandbox_probe() {
-    if cfg!(target_os = "macos") && PROBE.get().is_none() {
-        let mut t = PROBE_THREAD.lock().unwrap_or_else(|e| e.into_inner());
-        if t.is_none() {
-            *t = Some(std::thread::spawn(probe_nested));
-        }
-    }
-}
-
-fn probe_nested() -> bool {
-    std::process::Command::new("/usr/bin/sandbox-exec")
-        // A profile with a restriction: an allow-everything profile is
-        // accepted even inside another sandbox, unlike the real one.
-        .args([
-            "-p",
-            "(version 1)(allow default)(deny file-write* (literal \"/chanto-sandbox-probe\"))",
-            "/usr/bin/true",
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success())
-}
-
-/// Whether the OS sandbox can actually start here (always true off macOS).
-pub fn sandbox_works() -> bool {
-    if !cfg!(target_os = "macos") || cfg!(test) {
-        return true;
-    }
-    *PROBE.get_or_init(|| {
-        let handle = PROBE_THREAD
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .take();
-        handle
-            .and_then(|h| h.join().ok())
-            .unwrap_or_else(probe_nested)
-    })
-}
-
-/// A one-time notice when the sandbox is configured but can't start here.
-fn nested_sandbox_notice() -> Option<&'static str> {
-    let configured = SANDBOX_ACTIVE.load(std::sync::atomic::Ordering::Relaxed);
-    (configured && !sandbox_works() && !NESTED_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)).then_some(
-        "chanto's sandbox can't start here: this process already runs inside another sandbox (likely the tool that launched chanto). Commands run under that outer sandbox only, and nothing is auto-approved on the assumption of chanto's own.",
-    )
-}
+mod guards;
+mod sandbox;
+#[cfg(target_os = "linux")]
+mod sandbox_linux;
+#[cfg(feature = "fuzzing")]
+pub(crate) use guards::{Rule, guard_rules, write_guards};
+pub use sandbox::*;
+#[cfg(target_os = "linux")]
+use sandbox_linux::*;
 
 fn looks_sandbox_blocked(out: &str) -> bool {
     let o = out.to_lowercase();
@@ -429,325 +131,6 @@ fn looks_network_failure(out: &str) -> bool {
     ]
     .iter()
     .any(|s| o.contains(s))
-}
-
-/// Private keys and credential files sandboxed commands can't read.
-pub fn secret_read_denies(home: &std::path::Path, extra: &[String]) -> Vec<(bool, String)> {
-    // (is_regex, path or pattern)
-    let h = home.display().to_string();
-    let mut out = vec![
-        (
-            true,
-            format!(
-                "^{}/\\.ssh/id_(rsa|dsa|ecdsa|ed25519)(_sk)?$",
-                regex::escape(&h)
-            ),
-        ),
-        (false, format!("{h}/.aws/credentials")),
-        (false, format!("{h}/.netrc")),
-        (false, format!("{h}/.git-credentials")),
-        (false, format!("{h}/.pypirc")),
-        (false, format!("{h}/.gnupg/private-keys-v1.d")),
-        (false, format!("{h}/.config/gcloud/credentials.db")),
-        (
-            false,
-            format!("{h}/.config/gcloud/application_default_credentials.json"),
-        ),
-        (false, format!("{h}/.password-store")),
-        // Agent-CLI credential stores (provider keys, OAuth tokens), including ours.
-        (false, format!("{h}/.chanto/auth.json")),
-        (false, format!("{h}/.chanto/server.json")),
-        (false, format!("{h}/.claude/.credentials.json")),
-        (false, format!("{h}/.codex/auth.json")),
-    ];
-    // Windows credential stores, addressed with the platform separator.
-    if cfg!(windows) {
-        let w = |p: &str| format!("{h}\\{}", p.replace('/', "\\"));
-        out.extend([
-            (false, w("AppData/Roaming/gcloud/credentials.db")),
-            (
-                false,
-                w("AppData/Roaming/gcloud/application_default_credentials.json"),
-            ),
-            (false, w("AppData/Roaming/Claude/.credentials.json")),
-            (false, w("AppData/Roaming/chanto/auth.json")),
-            (false, w(".aws/credentials")),
-        ]);
-    }
-    out.extend(
-        extra
-            .iter()
-            .map(|p| (false, crate::util::resolve(home, p).display().to_string())),
-    );
-    out
-}
-
-pub fn sandbox_available() -> bool {
-    #[cfg(windows)]
-    {
-        crate::windows_sandbox::available()
-    }
-    #[cfg(not(windows))]
-    {
-        if cfg!(target_os = "macos") {
-            return std::path::Path::new("/usr/bin/sandbox-exec").exists();
-        }
-        // Ask the kernel: /sys/kernel/security is often absent in containers.
-        landlock_abi() > 0
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn landlock_abi() -> i64 {
-    const LANDLOCK_CREATE_RULESET_VERSION: libc::c_uint = 1;
-    // SAFETY: the version query takes no ruleset and only returns a number.
-    unsafe {
-        libc::syscall(
-            libc::SYS_landlock_create_ruleset,
-            std::ptr::null::<u8>(),
-            0usize,
-            LANDLOCK_CREATE_RULESET_VERSION,
-        )
-    }
-}
-
-#[cfg(all(unix, not(target_os = "linux")))]
-fn landlock_abi() -> i64 {
-    0
-}
-
-/// Existing files and directories the sandbox must not read: the secret
-/// deny list with its patterns expanded against the directory listing.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn read_denied_paths(home: &std::path::Path, extra: &[String]) -> Vec<std::path::PathBuf> {
-    let mut out = Vec::new();
-    #[cfg(windows)]
-    if let Ok(entries) = std::fs::read_dir(home.join(".ssh")) {
-        static KEYS: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-            regex::Regex::new(r"^id_(rsa|dsa|ecdsa|ed25519)(_sk)?$").unwrap()
-        });
-        out.extend(
-            entries
-                .flatten()
-                .filter(|e| KEYS.is_match(&e.file_name().to_string_lossy()))
-                .map(|e| e.path()),
-        );
-    }
-    for (is_regex, p) in secret_read_denies(home, extra) {
-        if !is_regex {
-            let p = std::path::PathBuf::from(p);
-            if p.symlink_metadata().is_ok() {
-                out.push(p.canonical().unwrap_or(p));
-            }
-            continue;
-        }
-        if cfg!(windows) {
-            continue;
-        }
-        // Patterns are anchored full paths; match them against their
-        // literal parent directory (e.g. ~/.ssh).
-        let Ok(re) = regex::Regex::new(&p) else {
-            continue;
-        };
-        let lit: String = p
-            .trim_start_matches('^')
-            .replace("\\.", ".")
-            .replace("\\-", "-");
-        let parent = lit.rfind('/').map(|i| &lit[..i]).unwrap_or("/");
-        if let Ok(rd) = std::fs::read_dir(parent) {
-            out.extend(
-                rd.flatten()
-                    .map(|e| e.path())
-                    .filter(|q| re.is_match(&q.display().to_string())),
-            );
-        }
-    }
-    out
-}
-
-/// Landlock only grants access, so "everything but these paths" becomes:
-/// every sibling along the way from / to each denied path, minus the
-/// denied paths themselves.
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-pub fn read_allow_paths(denied: &[std::path::PathBuf]) -> Vec<std::path::PathBuf> {
-    use std::collections::HashSet;
-    use std::path::{Path, PathBuf};
-    let denied: HashSet<PathBuf> = denied.iter().filter(|p| p.is_absolute()).cloned().collect();
-    let ancestors: HashSet<PathBuf> = denied
-        .iter()
-        .flat_map(|p| p.ancestors().skip(1).map(Path::to_path_buf))
-        .collect();
-    if denied.is_empty() {
-        return vec![PathBuf::from("/")];
-    }
-    let mut out = Vec::new();
-    let mut stack = vec![PathBuf::from("/")];
-    while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for child in rd.flatten().map(|e| e.path()) {
-            if denied.contains(&child) {
-                continue;
-            }
-            if ancestors.contains(&child) {
-                stack.push(child);
-            } else {
-                out.push(child);
-            }
-        }
-    }
-    out
-}
-
-/// Linux: restrict a child's writes with Landlock. The ruleset is built here,
-/// in the parent; the child only applies it, right before exec.
-#[cfg(target_os = "linux")]
-fn landlock_writes(
-    cmd: &mut tokio::process::Command,
-    writable: &[String],
-    readable: &[std::path::PathBuf],
-    restricted_network: bool,
-    proxy_port: Option<u16>,
-) {
-    use landlock::{
-        ABI, AccessFs, AccessNet, NetPort, Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
-        path_beneath_rules,
-    };
-    // Ask for exactly the rights the running kernel understands: requesting V3
-    // rights on an older kernel makes ruleset creation fail, which used to leave
-    // the command running unsandboxed.
-    let abi = match landlock_abi() {
-        v if v >= 4 => ABI::V4,
-        3 => ABI::V3,
-        2 => ABI::V2,
-        _ => ABI::V1,
-    };
-    let built = Ruleset::default()
-        .handle_access(AccessFs::from_write(abi) | AccessFs::ReadFile)
-        .and_then(|r| {
-            if restricted_network {
-                r.handle_access(AccessNet::ConnectTcp)
-            } else {
-                Ok(r)
-            }
-        })
-        .and_then(|r| r.create())
-        .and_then(|r| {
-            if let Some(port) = proxy_port {
-                r.add_rule(NetPort::new(port, AccessNet::ConnectTcp))
-            } else {
-                Ok(r)
-            }
-        })
-        .and_then(|r| r.add_rules(path_beneath_rules(writable, AccessFs::from_write(abi))))
-        .and_then(|r| r.add_rules(path_beneath_rules(readable, AccessFs::ReadFile)));
-    // Fail closed when the kernel advertises Landlock but the ruleset won't
-    // apply: a sandbox that silently didn't take effect is worse than a command
-    // that refuses to run. (The model can retry with `dangerouslyDisableSandbox`,
-    // which asks a human.) Without Landlock at all there is nothing to enforce.
-    let state = std::sync::Mutex::new(Some(match built {
-        Ok(r) => Ok(r),
-        Err(e) if sandbox_available() => Err(e.to_string()),
-        Err(_) => return,
-    }));
-    // SAFETY: the closure takes the prebuilt ruleset and makes the
-    // restrict_self syscalls; it doesn't allocate or take other locks.
-    unsafe {
-        cmd.pre_exec(move || match state.lock().ok().and_then(|mut g| g.take()) {
-            Some(Ok(r)) => {
-                let st = r
-                    .restrict_self()
-                    .map_err(|e| std::io::Error::other(e.to_string()))?;
-                if st.ruleset != RulesetStatus::FullyEnforced {
-                    return Err(std::io::Error::other(format!(
-                        "landlock not fully enforced ({:?})",
-                        st.ruleset
-                    )));
-                }
-                if restricted_network {
-                    restrict_network_sockets()?;
-                }
-                Ok(())
-            }
-            Some(Err(e)) => Err(std::io::Error::other(format!(
-                "landlock ruleset unavailable: {e}"
-            ))),
-            None => Err(std::io::Error::other("landlock state missing")),
-        });
-    }
-}
-
-/// Landlock v4 handles TCP only. Prevent UDP/raw/packet sockets (and io_uring
-/// socket operations) from bypassing it. Unix sockets remain available for DNS.
-#[cfg(all(
-    target_os = "linux",
-    any(target_arch = "x86_64", target_arch = "aarch64")
-))]
-fn restrict_network_sockets() -> std::io::Result<()> {
-    let stmt = |code, k| libc::sock_filter {
-        code,
-        jt: 0,
-        jf: 0,
-        k,
-    };
-    let jump = |k, jt, jf| libc::sock_filter {
-        code: 0x15,
-        jt,
-        jf,
-        k,
-    };
-    #[cfg(target_arch = "x86_64")]
-    let arch = 0xc000003e;
-    #[cfg(target_arch = "aarch64")]
-    let arch = 0xc00000b7;
-    let deny = 0x00050000 | libc::EPERM as u32;
-    let mut filters = [
-        stmt(0x20, 4), // seccomp_data.arch
-        jump(arch, 1, 0),
-        stmt(0x06, 0x80000000), // kill on ABI mismatch
-        stmt(0x20, 0),          // syscall number
-        jump(libc::SYS_io_uring_setup as u32, 0, 1),
-        stmt(0x06, deny),
-        // Reject x32 syscall numbers too (harmless on aarch64).
-        stmt(0x45, 0x40000000),
-        stmt(0x06, deny),
-        jump(libc::SYS_socket as u32, 0, 11),
-        stmt(0x20, 16), // args[0]: socket family
-        jump(libc::AF_UNIX as u32, 9, 0),
-        jump(libc::AF_INET as u32, 1, 0),
-        jump(libc::AF_INET6 as u32, 0, 6),
-        stmt(0x20, 24),  // args[1]: socket type
-        stmt(0x54, 0xf), // strip NONBLOCK / CLOEXEC
-        jump(libc::SOCK_STREAM as u32, 0, 3),
-        stmt(0x20, 32), // args[2]: protocol (block SCTP and other non-TCP streams)
-        jump(0, 2, 0),
-        jump(libc::IPPROTO_TCP as u32, 1, 0),
-        stmt(0x06, deny),
-        stmt(0x06, 0x7fff0000), // allow
-    ];
-    // JSET needs explicit branches: deny if the x32 bit is present.
-    filters[6].jt = 0;
-    filters[6].jf = 1;
-    let prog = libc::sock_fprog {
-        len: filters.len() as u16,
-        filter: filters.as_mut_ptr(),
-    };
-    // SAFETY: the kernel copies this bounded BPF program before returning.
-    if unsafe { libc::prctl(libc::PR_SET_SECCOMP, 2, &prog) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-#[cfg(all(
-    target_os = "linux",
-    not(any(target_arch = "x86_64", target_arch = "aarch64"))
-))]
-fn restrict_network_sockets() -> std::io::Result<()> {
-    Err(std::io::Error::other(
-        "network sandbox requires seccomp support for this architecture",
-    ))
 }
 
 async fn report_network_blocks(domains: Vec<String>, ctx: &Ctx) -> String {
@@ -936,6 +319,8 @@ fn build_command_for_policy(
         let home = sandbox_home();
         let home = home.canonical().unwrap_or(home);
         let readable = read_allow_paths(&read_denied_paths(&home, &sb.deny_read));
+        // landlock_writes narrows these writable trees around the write guards
+        // (git internals, agent config, toolchain bins).
         landlock_writes(
             &mut cmd,
             &writable_paths(&root, sb),
@@ -943,6 +328,37 @@ fn build_command_for_policy(
             restricted,
             proxy_port,
         );
+    }
+    // IPC handles that would let a sandboxed command reach a process outside
+    // the sandbox: an SSH or GPG agent, the D-Bus session bus (systemd-run),
+    // the X11/Wayland display (keystroke injection into other windows).
+    // On macOS Seatbelt also refuses the sockets themselves; on Linux this is
+    // all there is, and a command that knows where a socket lives (D-Bus at
+    // `/run/user/<uid>/bus`, Docker at `/var/run/docker.sock`) can still
+    // connect to it. `XDG_RUNTIME_DIR` goes too: it names where most of them
+    // are.
+    if active {
+        let keep_agent = sandbox.is_some_and(|s| s.allow_ssh_agent);
+        for k in [
+            "SSH_AUTH_SOCK",
+            "SSH_AGENT_PID",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "GPG_AGENT_INFO",
+            "DOCKER_HOST",
+            "XAUTHORITY",
+            "XDG_RUNTIME_DIR",
+        ] {
+            if !(keep_agent && k.starts_with("SSH_")) {
+                cmd.env_remove(k);
+            }
+        }
+        // Its own temp dir: Seatbelt lets Unix sockets connect only there and
+        // in the project.
+        if cfg!(target_os = "macos") && sandbox.is_some() {
+            cmd.env("TMPDIR", sandbox_tmpdir());
+        }
     }
     if let Some(proxy) = &network {
         for name in [
@@ -979,8 +395,30 @@ fn build_command_for_policy(
     // Put the command in its own process group so KillShell reaps its whole
     // tree. Sandboxed Windows launchers contain the tree in a Job Object;
     // kill_group stops the launcher (and its job) via taskkill /T.
+    //
+    // A sandboxed command gets a whole new session (`setsid`) instead, so it
+    // has no controlling terminal: it can't open `/dev/tty` to inject input
+    // with TIOCSTI or paint fake prompts on Chanto's terminal. setsid also
+    // makes it a process-group leader (pgid == pid), so kill_group still reaps
+    // the tree. On Linux, seccomp additionally refuses the terminal-injection
+    // ioctls. kill_group signals the leader's group; setsid keeps that intact.
     #[cfg(unix)]
-    cmd.process_group(0);
+    if active {
+        // SAFETY: setsid and the seccomp prctl take no locks and don't
+        // allocate; they only create a new session and install a BPF filter.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                #[cfg(target_os = "linux")]
+                block_tty_injection()?;
+                Ok(())
+            });
+        }
+    } else {
+        cmd.process_group(0);
+    }
     Ok((cmd, network))
 }
 
@@ -1379,9 +817,11 @@ independent calls in parallel."
                             "\n[This may have been blocked by the sandbox: commands can write only inside the project and temp dir. \
                              If it really needs that, run it again with dangerouslyDisableSandbox: true; the user will be asked to approve.]"
                         } else {
-                            "\n[This may have been blocked by the sandbox: commands can write only inside the project, temp dirs and tool caches, \
-                             and can't read private keys or credential files. If it really needs that, run it again with \
-                             dangerouslyDisableSandbox: true; the user will be asked to approve.]"
+                            "\n[This may have been blocked by the sandbox: commands can write only inside the project, temp dirs and package \
+                             download caches, can't change git hooks or config, agent or editor settings, and can't read private keys or \
+                             credential files. Installing a toolchain or tool, `git init`/`clone`/`worktree add`/`submodule`/`config` and \
+                             git over SSH need to run outside it: run it again with dangerouslyDisableSandbox: true, and the user will be \
+                             asked to approve.]"
                         });
                     } else if sandbox_on()
                         && !unsandboxed
@@ -2078,7 +1518,8 @@ mod sandbox_tests {
         // The project is writable, but its git internals are not: a hook
         // written here would otherwise run, unsandboxed, on the next git call.
         // The Seatbelt profile denies writes to .git internals inside the
-        // writable project; the Landlock profile doesn't carve these out yet.
+        // writable project. Landlock doesn't carve them out: that would also
+        // take away creating files in the project (see landlock_write_allow).
         #[cfg(target_os = "macos")]
         {
             std::fs::create_dir_all(project.join(".git/hooks")).unwrap();
@@ -2567,4 +2008,33 @@ mod sink_tests {
             "later output lands in the shell"
         );
     }
+}
+
+// The libc calls stay in this file with the sandbox's other FFI; guards.rs
+// uses the result to deny writes to Chanto's own terminal.
+/// The terminal devices Chanto's own stdin, stdout and stderr are on.
+#[cfg(not(unix))]
+pub(super) fn own_terminals() -> Vec<std::path::PathBuf> {
+    Vec::new()
+}
+
+/// The terminal devices Chanto's own stdin, stdout and stderr are on.
+#[cfg(unix)]
+pub(super) fn own_terminals() -> Vec<std::path::PathBuf> {
+    let mut out: Vec<std::path::PathBuf> = Vec::new();
+    for fd in 0..3 {
+        let mut buf = [0 as libc::c_char; 256];
+        // SAFETY: the buffer is valid for its length; ttyname_r NUL-terminates.
+        if unsafe { libc::isatty(fd) } == 1
+            && unsafe { libc::ttyname_r(fd, buf.as_mut_ptr(), buf.len()) } == 0
+        {
+            // SAFETY: ttyname_r succeeded, so `buf` holds a C string.
+            let s = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) };
+            let p = std::path::PathBuf::from(s.to_string_lossy().into_owned());
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+    }
+    out
 }

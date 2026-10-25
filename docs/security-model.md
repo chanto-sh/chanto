@@ -76,12 +76,41 @@ Every tool call the model makes goes through one decision point before it runs.
 ### 2. Commands ↔ the operating system: the sandbox
 
 Shell commands run inside an OS sandbox by default (Seatbelt on macOS,
-Landlock and bubblewrap on Linux, a write-restricted token on Windows):
+Landlock and seccomp on Linux, a write-restricted token on Windows):
 
-- writes are limited to the project, temporary directories and tool caches;
-- on macOS and Linux, reads of known credential locations are denied, and
-  network access can be turned off or limited to an allowlist of domains (on
-  Windows the sandbox confines writes only);
+- writes are limited to the project, temporary directories and package
+  managers' download caches (named entries only, not all of `~/.cache` or
+  `~/Library/Caches`). Dependency downloads (extracted crates, Go modules,
+  Maven and Gradle jars) are writable, like the project's own `node_modules`;
+  toolchains, installed tools and their settings are not;
+- on macOS, paths inside those trees whose contents run later outside the
+  sandbox stay read-only: the project's `.git` (pinned, so it can't be renamed
+  away or created), its hooks, config and submodule/worktree git dirs, nested
+  repositories' hooks and config, agent and editor settings that carry hooks
+  (`.chanto/`, `.claude/`, `.mcp.json`, `.husky/`, `.githooks/`,
+  `.vscode/{settings,tasks}.json`), Chanto's own home, shell startup files and
+  toolchain bins and settings;
+- on Linux those in-project guards are **not** enforced: Landlock can only
+  grant, and carving `.git` or `.chanto` out of the project would also take
+  away the right to create files at its root or in `.git`, which breaks
+  `git commit` and every build. Shell commands can write them; the
+  permission layer still keeps the file tools from changing them without
+  asking. The home guards apply only where a widened tree (`allow_write`,
+  `--add-dir`) covers them;
+- on macOS and Linux, reads of known credential locations are denied (private
+  keys, cloud and registry logins, Chanto's own token files), and network
+  access can be turned off or limited to an allowlist of domains (on Windows
+  the sandbox confines writes only). The macOS keychain stays reachable, so
+  credential helpers (`git credential-osxkeychain`, `gh auth token`) can still
+  hand out tokens;
+- on macOS, local IPC that would reach a process outside the sandbox is
+  blocked: no controlling terminal, no access to Chanto's or other terminal
+  windows' ttys, no Apple Events, LaunchServices, clipboard or Shortcuts, and
+  Unix sockets only inside the project and the command's own `$TMPDIR`. On
+  Linux only the controlling terminal is taken away (and seccomp refuses
+  TIOCSTI); the SSH, D-Bus, Docker and `XDG_RUNTIME_DIR` variables are
+  removed, but that is advisory, since a command that knows a socket's path
+  can still connect to it;
 - leaving the sandbox (`dangerouslyDisableSandbox`) always needs a human.
 
 The permission layer and the sandbox are independent, so a mistake in one is
