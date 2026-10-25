@@ -102,8 +102,23 @@ pub(crate) fn auth_env(url: &str, username: &str, password: &str) -> Vec<(String
     .collect()
 }
 
+/// `CHANTO_DEBUG_GIT=1`: print each failing git command (temporary, for
+/// Windows CI).
+fn debug_git() -> bool {
+    std::env::var_os("CHANTO_DEBUG_GIT").is_some()
+}
+
 fn output(mut c: Command, args: &[&str]) -> Result<String> {
     let o = c.output().context("running git")?;
+    if debug_git() {
+        eprintln!(
+            "[git] {:?} in {:?} -> {}: {}",
+            c.get_args().collect::<Vec<_>>(),
+            c.get_current_dir(),
+            o.status,
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
+    }
     if !o.status.success() {
         bail!(
             "git {}: {}",
@@ -603,6 +618,11 @@ pub fn finalize(repo: &Path, worktree: &Path, id: &str, task: &str) -> Result<bo
 /// Commits the run made (after its base).
 pub fn commit_count(repo: &Path, base: &str, branch: &str) -> usize {
     git(repo, &["rev-list", "--count", &format!("{base}..{branch}")])
+        .inspect_err(|e| {
+            if debug_git() {
+                eprintln!("[git] commit_count: {e:#}");
+            }
+        })
         .ok()
         .and_then(|n| n.trim().parse().ok())
         .unwrap_or(0)

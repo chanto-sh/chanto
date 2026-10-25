@@ -44,6 +44,41 @@ impl Queue {
         })
     }
 
+    /// What a failed run left behind, for a panic message: the server's
+    /// view (events, result) and the runner's logs.
+    fn explain(&self, home: &TestHome) -> String {
+        let mut s = format!("completes: {:?}\n", self.completes.lock().unwrap());
+        for e in self.events.lock().unwrap().iter() {
+            if matches!(e["type"].as_str(), Some("warning" | "error" | "tool_end")) {
+                s.push_str(&format!("event: {e}\n"));
+            }
+        }
+        let mut stack = vec![home.dir.clone()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                let p = e.path();
+                if p.is_dir() && p.file_name().is_some_and(|n| n != ".git" && n != "objects") {
+                    stack.push(p);
+                } else if p
+                    .file_name()
+                    .is_some_and(|n| n == "worker.log" || n == "events.jsonl")
+                {
+                    let text = std::fs::read_to_string(&p).unwrap_or_default();
+                    let tail: String = text
+                        .chars()
+                        .rev()
+                        .take(4000)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    s.push_str(&format!("--- {}\n{tail}\n", p.display()));
+                }
+            }
+        }
+        s
+    }
+
     fn complete(&self) -> CompleteRun {
         let c = self.completes.lock().unwrap();
         assert_eq!(c.len(), 1, "{c:?}");
@@ -193,11 +228,17 @@ async fn a_model_run_is_pushed_as_a_branch_and_reported() {
     let c = client(&serve_queue(q.clone()).await);
     let mut job = job_for(&origin, "create hello.txt");
     job.checks = Some(vec!["true".into()]);
+    // SAFETY: test-only; only adds diagnostics to failing git commands.
+    unsafe { std::env::set_var("CHANTO_DEBUG_GIT", "1") };
     let status = execute(&c, &m, &job, None, false, true).await.unwrap();
     assert_eq!(status, RunStatus::Succeeded);
     let done = q.complete();
     assert_eq!(done.status, RunStatus::Succeeded);
-    let branch = done.result.branch.clone().expect("a pushed branch");
+    let branch = done
+        .result
+        .branch
+        .clone()
+        .unwrap_or_else(|| panic!("no pushed branch:\n{}", q.explain(&home)));
     assert!(branch.starts_with("chanto/run/"), "{branch}");
     assert_eq!(sh(&origin, &["show", &format!("{branch}:hello.txt")]), "hi");
     assert!(done.result.summary.contains("Created hello.txt."));
@@ -416,12 +457,18 @@ async fn the_model_continues_from_the_scripts_commit() {
     let mut job = job_for(&origin, "Finish the job");
     job.script = Some("echo step1 > step.txt".into());
     job.model_runs = ModelRuns::OnChange;
+    // SAFETY: test-only; only adds diagnostics to failing git commands.
+    unsafe { std::env::set_var("CHANTO_DEBUG_GIT", "1") };
     assert_eq!(
         execute(&c, &m, &job, None, false, true).await.unwrap(),
         RunStatus::Succeeded
     );
     let done = q.complete();
-    let branch = done.result.branch.clone().unwrap();
+    let branch = done
+        .result
+        .branch
+        .clone()
+        .unwrap_or_else(|| panic!("no pushed branch:\n{}", q.explain(&home)));
     // Both the script's file and the model's are on the run's branch.
     assert_eq!(
         sh(&origin, &["show", &format!("{branch}:step.txt")]),
