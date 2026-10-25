@@ -65,9 +65,20 @@ impl Tool for Memory {
         } else {
             "Saved"
         };
+        // Say what was stored and where, so a save is never silent about its content.
+        let detail = if action == "delete" {
+            String::new()
+        } else {
+            format!(
+                " — {}",
+                crate::util::one_line(args["description"].as_str().unwrap_or(""), 120)
+            )
+        };
         Ok(ToolOutput::ok(format!(
             "{verb} memory: {name}; undo with /memory undo {scope}"
         ))
-        .display(format!("\x1b[2m{verb} memory: {name}\x1b[0m")))
+        .display(format!(
+            "\x1b[2m{verb} {scope} memory: {name}{detail}\x1b[0m"
+        )))
     }
 }

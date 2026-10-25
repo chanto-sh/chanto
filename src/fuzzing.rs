@@ -79,10 +79,34 @@ pub fn seatbelt_profile(
     crate::tools::bash::sandbox_profile_with_paths(writable, home, cfg, proxy_port)
 }
 
-/// The paths inside writable trees whose writes the profile denies
-/// ([`crate::tools::bash::write_deny_paths`]).
-pub fn seatbelt_write_denies(cwd: &Path, home: &Path) -> Vec<PathBuf> {
-    crate::tools::bash::write_deny_paths(cwd, home)
+/// The write-guard rules the profile holds for project `cwd`, given the
+/// resolved writable trees, as `(action, operations, filter, argument)`
+/// ([`crate::tools::bash::guard_rules`]).
+pub fn seatbelt_guard_rules(
+    cwd: &Path,
+    home: &Path,
+    writable: &[String],
+) -> Vec<(&'static str, &'static [&'static str], &'static str, String)> {
+    let rules: Vec<crate::tools::bash::Rule> =
+        crate::tools::bash::guard_rules(&crate::tools::bash::write_guards(cwd, home), writable);
+    rules
+}
+
+/// The `$TMPDIR` sandboxed commands get, resolved
+/// ([`crate::tools::bash::sandbox_tmpdir`]).
+pub fn seatbelt_tmpdir() -> String {
+    crate::permissions::normalize(&crate::tools::bash::sandbox_tmpdir())
+        .display()
+        .to_string()
+}
+
+/// The fixed tail of the profile's IPC rules
+/// ([`crate::tools::bash::IPC_DENIES`]) and the socket pattern it refuses.
+pub fn seatbelt_ipc_fixed() -> (&'static str, &'static str) {
+    (
+        crate::tools::bash::IPC_DENIES,
+        crate::tools::bash::RISKY_SOCKETS,
+    )
 }
 
 /// A path resolved as a deny rule needs it: symlinks followed as far as the

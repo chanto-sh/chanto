@@ -4133,7 +4133,8 @@ async fn scheduling_tools_drive_the_session_scheduler() {
         json!({"content": "Checked; again in 2 minutes."}),
     ])
     .await;
-    let env = make_env(&base, &dir, Mode::Default, 32768);
+    // CronCreate asks outside bypass mode (security_tests covers that).
+    let env = make_env(&base, &dir, Mode::Bypass, 32768);
     let mut agent = Agent::new(env.clone());
     agent
         .run_turn("remind me", vec![], CancellationToken::new())

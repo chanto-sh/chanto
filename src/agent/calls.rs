@@ -17,6 +17,11 @@ impl Agent {
         // hook context to fold into that call's result.
         let mut plan: Vec<PlannedCall> = Vec::new();
         let mut call_seq: HashMap<String, u64> = HashMap::new();
+        // Where each approved call's paths pointed when it was approved.
+        let mut approved: HashMap<String, Vec<(String, PathBuf)>> = HashMap::new();
+        // For approved shell commands: whether the static rules allowed them
+        // outright, and whether they touched a secret file, at approval.
+        let mut approved_exec: HashMap<String, ExecJudgement> = HashMap::new();
         let mut stop = false;
         for call in calls {
             if stop || cancel.is_cancelled() {
@@ -113,6 +118,22 @@ impl Agent {
                 .await;
             self.cur_cancel = Some(cancel.clone());
             let authorization = self.authorize(tool.as_ref(), &mut call).await;
+            let base = self.cwd_override.clone().unwrap_or_else(|| self.env.cwd());
+            match &authorization {
+                Auth::Allow => {
+                    approved.insert(call.id.clone(), path_targets(&call, &base));
+                    if tool.kind_for(&call.arguments) == ToolKind::Execute {
+                        approved_exec.insert(
+                            call.id.clone(),
+                            judge_exec(self.mode(), &call, tool.as_ref(), &base),
+                        );
+                    }
+                }
+                Auth::AllowWith(c, _) => {
+                    approved.insert(c.id.clone(), path_targets(c, &base));
+                }
+                _ => {}
+            }
             self.env.accounting.log("info", "permission_decision", json!({"name": call.name, "decision": match &authorization { Auth::Allow | Auth::AllowWith(..) => "allow", Auth::Deny(_) => "deny", Auth::Stop => "stop" }}));
             match authorization {
                 Auth::Allow => {
@@ -202,9 +223,19 @@ impl Agent {
                 i += 1;
                 continue;
             }
+            let base = self.cwd_override.clone().unwrap_or_else(|| self.env.cwd());
             let (call, tool, _, _) = &plan[i];
             let tool = tool.as_ref().unwrap();
             if !parallel_safe(call, tool) {
+                let why = retargeted(approved.get(&call.id), call, &base).or_else(|| {
+                    let then = approved_exec.get(&call.id)?;
+                    exec_regressed(then, &judge_exec(self.mode(), call, tool.as_ref(), &base))
+                });
+                if let Some(why) = why {
+                    plan[i].2 = Err(why);
+                    i += 1;
+                    continue;
+                }
                 // The verify baseline must see the project before any change.
                 let mutating = match tool.kind_for(&call.arguments) {
                     ToolKind::Edit => true,
@@ -293,6 +324,13 @@ impl Agent {
                     _ => break,
                 }
                 j += 1;
+            }
+            for k in std::mem::take(&mut batch) {
+                let call = &plan[k].0;
+                match retargeted(approved.get(&call.id), call, &base) {
+                    Some(why) => plan[k].2 = Err(why),
+                    None => batch.push(k),
+                }
             }
             let futs = batch.iter().map(|&k| {
                 let (call, tool, _, _) = &plan[k];
@@ -532,4 +570,86 @@ impl Agent {
             .map(|t| t.label(&call.arguments))
             .unwrap_or_else(|| call.name.clone())
     }
+}
+
+/// Where a call's path arguments point with symlinks resolved, recorded when
+/// it's approved and checked again right before it runs: approval covers the
+/// file the path named then, and an earlier call in the batch (or anything
+/// else running) may have swapped a link in since.
+fn path_targets(call: &ToolCall, base: &Path) -> Vec<(String, PathBuf)> {
+    let args = &call.arguments;
+    let mut paths: Vec<String> = ["file_path", "notebook_path", "path"]
+        .iter()
+        .filter_map(|k| args[*k].as_str())
+        .filter(|p| !p.is_empty())
+        .map(str::to_string)
+        .collect();
+    if call.name == "apply_patch" {
+        paths.extend(crate::tools::patch::paths(
+            args["input"]
+                .as_str()
+                .or(args["patch"].as_str())
+                .unwrap_or(""),
+        ));
+    }
+    paths
+        .into_iter()
+        .map(|p| {
+            let target = permissions::normalize(&crate::util::resolve(base, &p));
+            (p, target)
+        })
+        .collect()
+}
+
+/// Why a call must not run because a path now resolves somewhere other than
+/// where it did at approval, if it does.
+fn retargeted(
+    approved: Option<&Vec<(String, PathBuf)>>,
+    call: &ToolCall,
+    base: &Path,
+) -> Option<String> {
+    let approved = approved?;
+    let now = path_targets(call, base);
+    if now.len() != approved.len() {
+        return Some("Blocked: this call's paths changed after it was approved, so it was not run. Call it again.".into());
+    }
+    approved
+        .iter()
+        .zip(&now)
+        .find(|(a, b)| a.1 != b.1)
+        .map(|(a, b)| {
+            format!(
+                "Blocked: {} now resolves to {} but pointed to {} when this call was approved (a symlink or the working directory changed in between), so it was not run. Check the path, then call again if it's still what you mean.",
+                a.0,
+                b.1.display(),
+                a.1.display()
+            )
+        })
+}
+
+/// How the static rules judged a shell command: allowed outright, and
+/// whether it touches a secret file (which asks in every mode but bypass).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ExecJudgement {
+    allowed: bool,
+    secret: bool,
+}
+
+fn judge_exec(mode: Mode, call: &ToolCall, tool: &dyn Tool, base: &Path) -> ExecJudgement {
+    let kind = tool.kind_for(&call.arguments);
+    ExecJudgement {
+        allowed: permissions::static_decision(mode, kind, &call.name, &call.arguments, base)
+            == Some(Decision::Allow),
+        secret: mode != Mode::Bypass
+            && permissions::secret_file_target(kind, &call.name, &call.arguments, base).is_some(),
+    }
+}
+
+/// Why an approved shell command must not run now: an earlier call in the
+/// batch made it reach a secret file, or made the rules that allowed it
+/// outright stop doing so (a path in it now leads somewhere else).
+fn exec_regressed(then: &ExecJudgement, now: &ExecJudgement) -> Option<String> {
+    ((then.allowed && !now.allowed) || (!then.secret && now.secret)).then(|| {
+        "Blocked: since this command was approved, an earlier call changed what it would touch (it now reaches a file that needs approval, such as a secret or a path outside the project), so it was not run. Call it again to be asked.".to_string()
+    })
 }
