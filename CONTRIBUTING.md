@@ -47,6 +47,17 @@ request is scanned with CodeQL, and one that adds a high-severity finding can't
 merge. To see the findings before you push, run `scripts/codeql.sh` (needs the
 CodeQL CLI, `brew install --cask codeql`; about ten minutes for the Rust code).
 
+Changing a workflow or a dependency? The `scorecard guard` check runs the
+OpenSSF Scorecard checks that only need the repository's files: known
+vulnerabilities in the lockfiles (osv-scanner), workflow security (zizmor) and
+Scorecard's own pinned-dependency, token-permission, dangerous-workflow and
+binary-artifact checks. Run them locally with `scripts/scorecard-check.sh`
+(`brew install osv-scanner zizmor scorecard`; a few seconds). The pre-commit
+hook runs zizmor when a workflow is staged and osv-scanner when a lockfile is,
+if they're installed. An advisory that can't affect Chanto goes, with the
+reason, in the `osv-scanner.toml` next to the lockfile: that's the only list
+Scorecard reads (`.cargo/audit.toml` and `deny.toml` don't count).
+
 ### Wire type changes
 
 The wire types in `proto/` are shared with the hosted service and have their

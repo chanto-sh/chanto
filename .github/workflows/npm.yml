@@ -16,6 +16,10 @@ on:
       tag:
         type: string
         required: true
+    secrets:
+      # The fallback for when trusted publishing can't match the workflow.
+      NPM_TOKEN:
+        required: false
 
 permissions:
   contents: read
@@ -28,6 +32,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           # Trusted publishing needs npm 11.5.1+, which Node 24 ships.

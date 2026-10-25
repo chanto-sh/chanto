@@ -220,7 +220,12 @@ pub fn undo(root: &Path) -> Option<String> {
         lines.join("\n") + if lines.is_empty() { "" } else { "\n" },
     )
     .ok()?;
-    migrate_memories(root).ok()?;
+    // The lessons are undone; copying accepted ones into memory is secondary.
+    // Reporting failure here would invite a retry, which undoes the change
+    // before this one.
+    if let Err(e) = migrate_memories(root) {
+        eprintln!("Could not copy lessons into memory: {e:#}");
+    }
     Some(last["action"].as_str().unwrap_or("change").to_string())
 }
 
@@ -621,6 +626,32 @@ mod tests {
         assert!(prompt_block(&root).is_none());
         assert_eq!(undo(&root).as_deref(), Some("active all"));
         assert!(checks(&root).is_empty());
+        TEST_HOME.with(|t| *t.borrow_mut() = None);
+    }
+
+    #[test]
+    fn undo_reports_the_change_when_memory_migration_fails() {
+        let h =
+            std::env::temp_dir().join(format!("chanto-learn-{}", uuid::Uuid::new_v4().simple()));
+        let _g = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        // SAFETY: test-only, under TEST_HOME_LOCK.
+        unsafe { std::env::set_var("CHANTO_HOME", h.join("home")) };
+        TEST_HOME.with(|t| *t.borrow_mut() = Some(h.clone()));
+        std::fs::create_dir_all(h.join("home")).unwrap();
+        // A file where the project memory directory would go, so the migration
+        // that follows an undo fails.
+        std::fs::write(h.join("home/projects"), "not a directory").unwrap();
+        let root = h.join("proj");
+        std::fs::create_dir_all(&root).unwrap();
+        add(&root, "Use thiserror for library errors", false).unwrap();
+        // Undoing the second add leaves the first lesson active, so the
+        // migration that follows the undo still has something to copy.
+        add(&root, "Keep functions small", false).unwrap();
+        assert!(migrate_memories(&root).is_err());
+        assert_eq!(undo(&root).as_deref(), Some("add"));
+        assert_eq!(lessons(&root).len(), 1);
         TEST_HOME.with(|t| *t.borrow_mut() = None);
     }
 }
