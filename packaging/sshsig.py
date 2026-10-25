@@ -32,6 +32,17 @@ def string(data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + data
 
 
+def emit(data: bytes) -> None:
+    """Write exact bytes to stdout.
+
+    Text mode would rewrite every LF as CRLF on Windows, and ssh-keygen
+    before OpenSSH 10 rejects an armored signature whose header ends in
+    anything but LF ("Couldn't parse signature: missing header").
+    """
+    sys.stdout.buffer.write(data)
+    sys.stdout.buffer.flush()
+
+
 def public_blob(key: str, openssl: str) -> bytes:
     """The SSH wire form of the Ed25519 key's public half (`key` is PEM)."""
     with open(key, "rb") as f:
@@ -52,7 +63,7 @@ def main() -> int:
     if args[:1] == ["--allowed-signers"] and len(args) in (2, 3):
         # The line for an allowed_signers file (ssh-keygen -Y verify -f).
         public = public_blob(args[1], args[2] if len(args) == 3 else "openssl")
-        print("chanto-release ssh-ed25519 " + base64.b64encode(public).decode())
+        emit(b"chanto-release ssh-ed25519 " + base64.b64encode(public) + b"\n")
         return 0
     if len(args) not in (2, 3):
         print("\n".join(__doc__.strip().splitlines()[2:4]), file=sys.stderr)
@@ -88,7 +99,8 @@ def main() -> int:
     )
     armored = base64.b64encode(sig).decode()
     lines = [armored[i : i + 70] for i in range(0, len(armored), 70)]
-    sys.stdout.write("-----BEGIN SSH SIGNATURE-----\n" + "\n".join(lines) + "\n-----END SSH SIGNATURE-----\n")
+    armor = "-----BEGIN SSH SIGNATURE-----\n" + "\n".join(lines) + "\n-----END SSH SIGNATURE-----\n"
+    emit(armor.encode())
     return 0
 
 
