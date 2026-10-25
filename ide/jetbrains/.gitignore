@@ -4,3 +4,9 @@ build/
 .intellijPlatform/
 .idea/
 *.iml
+
+# Gradle's wrapper is generated locally (`gradle wrapper`), not committed; only
+# gradle/wrapper/gradle-wrapper.properties, which pins the version, is.
+gradle/wrapper/gradle-wrapper.jar
+gradlew
+gradlew.bat
