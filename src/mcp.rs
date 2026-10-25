@@ -1349,6 +1349,18 @@ impl McpClient {
         tools: Vec<McpToolDef>,
         always_load: Option<bool>,
     ) -> Arc<McpClient> {
+        Self::with_tools_for_test_at(name, tools, always_load, Some("http://127.0.0.1:9/mcp"))
+    }
+
+    /// As [`Self::with_tools_for_test`], configured as a stdio server when
+    /// `url` is `None`.
+    #[cfg(test)]
+    pub(crate) fn with_tools_for_test_at(
+        name: &str,
+        tools: Vec<McpToolDef>,
+        always_load: Option<bool>,
+        url: Option<&str>,
+    ) -> Arc<McpClient> {
         let c = Arc::new(McpClient {
             name: name.to_string(),
             tools: RwLock::new(tools),
@@ -1370,7 +1382,12 @@ impl McpClient {
                 sse: Sse::default(),
             }))),
             cfg: McpServerConfig {
-                url: Some("http://127.0.0.1:9/mcp".into()),
+                url: url.map(str::to_string),
+                command: if url.is_none() {
+                    "server".into()
+                } else {
+                    String::new()
+                },
                 always_load,
                 ..Default::default()
             },
@@ -2003,14 +2020,16 @@ impl Tool for McpTool {
         self.def.schema.clone()
     }
     fn kind(&self) -> ToolKind {
-        // A tool's `readOnlyHint` is the server's own claim, and read-only
-        // tools run without asking: believe it from a server running here
-        // (one the user installed), not from a remote one.
-        if self.def.read_only && !self.client.is_http() {
-            ToolKind::ReadOnly
-        } else {
-            ToolKind::External
-        }
+        // Not ReadOnly even with a `readOnlyHint`: that's the server's own
+        // claim, and ReadOnly tools run without asking in every mode, so a
+        // server's "read-only" fetch or search would carry data out with no
+        // one asked. An allow rule for the tool is how a user vouches for it.
+        ToolKind::External
+    }
+    fn read_only_hint(&self) -> bool {
+        // Believed (as a hint) only from a server running here, one the user
+        // installed, not from a remote one.
+        self.def.read_only && !self.client.is_http()
     }
     fn label(&self, args: &Value) -> String {
         format!(

@@ -43,10 +43,45 @@ Every tool call the model makes goes through one decision point before it runs.
   commands, with comments, heredoc bodies and escapes read the way bash reads
   them, so text bash treats as data can't hide a command (fixed in v0.1.1).
   Command substitution, process substitution and write redirections always
-  need approval.
-- **Files** outside the project, protected paths (`.git/`, Chanto's own
-  config) and secret files (`.env`, `~/.ssh`, `~/.aws` and similar) always need
-  a human, in every mode except bypass.
+  need approval. A read-only command stops counting as one when an option
+  makes it run a program or write a file (`fd -x`, `find -fprint`,
+  `git fetch --upload-pack` or a fetch from a URL instead of a configured
+  remote, `git grep -O`, `sort --compress-program`, `rg --pre`, `xxd in out`,
+  `tree -o`, `go env -w`, `go build -o`), in auto mode's fast path too
+  (`tar --checkpoint-action`, `tar -I`, `git rebase -x`). So does a word
+  the shell rewrites before the command sees it (`$'…'` quoting, brace
+  expansion).
+- **Files** outside the project, protected paths (`.git/`, Chanto's own and
+  other agents' settings and hooks, `.mcp.json`, `.husky/`, `.vscode/`
+  settings and tasks) and secret files (`.env`, `~/.ssh`, `~/.aws` and
+  similar) always need a human, in every mode except bypass. Protected paths
+  are checked for the file tools and for the shell writes Chanto can see in a
+  command: redirections, `tee`, the destinations of `cp`, `mv`, `ln`,
+  `install` and `rsync`, the source of a link, `sed -i`, `dd of=`,
+  `curl -o`, `wget -O`, `tar -C`, `go build -o`, `git config` (including
+  `--file`) and `git remote add`. Chanto follows `cd`, `pushd`, wrappers such
+  as `env -C`, `sudo` and `timeout`, `sh -c` scripts, command substitutions
+  and brace expansion. A target the shell computes when it runs (`$var`,
+  `$(…)`, `$'…'`) can't be checked, so it asks too. An allow rule that covers
+  the command still applies. In auto mode, extracting an archive or applying
+  a patch (`tar x`, `unzip`, `patch`, `git apply`, `git am`) asks, because
+  its input names the files it writes. Files that a script or program writes
+  (an interpreter, a build, `cp -r dir/. .`) rely on the sandbox.
+- **The auto-mode classifier** judges an action against what you typed: your
+  prompts and the messages you send while the agent works, without the files
+  you mention or the context Chanto adds to them. Only input a frontend
+  receives from you counts: the TUI, the REPL, the web UI and phone, an ACP
+  client's prompt and `-p`. Everything else is shown to the classifier as
+  the agent's task, written by the agent, so a model can't approve its own
+  action by claiming you asked for it. That covers a subagent's task, goal,
+  team and outcome steps, a background run's task and reports, a scheduled
+  task, an expanded slash command and a repair prompt. With `optimize.token_classifier`,
+  a one-word ALLOW settles an action only when it is the model's most likely
+  answer with at least 90% probability, and only a whole `ALLOW` token
+  counts; anything less gets the full verdict.
+- **MCP tools** always need approval (or an allow rule) outside auto and
+  bypass mode, even when a local server marks them read-only
+  (`readOnlyHint`): a read-only fetch or search can still send data out.
 - **Web fetches** to cloud instance metadata, local files outside the project
   or loopback services need approval, to counter server-side request forgery.
 - **Your own allow and deny rules** apply to each simple command, and an allow
@@ -70,7 +105,8 @@ still contained by the other.
 
 Settings in a project that could run code or widen permissions (hooks, MCP
 servers, status-line and key-helper commands, environment variables, sandbox
-settings, allow rules, guardrail commands, plugins, language servers) are
+settings, allow rules, guardrail commands, plugins, language servers, the
+auto-mode classifier's `classifier_model` and `optimize.token_classifier`) are
 ignored until you trust the folder at a prompt. New `.mcp.json` servers also
 need approval.
 

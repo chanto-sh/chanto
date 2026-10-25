@@ -477,6 +477,10 @@ pub struct Env {
     pub rate_limits: Mutex<Option<crate::llm::limits::Snapshot>>,
     /// Context to add to the next user message (e.g. SessionStart hook output).
     pub pending_context: Mutex<Vec<String>>,
+    /// What the human typed this session, newest last: the auto-mode
+    /// classifier's only source of the user's intent, for the main agent and
+    /// its subagents alike. See [`Env::record_user_request`].
+    user_requests: Mutex<Vec<String>>,
     /// Connected editor (VS Code extension), if any.
     ide: RwLock<Option<Arc<crate::ide::Ide>>>,
     /// Current session id and transcript path (for hooks).
@@ -741,6 +745,7 @@ impl Env {
             btw: Default::default(),
             rate_limits: Default::default(),
             pending_context: Default::default(),
+            user_requests: Default::default(),
             ide: Default::default(),
             session_info: Default::default(),
             halt: Default::default(),
@@ -803,6 +808,25 @@ impl Env {
         };
         let (cost, kind) = self.accounting.estimate(&p.billing_id(), &model, &usage);
         (cost.unwrap_or(0.0), kind)
+    }
+
+    /// Record text the human typed (a prompt, a message to a running agent),
+    /// without the files it mentions or the context appended to it, which are
+    /// data and could carry instructions. Kept for the auto-mode classifier.
+    pub fn record_user_request(&self, typed: &str) {
+        let text = crate::permissions::without_context(typed).trim();
+        if text.is_empty() {
+            return;
+        }
+        let mut v = self.user_requests.lock().unwrap();
+        v.push(text.to_string());
+        let n = v.len();
+        v.drain(..n.saturating_sub(8));
+    }
+
+    /// What the human typed this session, oldest first (the last few).
+    pub fn user_requests(&self) -> Vec<String> {
+        self.user_requests.lock().unwrap().clone()
     }
 
     pub fn emit(&self, e: Event) {
@@ -1192,6 +1216,17 @@ pub struct Agent {
     /// Messages the user sent this (background) subagent while it runs; it
     /// reads them between steps.
     pub followups: Arc<Mutex<Vec<String>>>,
+    /// The next `run_turn` prompt is what the human typed (in the TUI, the
+    /// REPL, the web UI or phone, an ACP client's prompt, `-p`). Set only by
+    /// those frontends, right before the turn, and taken by it: any other
+    /// prompt (a goal, team or outcome step, a run's task or report, an
+    /// expanded slash command, a repair prompt, an MCP client's) is the
+    /// agent's own task to the auto-mode classifier, never the user's word.
+    pub typed_input: bool,
+    /// The latest prompt this agent got that the user didn't type (a Task
+    /// prompt, a scheduled task): shown to the auto-mode classifier as the
+    /// agent's task, never as the user's request.
+    task_prompt: Option<String>,
     tool_filter: Option<Vec<String>>,
     /// What this agent has read, for "unchanged since last read" (see [`crate::tools::fs::ReadLog`]).
     reads: Arc<crate::tools::fs::ReadLog>,
@@ -1344,6 +1379,8 @@ impl Agent {
             depth: 0,
             parent: None,
             followups: Default::default(),
+            typed_input: false,
+            task_prompt: None,
             tool_filter: None,
             reads: Arc::default(),
             tool_deny: Vec::new(),
@@ -1565,7 +1602,9 @@ impl Agent {
         self.msgs_at_last_usage = 0;
         self.stats = Default::default();
         self.cleared_session = None;
+        self.task_prompt = None;
         if self.depth == 0 {
+            self.env.user_requests.lock().unwrap().clear();
             self.env.todos.lock().unwrap().clear();
             self.env.checkpoints.lock().unwrap().clear();
             *self.env.rewind_undo.lock().unwrap() = None;

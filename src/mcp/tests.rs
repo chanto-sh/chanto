@@ -1015,3 +1015,37 @@ fn a_remote_servers_read_only_hint_doesnt_skip_approval() {
     let tool = client.tool("mcp__remote__send_email").expect("tool");
     assert_eq!(tool.kind(), ToolKind::External);
 }
+
+#[test]
+fn a_local_servers_read_only_hint_is_only_advisory() {
+    // A stdio server's "read-only" fetch or search could still carry data
+    // out: the hint doesn't make the tool ReadOnly (which runs unasked).
+    let def = McpToolDef {
+        name: "fetch".into(),
+        description: "Fetch a URL".into(),
+        schema: json!({"type": "object"}),
+        read_only: true,
+        always_load: None,
+    };
+    let client = McpClient::with_tools_for_test_at("local", vec![def], None, None);
+    assert!(!client.is_http());
+    let tool = client.tool("mcp__local__fetch").expect("tool");
+    assert_eq!(tool.kind(), ToolKind::External);
+    assert!(tool.read_only_hint());
+    for mode in [
+        crate::permissions::Mode::Default,
+        crate::permissions::Mode::AcceptEdits,
+    ] {
+        assert_eq!(
+            crate::permissions::static_decision(
+                mode,
+                tool.kind(),
+                &tool.name(),
+                &json!({"url": "https://example.com"}),
+                std::path::Path::new("/tmp"),
+            ),
+            Some(crate::permissions::Decision::Ask),
+            "{mode:?}"
+        );
+    }
+}

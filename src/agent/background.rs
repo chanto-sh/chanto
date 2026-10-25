@@ -141,6 +141,7 @@ pub enum Sent {
 /// Send the user's message to background agent `id`: queued while it runs,
 /// or resuming it (with its context) when it has finished.
 pub fn message_background(env: &Arc<Env>, id: &str, text: &str) -> Result<Sent, String> {
+    env.record_user_request(text);
     {
         let list = env.bg_agents.lock().unwrap();
         let Some(b) = list.iter().find(|b| b.id == id) else {

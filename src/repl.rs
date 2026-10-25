@@ -82,6 +82,8 @@ pub async fn run(cli: Cli) -> Result<()> {
         } else {
             None
         };
+        // A scheduled task's prompt is not something the user typed now.
+        let was_scheduled = pending.is_none() && scheduled.is_some();
         let line = match pending.take().or(scheduled) {
             Some(p) => p,
             None => {
@@ -123,6 +125,15 @@ pub async fn run(cli: Cli) -> Result<()> {
             Next::Exit => break,
             Next::Turn(p) => p,
         };
+        // The user typed the line; a slash command's expansion and a
+        // scheduled task are Chanto's prompts.
+        if !was_scheduled {
+            if line.trim().starts_with('/') && prompt != line.trim() {
+                env.record_user_request(line.trim());
+            } else {
+                agent.typed_input = true;
+            }
+        }
         let (text, images) = commands::expand_mentions(&agent, &prompt).await;
         let cancel = CancellationToken::new();
         let c2 = cancel.clone();
