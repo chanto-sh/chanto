@@ -3,6 +3,9 @@
 ## Unreleased
 
 - **Container image.** Each release now publishes `ghcr.io/chanto-sh/chanto:<version>` and `:latest` for linux/amd64 and linux/arm64, built from the release's own signed Linux binaries, with build provenance and a cosign signature. See [Container image](docs/reference.md#container-image).
+- **Security: a prompt the model scheduled could run a shell command without asking.** A `CronCreate` prompt starting with `!` ran outside the sandbox when it fired, and one starting with `/` ran a slash command. Scheduled prompts, background reports and undelivered messages now always reach the model as plain text (no `!`, `/`, `#` or `@file`), `CronCreate` asks for approval outside bypass mode, and a command's arguments reach its `` !`cmd` `` blocks only as data.
+- **Security: an imported session could turn on bypass mode.** `chanto import-session` now drops the file's settings, pull-request links, parent and dates, a resumed session never restores bypass mode, and a managed `defaultMode` wins on resume.
+- **Security:** an approved call is refused if an earlier call in the same batch re-pointed its path through a symlink or made its command reach a secret file; the model's saves to user memory (loaded in every project) ask first and show what they store; installing a plugin asks when its skills or commands run `` !`cmd` `` blocks, register hooks or pre-approve tools, and git-cloned plugins with symlinks are refused.
 
 ## v0.1.5 (October 25, 2026)
 

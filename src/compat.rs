@@ -895,7 +895,67 @@ impl Plugin {
             };
             lines.push(format!("{key}: {shown}"));
         }
+        // Skills and commands that run a command or widen permissions when
+        // invoked need the same consent as hooks.
+        let invoked = self.invoked_effects();
+        risky |= !invoked.is_empty();
+        lines.push(format!(
+            "runs when invoked: {}",
+            if invoked.is_empty() {
+                "none".into()
+            } else {
+                invoked.join("; ")
+            }
+        ));
         (lines.join("\n"), risky)
+    }
+
+    /// What the plugin's commands and skills do on their own when invoked:
+    /// inline !`cmd` blocks (run outside the sandbox), frontmatter `hooks`
+    /// and pre-approved `allowed-tools`. One entry per file, e.g.
+    /// "skills/deploy/SKILL.md: !`git push`, allowed-tools".
+    fn invoked_effects(&self) -> Vec<String> {
+        static INLINE: std::sync::LazyLock<regex::Regex> =
+            std::sync::LazyLock::new(|| regex::Regex::new(r"(^|\s)!`([^`]+)`").unwrap());
+        fn md_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+            for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                let Ok(ty) = e.file_type() else { continue };
+                let p = e.path();
+                if ty.is_dir() && depth < 8 {
+                    md_files(&p, depth + 1, out);
+                } else if ty.is_file() && p.extension().is_some_and(|x| x == "md") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        for key in ["commands", "skills"] {
+            for d in self.dirs(key) {
+                md_files(&d, 0, &mut files);
+            }
+        }
+        files.sort();
+        let root = format!("{}/", self.root.display());
+        let mut out = Vec::new();
+        for f in files {
+            let Ok(text) = std::fs::read_to_string(&f) else {
+                continue;
+            };
+            let mut found: Vec<String> = INLINE
+                .captures_iter(crate::context::strip_frontmatter(&text))
+                .map(|c| format!("!`{}`", crate::util::one_line(&c[2], 80)))
+                .collect();
+            for (k, _) in crate::context::frontmatter(&text) {
+                if matches!(k.as_str(), "hooks" | "allowed-tools" | "allowed_tools") {
+                    found.push(k);
+                }
+            }
+            if !found.is_empty() {
+                let name = f.display().to_string().replace(&root, "");
+                out.push(format!("{name}: {}", found.join(", ")));
+            }
+        }
+        out
     }
 
     /// Directories for a component (`commands`, `agents`, `skills`): the

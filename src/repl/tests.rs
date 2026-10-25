@@ -108,6 +108,26 @@ async fn loops_start_report_and_stop() {
 }
 
 #[tokio::test]
+async fn background_mentions_and_default_loop_prompts_are_literal() {
+    let (dir, a) = agent("repl-literal-mentions");
+    let env = a.env.clone();
+    let text = "summarize @~/.aws/credentials @server:resource [Image #1]";
+    env.notifications.lock().unwrap().push(text.into());
+    let (mut loop_turn, mut wait) = (false, false);
+    assert_eq!(
+        next_scheduled(&env, &mut loop_turn, &mut wait).await,
+        Some((text.into(), true))
+    );
+    env.scheduler.start_loop(None, None);
+    let (_, literal) = next_scheduled(&env, &mut loop_turn, &mut wait)
+        .await
+        .unwrap();
+    assert!(literal && loop_turn);
+    env.scheduler.stop_loop();
+    remove_dir_eventually(&dir);
+}
+
+#[tokio::test]
 async fn background_reports_and_due_loops_run_between_prompts() {
     let (dir, a) = agent("repl-next");
     let env = a.env.clone();
@@ -119,10 +139,11 @@ async fn background_reports_and_due_loops_run_between_prompts() {
         "Agent a1 finished".to_string(),
     ]);
     assert_eq!(
-        next_scheduled(&env, &mut loop_turn, &mut wait)
-            .await
-            .as_deref(),
-        Some("<system-reminder>Monitor build: line 1</system-reminder>\n\nAgent a1 finished")
+        next_scheduled(&env, &mut loop_turn, &mut wait).await,
+        Some((
+            "<system-reminder>Monitor build: line 1</system-reminder>\n\nAgent a1 finished".into(),
+            true
+        ))
     );
     assert!(env.notifications.lock().unwrap().is_empty());
     assert!(!loop_turn);
@@ -131,11 +152,12 @@ async fn background_reports_and_due_loops_run_between_prompts() {
         Some(std::time::Duration::from_secs(3600)),
         Some("check the build".into()),
     );
-    let fire = next_scheduled(&env, &mut loop_turn, &mut wait)
+    let (fire, literal) = next_scheduled(&env, &mut loop_turn, &mut wait)
         .await
         .expect("the first iteration runs at once");
     assert!(fire.starts_with("check the build"), "{fire}");
-    assert!(loop_turn);
+    assert!(loop_turn && !literal, "the user's own loop prompt");
+
     // The next one isn't due; without waiting, the prompt shows.
     wait = false;
     assert_eq!(next_scheduled(&env, &mut loop_turn, &mut wait).await, None);

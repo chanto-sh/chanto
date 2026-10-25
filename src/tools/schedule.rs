@@ -40,14 +40,17 @@ Tasks fire only while the session is open and idle, and recurring ones end after
             "type": "object",
             "properties": {
                 "cron": {"type": "string", "description": "e.g. \"*/10 * * * *\" (every 10 minutes), \"30 14 * * *\" (2:30pm)"},
-                "prompt": {"type": "string", "description": "The prompt to run when it fires"},
+                "prompt": {"type": "string", "description": "The prompt to run when it fires, as plain text for you (it can't start with !, / or #)"},
                 "recurring": {"type": "boolean", "description": "false: fire once, then delete itself (default true)"}
             },
             "required": ["cron", "prompt"]
         })
     }
+    /// A scheduled prompt starts a turn later with no one watching, so
+    /// creating one is approved like an action with unknown effects: asked
+    /// in default and accept-edits mode, judged by the classifier in auto.
     fn kind(&self) -> ToolKind {
-        ToolKind::ReadOnly
+        ToolKind::External
     }
     fn label(&self, args: &Value) -> String {
         format!(
