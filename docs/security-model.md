@@ -117,7 +117,7 @@ unverified. Releases before v0.1.2 aren't signed, so the scripts no longer
 install them. A signature doesn't prove a release is the newest one, so a
 hostile host could serve an older signed release as "latest": `chanto upgrade`
 refuses to downgrade, and the scripts refuse a "latest" older than a floor
-they carry (v0.1.4, raised with each security release). Within the floor, or
+they carry (v0.1.5, raised with each security release). Within the floor, or
 for a version asked for by name, rollback remains possible. See [Verifying a
 release](reference.md#verifying-a-release).
 

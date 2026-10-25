@@ -165,7 +165,7 @@ means releases before v0.1.5, which have no `SHA256SUMS.sshsig`, can't be
 installed by script. Releases before v0.1.2 aren't signed and can't be
 installed by script at all. A signature can't show that a release is the
 newest, so the scripts also refuse a "latest" older than the floor they carry
-(currently v0.1.4, raised with each security release), in case the download
+(currently v0.1.5, raised with each security release), in case the download
 host serves an old release; an older release asked for with `--version` /
 `-Version` still installs, with a warning. The public key is
 [`packaging/release-signing-key.pub`](../packaging/release-signing-key.pub):

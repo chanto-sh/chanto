@@ -6,7 +6,7 @@ if ($arch -ne 'X64') { throw "Unsupported Windows architecture: $arch" }
 # hostile host could serve an older signed release as "latest". "latest" must
 # be at least $minVersion; raise it with each security release (see the release
 # workflow). An older -Version is still allowed, with a warning.
-$minVersion = 'v0.1.4'
+$minVersion = 'v0.1.5'
 $firstSigned = 'v0.1.2' # the first release with SHA256SUMS.sig
 $firstSshsig = 'v0.1.5' # the first release with SHA256SUMS.sshsig
 function Test-Older([string]$a, [string]$b) { [version]$a.Substring(1) -lt [version]$b.Substring(1) }
