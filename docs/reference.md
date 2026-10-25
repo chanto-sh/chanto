@@ -147,6 +147,58 @@ with `SHA256SUMS`, as a [GitHub release](https://github.com/chanto-sh/chanto/rel
 [download page](https://chanto.sh/download) links them. Release archives also
 carry build provenance attestations (`gh attestation verify <file> -R chanto-sh/chanto`).
 
+### Container image
+
+Releases after v0.1.5 also publish a container image for linux/amd64 and
+linux/arm64 to GitHub's registry, as `ghcr.io/chanto-sh/chanto:<version>`
+(for example `0.1.6`) and `:latest`. It isn't a separate build: it holds the
+release's own static Linux binary, checked against the signed `SHA256SUMS`
+first, on Debian stable-slim with git, ripgrep, bash, coreutils and CA
+certificates. It runs as the non-root user `chanto` (uid 1000) in `/work`,
+and its entrypoint is `chanto`:
+
+```sh
+# A print run on the current directory
+docker run --rm -it -v "$PWD:/work" -e OPENAI_API_KEY ghcr.io/chanto-sh/chanto -p "fix the failing test"
+# The TUI, keeping config, sessions and memory in a volume between runs
+docker run --rm -it -v "$PWD:/work" -v chanto-home:/home/chanto/.chanto \
+  -e ANTHROPIC_API_KEY ghcr.io/chanto-sh/chanto
+```
+
+Only what you pass reaches the container: forward provider keys with `-e`,
+and without a volume at `/home/chanto/.chanto` each `--rm` run starts with no
+config or sessions. On Linux, files written into `/work` belong to uid 1000;
+if that isn't your uid, add `--user "$(id -u):$(id -g)" -e HOME=/tmp`. The
+update check is off in the image (`CHANTO_NO_UPDATE_CHECK=1`): pull a newer
+tag rather than running `chanto upgrade`. To add a project's toolchain, build
+`FROM ghcr.io/chanto-sh/chanto:<version>` and install it as root, then switch
+back with `USER chanto`.
+
+**The sandbox inside a container.** On Linux the OS sandbox is Landlock (see
+[Sandbox](#sandbox)), and in a container it may be limited or missing: it
+needs the host kernel to support Landlock (5.13+, ABI v4 for
+`network = "deny"` or `"allowlist"`) and the engine's seccomp profile to allow
+its system calls. Where it can't be applied, Chanto warns at startup and runs
+commands unsandboxed (a `deny` or `allowlist` network setting fails closed
+instead), so the container itself is the boundary: mount only the project and
+give it only the keys and network it needs. To run Chanto on the host and
+only its commands in a container, see [Container isolation](#container-isolation).
+
+**Verifying the image.** Each image carries build provenance and a keyless
+[cosign](https://docs.sigstore.dev/) signature, both made by the release
+workflow for a `v*` tag:
+
+```sh
+gh attestation verify oci://ghcr.io/chanto-sh/chanto:0.1.6 --owner chanto-sh
+cosign verify ghcr.io/chanto-sh/chanto:0.1.6 \
+  --certificate-identity-regexp '^https://github\.com/chanto-sh/chanto/\.github/workflows/release\.yml@refs/tags/v' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+```
+
+Both check the image's digest; pin `ghcr.io/chanto-sh/chanto@sha256:<digest>`
+to keep using exactly the one you verified. The Dockerfile is
+[`packaging/docker/Dockerfile`](../packaging/docker/Dockerfile).
+
 ### Verifying a release
 
 From v0.1.2 on, every release's `SHA256SUMS` is signed with the project's
