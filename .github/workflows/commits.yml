@@ -64,14 +64,26 @@ jobs:
         run: |
           python3 - <<'PY'
           import os, re, sys
-          body = re.sub(r"<!--.*?-->", "", os.environ.get("BODY") or "", flags=re.S)
+          raw = os.environ.get("BODY") or ""
+          # A squash merge copies the description into the commit on main, so
+          # it follows the commit message rule on AI attribution
+          # (.githooks/commit-msg): checked here, before it can land.
+          ai = "claude|anthropic|openai|gpt|copilot|gemini|cursor|codex|devin"
+          credits = (
+              re.search(rf"co-authored-by:.*({ai})", raw, re.I)
+              or re.search(r"(generated|written|created|made) with .*(claude|copilot|chatgpt|gpt|cursor|codex|gemini|devin)", raw, re.I)
+              or re.search(r"Generated with \[Claude Code\]|\U0001F916", raw)
+          )
+          if credits:
+              print(f"::error::The PR description credits an AI assistant ({credits.group(0)!r}); remove the attribution, since a squash merge copies it into the commit on main.")
+          body = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
           sections = {}
           for m in re.finditer(r"^##\s+(.+?)\s*$\n(.*?)(?=^##\s|\Z)", body, re.M | re.S):
               sections[m.group(1).strip().lower()] = m.group(2).strip()
           missing = [s for s in ("What this changes", "Testing") if not sections.get(s.lower())]
           for s in missing:
               print(f"::error::The PR description needs a filled-in '## {s}' section (see .github/pull_request_template.md).")
-          sys.exit(1 if missing else 0)
+          sys.exit(1 if missing or credits else 0)
           PY
 
   sign-off:
