@@ -883,8 +883,30 @@ impl Provider {
     }
 
     /// Stream a chat completion, invoking `on_delta` for each text/reasoning
-    /// fragment, and return the aggregated response.
+    /// fragment, and return the aggregated response. Secrets in the messages
+    /// are masked first, whoever built the request: compaction, hooks, the
+    /// classifier and every other side call go through here.
     pub async fn chat(
+        &self,
+        req: &ChatRequest,
+        on_delta: &mut (dyn FnMut(Delta) + Send),
+    ) -> Result<ChatResponse> {
+        match crate::secrets::redact_request_messages(&req.messages) {
+            Some(messages) => {
+                let req = ChatRequest {
+                    messages,
+                    ..req.clone()
+                };
+                self.chat_masked(&req, on_delta).await
+            }
+            None => self.chat_masked(req, on_delta).await,
+        }
+    }
+
+    /// [`Provider::chat`] for a request whose messages are already masked:
+    /// the agent loop masks its conversation with a cache that skips the
+    /// messages it has seen, rather than scanning all of them every turn.
+    pub(crate) async fn chat_masked(
         &self,
         req: &ChatRequest,
         on_delta: &mut (dyn FnMut(Delta) + Send),
@@ -938,6 +960,12 @@ impl Provider {
     /// OpenAI-compatible chat only); a model found not to is remembered, so
     /// it costs one failed request at most.
     pub async fn label_probs(&self, req: &ChatRequest, labels: &[&str]) -> Option<Vec<f64>> {
+        let masked =
+            crate::secrets::redact_request_messages(&req.messages).map(|messages| ChatRequest {
+                messages,
+                ..req.clone()
+            });
+        let req = masked.as_ref().unwrap_or(req);
         static UNSUPPORTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
         let key = format!("{}|{}", self.base_url, req.model);
         if !matches!(self.kind, ProviderKind::Ollama | ProviderKind::Openai)

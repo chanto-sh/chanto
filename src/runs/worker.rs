@@ -52,6 +52,8 @@ impl WorkerFrontend {
         let id = format!("req-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let (tx, rx) = oneshot::channel();
         ev["request_id"] = json!(id);
+        // A permission request shows the command, which goes to the run log.
+        crate::secrets::redact_json(&mut ev);
         self.pending.lock().unwrap().insert(id.clone(), tx);
         self.waiting.fetch_add(1, Ordering::SeqCst);
         let mut guard = AskGuard {
@@ -220,6 +222,12 @@ async fn work_in(
         Some(s.verify),
     )
     .await?;
+    // The worktree has none of the checkout's gitignored `.env` files, but
+    // the run can still meet their values (a command printing its env, a
+    // test fixture): mask them too.
+    if run.source.kind == "local" {
+        crate::secrets::add_project(&run.source.path);
+    }
     if let Some(c) = &container {
         let _ = out.send(json!({"type": "info", "message": format!("Shell commands run in container {} ({})", c.name, s.isolate.as_ref().map(|i| i.label()).unwrap_or_default())}));
     }

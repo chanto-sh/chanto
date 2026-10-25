@@ -76,11 +76,16 @@ need approval.
 
 ### 4. Your secrets ↔ the model and logs
 
-Known secret values (from the environment, config, `.env` files and provider
-settings) and secret-shaped strings are replaced with placeholders before
-anything goes to the model, into logs, session files or shared transcripts.
-Credentials Chanto stores itself are written with owner-only permissions, or
-to the macOS keychain.
+Known secret values (from the environment, config, `.env` files, provider
+settings and sign-in tokens) and secret-shaped strings are replaced with
+placeholders before anything goes to the model, into logs, session files,
+run event logs, event streams or shared transcripts. Masking happens in the
+provider layer every model request goes through, so side calls (compaction,
+hooks, the permission classifier) are covered like turns. Credentials Chanto
+stores itself, and background runs' records and logs, are written with
+owner-only permissions (on Unix), or to the macOS keychain. On Linux,
+Chanto's process is non-dumpable, so commands it starts can't read its
+environment from `/proc` or attach to it (nor can debuggers without root).
 
 ### 5. Local servers ↔ other programs
 

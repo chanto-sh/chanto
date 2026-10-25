@@ -297,6 +297,57 @@ async fn apply_cherry_picks_onto_the_current_branch() {
     assert_eq!(sh(&repo, &["rev-parse", "--abbrev-ref", "HEAD"]), "main");
 }
 
+/// The source checkout's gitignored `.env` never reaches the worktree, but
+/// its values are masked in the run all the same, and the run's files are
+/// the owner's alone.
+#[tokio::test]
+async fn runs_mask_the_checkouts_env_files_and_keep_their_files_private() {
+    let home = TestHome::new("secrets");
+    let _secrets = crate::secrets::TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let repo = make_repo(&home);
+    std::fs::write(repo.join(".gitignore"), ".env\n").unwrap();
+    sh(&repo, &["add", ".gitignore"]);
+    sh(&repo, &["commit", "-q", "-m", "ignore .env"]);
+    let pw = "bg-run-pw-4d3c2b1a0f";
+    std::fs::write(repo.join(".env"), format!("DB_PASSWORD={pw}\n")).unwrap();
+    let (base, seen) = mock_server(vec![
+        bash(&format!("echo pw={pw}")),
+        json!({"content": "Done."}),
+    ])
+    .await;
+    let m = home.manager();
+    let run = m
+        .create(new_run(&repo, &base, "print the password"))
+        .await
+        .unwrap();
+    assert!(!run.worktree.join(".env").exists());
+    let done = wait_for(&m, &run.id, "finished", finished).await;
+    assert_eq!(done.state, RunState::Done, "{:?}", done.error);
+    let sent = seen.lock().unwrap()[1]["messages"].to_string();
+    assert!(
+        !sent.contains(pw) && sent.contains("[REDACTED:DB_PASSWORD]"),
+        "{sent}"
+    );
+    let log = std::fs::read_to_string(home.store().events_path(&run.id)).unwrap();
+    assert!(
+        !log.contains(pw) && log.contains("[REDACTED:DB_PASSWORD]"),
+        "{log}"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        let store = home.store();
+        assert_eq!(mode(&store.dir), 0o700);
+        assert_eq!(mode(&store.run_dir(&run.id)), 0o700);
+        assert_eq!(mode(&store.run_dir(&run.id).join("run.json")), 0o600);
+        assert_eq!(mode(&store.events_path(&run.id)), 0o600);
+    }
+    crate::secrets::init(&crate::config::Config::default(), &home.dir);
+}
+
 pub(crate) fn needs_permission() -> Vec<Value> {
     vec![
         json!({"tool_calls": tc("Bash", json!({"command": "make build-it"}))}),

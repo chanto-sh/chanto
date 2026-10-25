@@ -1804,8 +1804,25 @@ fn atty_stdin() -> bool {
     std::io::stdin().is_terminal()
 }
 
+/// Keep processes of the same user out of Chanto's memory and environment.
+/// Shell commands are started without secret variables, but on Linux an
+/// unsandboxed one could otherwise read them back from
+/// `/proc/<chanto's pid>/environ`, or attach to Chanto with ptrace. A
+/// non-dumpable process's `/proc` files belong to root (its own reads of
+/// them still work), and it leaves no core dump. Children start dumpable
+/// again when they exec.
+fn hide_process_memory() {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let zero: libc::c_ulong = 0;
+        // SAFETY: PR_SET_DUMPABLE reads integer arguments and touches no memory.
+        let _ = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, zero, zero, zero, zero) };
+    }
+}
+
 pub async fn run() {
     crate::util::timing("start");
+    hide_process_memory();
     feedback::install_panic_hook();
     let session_args: Vec<String> = std::env::args().collect();
     if matches!(
@@ -2818,6 +2835,23 @@ mod onboarding_flag_tests {
         assert!(!super::query_explicit_models(true, true));
         assert!(!super::query_explicit_models(false, false));
         assert!(!super::query_explicit_models(false, true));
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod process_memory_tests {
+    #[test]
+    fn chanto_is_not_dumpable_and_still_reads_its_own_proc_files() {
+        super::hide_process_memory();
+        // SAFETY: PR_GET_DUMPABLE takes no pointers.
+        let zero: libc::c_ulong = 0;
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_GET_DUMPABLE, zero, zero, zero, zero) },
+            0
+        );
+        assert!(std::fs::read("/proc/self/environ").is_ok());
+        let pid = std::process::id();
+        assert!(std::fs::read(format!("/proc/{pid}/status")).is_ok());
     }
 }
 

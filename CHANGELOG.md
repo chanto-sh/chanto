@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Container image.** Each release now publishes `ghcr.io/chanto-sh/chanto:<version>` and `:latest` for linux/amd64 and linux/arm64, built from the release's own signed Linux binaries, with build provenance and a cosign signature. See [Container image](docs/reference.md#container-image).
+- **Security: secrets could reach the model through side calls and leave through run logs.** Compaction summaries, prompt and agent hooks, the permission classifier and other side requests sent the conversation unmasked; every model request is now masked in one place. Background runs' event logs, stream-json output, the web UI and `/remote` (including permission prompts, transcripts and the queue) and what a runner sends its server (including script output) are masked too, and on Unix run records and logs under `~/.chanto/runs` are now readable only by you. Background runs also mask their source checkout's `.env` values, sign-in and MCP OAuth tokens are masked once used, and plain `*_KEY` variables are withheld from commands (list one in `[secrets] pass_env` if a tool needs it) and masked when their value looks random. On Linux, Chanto's process is no longer readable through `/proc` by the commands it starts, so `gdb -p` and `strace -p` need root.
 
 ## v0.1.5 (October 25, 2026)
 
