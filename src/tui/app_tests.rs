@@ -214,7 +214,8 @@ async fn a_users_own_loop_prompt_still_runs_as_typed() {
     // `/loop 5m !cmd` fires with `literal: false`: the user typed it.
     let mut t = test_app();
     let ran = t.dir.join("ran");
-    t.start_hidden(format!("!touch {}", ran.display()), false);
+    // A redirect works in sh, cmd and PowerShell alike; `touch` doesn't.
+    t.start_hidden(format!("!echo x > \"{}\"", ran.display()), false);
     tokio::time::timeout(std::time::Duration::from_secs(10), async {
         loop {
             if let AppMsg::TurnDone(_) = t.rx.recv().await.unwrap() {
