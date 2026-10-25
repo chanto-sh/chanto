@@ -30,3 +30,32 @@ jobs:
       - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           sarif_file: results.sarif
+
+  # A check can drop without any pull request failing: a settings change
+  # (branch protection), an old release, a new advisory. Compare the published
+  # result with .github/scorecard-baseline.json and open an issue on a drop.
+  regressions:
+    needs: analysis
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Compare with the baseline
+        id: compare
+        run: python3 .github/scripts/scorecard-regressions.py "$GITHUB_REPOSITORY" "$GITHUB_SHA"
+      - name: Open or update the regression issue
+        if: failure() && steps.compare.outcome == 'failure' && hashFiles('scorecard-drops.md') != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Scorecard score dropped below the baseline"
+          existing=$(gh issue list --state open --search "in:title \"$title\"" --json number --jq '.[0].number')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file scorecard-drops.md
+          else
+            gh issue create --title "$title" --body-file scorecard-drops.md
+          fi
