@@ -18,7 +18,7 @@ for o in openssl /opt/homebrew/opt/openssl@3/bin/openssl /usr/local/opt/openssl@
 done
 [ -n "$ossl" ] || { echo 'the installer tests need OpenSSL 3 (macOS: brew install openssl@3)' >&2; exit 1; }
 printf '%s\n' "$ossl" > "$dir/openssl"
-if command -v sha256sum >/dev/null 2>&1; then sha() { sha256sum "$@"; }; else sha() { shasum -a 256 "$@"; }; fi
+if command -v sha256sum >/dev/null 2>&1; then sha() { sha256sum -b "$@"; }; else sha() { shasum -a 256 -b "$@"; }; fi
 "$ossl" genpkey -algorithm ed25519 -out "$dir/test-release.pem" 2>/dev/null
 "$ossl" pkey -in "$dir/test-release.pem" -pubout -out "$dir/test-release.pub"
 "$python" "$root/packaging/sshsig.py" --allowed-signers "$dir/test-release.pem" "$ossl" | cut -d' ' -f2- > "$dir/test-release.ssh"
@@ -33,7 +33,7 @@ for version in v9.8.7 v0.1.3; do
     done
     "$python" -c 'import sys, zipfile; zipfile.ZipFile(sys.argv[1], "w").writestr(sys.argv[2] + "/chanto.exe", sys.argv[3])' \
         "$out/chanto-$version-x86_64-pc-windows-msvc.zip" "chanto-$version-x86_64-pc-windows-msvc" "windows $version"
-    (cd "$out" && sha ./*.tar.gz ./*.zip | sed 's|  \./|  |' > SHA256SUMS)
+    (cd "$out" && sha ./*.tar.gz ./*.zip | sed 's| [*]\./|  |' > SHA256SUMS)
     "$ossl" pkeyutl -sign -inkey "$dir/test-release.pem" -rawin -in "$out/SHA256SUMS" | "$ossl" base64 -A > "$out/SHA256SUMS.sig"
     "$python" "$root/packaging/sshsig.py" "$dir/test-release.pem" "$out/SHA256SUMS" "$ossl" > "$out/SHA256SUMS.sshsig"
 done
