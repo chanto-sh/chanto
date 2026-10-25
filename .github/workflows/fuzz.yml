@@ -1,17 +1,9 @@
-# Fuzzes the security-critical parsers (fuzz/: the shell permission check,
-# secret redaction, URL checks) with ClusterFuzzLite for a few minutes on each
-# pull request that touches them. Code-change mode: a crash it finds is
-# reported on the pull request. Not a required check.
+# Fuzz the security-critical parsers on every pull request and merge group.
+# Keep this workflow unfiltered so its required check is always reported.
 name: fuzz
 on:
   pull_request:
-    paths:
-      - "src/**"
-      - "fuzz/**"
-      - "Cargo.toml"
-      - "Cargo.lock"
-      - ".clusterfuzzlite/**"
-      - ".github/workflows/fuzz.yml"
+  merge_group:
   workflow_dispatch:
 concurrency:
   group: fuzz-${{ github.ref }}
@@ -39,6 +31,7 @@ jobs:
           language: rust
           github-token: ${{ secrets.GITHUB_TOKEN }}
           fuzz-seconds: 300
-          mode: code-change
+          # Merge groups have no PR diff; fuzz the combined tree in batch mode.
+          mode: ${{ github.event_name == 'merge_group' && 'batch' || 'code-change' }}
           sanitizer: address
           output-sarif: false

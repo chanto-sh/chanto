@@ -5,7 +5,7 @@ plugins {
 }
 
 group = "dev.chanto"
-version = "0.1.4"
+version = "0.1.5"
 
 // IntelliJ IDEA Community stopped being published at 2025.3, so the default is
 // the unified `idea` distribution. Point -PlocalIde=/path/to/IDE.app at an

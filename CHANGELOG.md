@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.5 (October 25, 2026)
+
+- **Terminal:** fix “The cursor position could not be read within a normal duration” on startup, focus restoration, and return from an external editor. Fullscreen redraws no longer require a cursor-position response from the terminal.
+
 ## v0.1.4 (October 23, 2026)
 
 - **Security: commands could slip past the permission check.** A heredoc closed by a marker bash doesn't accept (such as one indented with spaces), or characters that ended a word for Chanto's check but not for bash, let a command after them run without a prompt. Chanto now ends heredocs and words exactly where bash does. Please update: `chanto upgrade`, `brew upgrade chanto`, `npm i -g @chanto/cli` or `cargo install chanto --locked`.
