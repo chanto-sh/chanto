@@ -155,12 +155,12 @@ fn common_dir(repo: &Path) -> Result<PathBuf> {
     if !o.status.success() {
         bail!("{} is not a git repository", repo.display());
     }
-    let common = PathBuf::from(String::from_utf8_lossy(&o.stdout).trim());
-    Ok(canonical(&common))
+    Ok(PathBuf::from(String::from_utf8_lossy(&o.stdout).trim()))
 }
 
-/// Canonical, without Windows' `\\?\` prefix: git refuses a verbatim
-/// path as `--git-dir`.
+/// Canonical, for comparing paths only: on Windows a long path keeps its
+/// `\\?\` prefix, which git refuses, so paths handed to git stay as git
+/// reported them.
 fn canonical(p: &Path) -> PathBuf {
     crate::util::canonical(p).unwrap_or_else(|_| p.to_path_buf())
 }
@@ -172,7 +172,10 @@ fn canonical(p: &Path) -> PathBuf {
 /// `commondir` leads back to the repository's own git directory (git reads
 /// config, objects and refs from wherever `commondir` points).
 pub fn worktree_git_dir(repo: &Path, worktree: &Path) -> Result<PathBuf> {
+    // As git printed it (absolute): the record's path below is handed back
+    // to git as `--git-dir`.
     let common = common_dir(repo)?;
+    let common_canon = canonical(&common);
     let want = canonical(worktree);
     let found: Vec<PathBuf> = std::fs::read_dir(common.join("worktrees"))
         .into_iter()
@@ -208,7 +211,7 @@ pub fn worktree_git_dir(repo: &Path, worktree: &Path) -> Result<PathBuf> {
     } else {
         gd.join(points)
     };
-    if canonical(&points) != common {
+    if canonical(&points) != common_canon {
         bail!(
             "the worktree record {} points at another repository ({})",
             gd.display(),
