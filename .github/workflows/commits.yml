@@ -51,6 +51,29 @@ jobs:
           printf '%s\n' "$TITLE" > "$RUNNER_TEMP/title"
           sh .githooks/commit-msg "$RUNNER_TEMP/title"
 
+  pr-description:
+    name: PR description
+    if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      # The body goes through the environment, never into the script text.
+      # Each section from .github/pull_request_template.md must have text of
+      # its own, not just the template's comments.
+      - env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          body = re.sub(r"<!--.*?-->", "", os.environ.get("BODY") or "", flags=re.S)
+          sections = {}
+          for m in re.finditer(r"^##\s+(.+?)\s*$\n(.*?)(?=^##\s|\Z)", body, re.M | re.S):
+              sections[m.group(1).strip().lower()] = m.group(2).strip()
+          missing = [s for s in ("What this changes", "Testing") if not sections.get(s.lower())]
+          for s in missing:
+              print(f"::error::The PR description needs a filled-in '## {s}' section (see .github/pull_request_template.md).")
+          sys.exit(1 if missing else 0)
+          PY
+
   sign-off:
     name: DCO sign-off
     if: github.event_name == 'pull_request'
