@@ -38,6 +38,14 @@ pub(super) fn restore_terminal(kb_enh: bool) {
 
 type Term = Terminal<CrosstermBackend<std::io::Stdout>>;
 
+/// Clear and invalidate the fullscreen buffers without a cursor query. The
+/// terminal may not answer queries, and EventStream can already own its input.
+fn clear_fullscreen<B: ratatui::backend::Backend>(
+    terminal: &mut Terminal<B>,
+) -> std::result::Result<(), B::Error> {
+    terminal.resize(terminal.size()?.into())
+}
+
 /// Inline mode's drawing surface: a region of `h` rows starting at row `top`,
 /// with printed output above it. Lines are printed by drawing them where the
 /// region was and scrolling the screen with line feeds, which (unlike scroll
@@ -505,7 +513,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         (None, Some(Region::new()?))
     } else {
         let mut t = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
-        t.clear()?;
+        clear_fullscreen(&mut t)?;
         (Some(t), None)
     };
 
@@ -619,7 +627,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                 r.term.draw(|f| app.draw(f))?;
             } else if let Some(t) = terminal.as_mut() {
                 if redraw_all {
-                    t.clear()?;
+                    clear_fullscreen(t)?;
                 }
                 t.draw(|f| app.draw(f))?;
             }
@@ -722,17 +730,11 @@ pub async fn run(cli: Cli) -> Result<()> {
                     )
                 );
             }
-            // A fresh Terminal forces a full redraw (Terminal::clear would query the
-            // cursor position, which can time out right after the editor exits).
             if let Some(r) = region.as_mut() {
                 // The editor ran on its own screen; ours is as we left it.
                 r.reset()?;
-            } else {
-                let _ = execute!(
-                    std::io::stdout(),
-                    crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
-                );
-                terminal = Some(Terminal::new(CrosstermBackend::new(std::io::stdout()))?);
+            } else if let Some(t) = terminal.as_mut() {
+                clear_fullscreen(t)?;
             }
             events = EventStream::new();
             app.apply_edit(proposal, edited);
@@ -795,3 +797,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "run_terminal_tests.rs"]
+mod terminal_tests;
