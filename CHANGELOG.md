@@ -2,6 +2,7 @@
 
 ## v0.1.5 (October 25, 2026)
 
+- **Security: the install scripts check the release signature before trusting anything.** `install.sh` read the version for "latest" from an unsigned `SHA256SUMS`, skipped the signature for v0.1.0/v0.1.1, and skipped it entirely without OpenSSL 3 (as on stock macOS); `install.ps1` never checked it. Both now verify the signature first, with OpenSSL 3 or, from this release on, with `ssh-keygen` against a new `SHA256SUMS.sshsig`, and stop if neither tool is available. They refuse releases before v0.1.2, which aren't signed, and refuse a "latest" older than v0.1.5. See [Verifying a release](docs/reference.md#verifying-a-release).
 - **Terminal:** fix “The cursor position could not be read within a normal duration” on startup, focus restoration, and return from an external editor. Fullscreen redraws no longer require a cursor-position response from the terminal.
 
 ## v0.1.4 (October 23, 2026)

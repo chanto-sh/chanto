@@ -105,8 +105,21 @@ Releases are built by GitHub Actions from version tags that only organization
 admins can create. Archives are published with SHA-256 checksums and GitHub
 build-provenance attestations; npm packages are published through trusted
 publishing with Sigstore provenance; the Homebrew formula pins each archive's
-checksum. All downloads use HTTPS. Signed checksums, verified by `chanto
-upgrade` and the install scripts, are on the [roadmap](../ROADMAP.md).
+checksum. All downloads use HTTPS. From v0.1.2 on, each release's
+`SHA256SUMS` is signed with an Ed25519 release key whose public half is pinned
+in Chanto and in both install scripts; from v0.1.5 on the same key's signature
+also comes in SSH form (`SHA256SUMS.sshsig`). `chanto upgrade`, `install.sh`
+and `install.ps1` check the signature before they read anything in
+`SHA256SUMS`, including which version "latest" is, and refuse a release whose
+signature is missing or wrong, or that they can't check: the scripts need
+OpenSSL 3 or `ssh-keygen` (OpenSSH 8.1+), and stop rather than install
+unverified. Releases before v0.1.2 aren't signed, so the scripts no longer
+install them. A signature doesn't prove a release is the newest one, so a
+hostile host could serve an older signed release as "latest": `chanto upgrade`
+refuses to downgrade, and the scripts refuse a "latest" older than a floor
+they carry (v0.1.5, raised with each security release). Within the floor, or
+for a version asked for by name, rollback remains possible. See [Verifying a
+release](reference.md#verifying-a-release).
 
 ## Secure design principles
 
