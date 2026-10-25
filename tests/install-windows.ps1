@@ -29,9 +29,22 @@ function Invoke-Installer([hashtable]$vars, [string[]]$arguments) {
         [Environment]::SetEnvironmentVariable($k, $all[$k])
     }
     try {
-        $ErrorActionPreference = 'Continue'
-        $out = & $hostExe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File $installer @arguments 2>&1 | Out-String
-        @{ Code = $LASTEXITCODE; Out = $out }
+        # Capture raw stderr instead of formatting NativeCommandError records:
+        # Windows PowerShell wraps their messages at the console width.
+        $psi = New-Object System.Diagnostics.ProcessStartInfo
+        $psi.FileName = $hostExe
+        $argv = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $installer) + $arguments
+        $psi.Arguments = ($argv | ForEach-Object { '"' + $_ + '"' }) -join ' '
+        $psi.UseShellExecute = $false
+        $psi.RedirectStandardOutput = $true
+        $psi.RedirectStandardError = $true
+        $proc = [Diagnostics.Process]::Start($psi)
+        try {
+            $out = $proc.StandardOutput.ReadToEndAsync()
+            $err = $proc.StandardError.ReadToEndAsync()
+            $proc.WaitForExit()
+            @{ Code = $proc.ExitCode; Out = $out.Result + $err.Result }
+        } finally { $proc.Dispose() }
     } finally {
         foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) }
     }
