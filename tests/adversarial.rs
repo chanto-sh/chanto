@@ -8,6 +8,10 @@
 //! sandbox and the workspace check both treat as writable scratch). Fake
 //! secrets are planted only there. Network is loopback only. Payloads are
 //! inert: marker files, and a `crontab` shim on PATH instead of the real one.
+//!
+//! Unix only: the payloads are shell scripts and the checks lean on the
+//! Seatbelt and Landlock sandboxes, which the Windows sandbox doesn't mirror.
+#![cfg(unix)]
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
