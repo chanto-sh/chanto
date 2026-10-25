@@ -5,7 +5,12 @@ Keep PRs focused on one change.
 
 ## What this changes
 
-<!-- A short description of the change and why. -->
+<!-- A short description of the change and why. Required. -->
+
+## Testing
+
+<!-- How you checked it: tests added or run, manual steps, what you saw.
+     "Not tested" with a reason is fine; an empty section isn't. Required. -->
 
 ## Checklist
 
