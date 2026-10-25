@@ -638,21 +638,27 @@ pub fn render(
 
 /// A new directory only this user can enter, for one snapshot. Also clears
 /// out snapshots older than two days that earlier sessions left behind.
+///
+/// It lives under Chanto's home, not the temp dir: the snapshot is sourced
+/// unsandboxed (every `!cmd` and every approved `dangerouslyDisableSandbox`
+/// command), so a sandboxed command appending a payload to it would run that
+/// payload the next time. The temp dir is sandbox-writable; Chanto's home is
+/// on the sandbox's write-deny list (`tools::bash::guards`), so a sandboxed
+/// command can't reach the file here.
 fn private_dir() -> std::io::Result<PathBuf> {
-    let tmp = std::env::temp_dir();
-    if let Ok(rd) = std::fs::read_dir(&tmp) {
+    let base = crate::config::home_dir().join("shell-snapshots");
+    std::fs::create_dir_all(&base)?;
+    if let Ok(rd) = std::fs::read_dir(&base) {
         let old = std::time::SystemTime::now() - Duration::from_secs(2 * 86400);
         for e in rd.flatten() {
-            if e.file_name().to_string_lossy().starts_with("chanto-shell-")
-                && e.metadata().is_ok_and(|m| {
-                    m.is_dir() && m.modified().is_ok_and(|t| t < old) && owned_by_me(&m)
-                })
+            if e.metadata()
+                .is_ok_and(|m| m.is_dir() && m.modified().is_ok_and(|t| t < old) && owned_by_me(&m))
             {
                 let _ = std::fs::remove_dir_all(e.path());
             }
         }
     }
-    let dir = tmp.join(format!("chanto-shell-{}", uuid::Uuid::new_v4().simple()));
+    let dir = base.join(uuid::Uuid::new_v4().simple().to_string());
     let mut b = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -720,6 +726,11 @@ pub(crate) mod tests {
         if !Path::new(shell).exists() {
             return;
         }
+        // The snapshot dir is under Chanto's home, which other tests point
+        // elsewhere (and delete) while holding this lock.
+        let _home_lock = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let h = home();
         std::fs::write(h.join(rc), RC).unwrap();
         let p = create(
@@ -760,6 +771,27 @@ pub(crate) mod tests {
         assert!(!out.contains("noisy"), "{out}");
         let _ = std::fs::remove_dir_all(p.parent().unwrap());
         let _ = std::fs::remove_dir_all(&h);
+    }
+
+    #[test]
+    fn snapshot_lives_under_chanto_home_not_temp() {
+        // The sandbox can write the temp dir but not Chanto's home, so the
+        // snapshot a later unsandboxed command sources must sit under home.
+        // The snapshot dir is under Chanto's home, which other tests point
+        // elsewhere (and delete) while holding this lock.
+        let _home_lock = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = private_dir().unwrap();
+        assert!(
+            dir.starts_with(crate::config::home_dir()),
+            "snapshot dir {dir:?} is not under CHANTO_HOME"
+        );
+        assert!(
+            !dir.starts_with(std::env::temp_dir())
+                || crate::config::home_dir().starts_with(std::env::temp_dir())
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

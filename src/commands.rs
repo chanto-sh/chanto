@@ -1821,7 +1821,7 @@ pub async fn handle(agent: &mut Agent, line: &str) -> Outcome {
             };
             let home = dirs::home_dir().unwrap_or_default();
             let mut writable = vec!["the project".to_string(), "temp dirs".into()];
-            if !cfg!(windows) { writable.push("tool caches (~/.cargo, ~/.npm, ~/.cache, …)".into()); }
+            if !cfg!(windows) { writable.push("package-manager download caches (~/.cargo/registry, ~/.npm, pip/uv/pnpm/go-build caches, …; not toolchains or their settings)".into()); }
             writable.extend(cfg.allow_write.iter().cloned());
             let denies: Vec<String> = crate::tools::bash::secret_read_denies(&home, &cfg.deny_read)
                 .into_iter()

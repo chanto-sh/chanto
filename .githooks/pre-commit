@@ -55,6 +55,17 @@ while IFS= read -r f; do
     if git cat-file -e "HEAD:$f" 2>/dev/null && git show "HEAD:$f" | grep -q 'unsafe'; then
         continue
     fi
+    # Code moved out of a file that already had it (a module split): every
+    # added unsafe line is one this commit removes elsewhere.
+    removed=$(git diff --cached -U0 | grep -E '^-[^-]' | sed -e 's/^-//' -e 's/^[[:space:]]*//')
+    moved=1
+    while IFS= read -r line; do
+        line=$(printf '%s\n' "$line" | sed -e 's/^+//' -e 's/^[[:space:]]*//')
+        printf '%s\n' "$removed" | grep -qxF -- "$line" || { moved=0; break; }
+    done <<MOVED
+$added
+MOVED
+    [ "$moved" -eq 1 ] && continue
     echo "error: $f gains its first \`unsafe\`; if it's a trusted FFI site keep it, else drop it (--no-verify to skip)" >&2
     status=1
 done <<EOF
