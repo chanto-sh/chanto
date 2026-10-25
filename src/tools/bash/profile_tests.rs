@@ -211,6 +211,8 @@ fn profile_denies_persistence_and_toolchain_paths() {
 /// The IPC rules are in the profile: Unix sockets confined to the project
 /// and the private temp dir (not the shared temp trees), and no Apple
 /// Events, LaunchServices, clipboard or Shortcuts.
+// The socket rules are built from Unix paths; Windows has no Seatbelt profile.
+#[cfg(unix)]
 #[test]
 fn profile_blocks_ipc_escape_hatches() {
     let home = std::path::PathBuf::from("/Users/x");

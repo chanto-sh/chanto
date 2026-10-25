@@ -785,6 +785,10 @@ mod tests {
 
     #[tokio::test]
     async fn sync_embeds_once_then_reuses_the_cache() {
+        // The cache lives under the Chanto home, which other tests move.
+        let _home_lock = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let dir =
             std::env::temp_dir().join(format!("chanto-sem-{}", uuid::Uuid::new_v4().simple()));
         std::fs::create_dir_all(dir.join("src")).unwrap();
