@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Container image.** Each release now publishes `ghcr.io/chanto-sh/chanto:<version>` and `:latest` for linux/amd64 and linux/arm64, built from the release's own signed Linux binaries, with build provenance and a cosign signature. See [Container image](docs/reference.md#container-image).
+
 ## v0.1.5 (October 25, 2026)
 
 - **Security: the install scripts check the release signature before trusting anything.** `install.sh` read the version for "latest" from an unsigned `SHA256SUMS`, skipped the signature for v0.1.0/v0.1.1, and skipped it entirely without OpenSSL 3 (as on stock macOS); `install.ps1` never checked it. Both now verify the signature first, with OpenSSL 3 or, from this release on, with `ssh-keygen` against a new `SHA256SUMS.sshsig`, and stop if neither tool is available. They refuse releases before v0.1.2, which aren't signed, and refuse a "latest" older than v0.1.5. See [Verifying a release](docs/reference.md#verifying-a-release).

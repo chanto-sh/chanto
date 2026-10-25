@@ -1,0 +1,60 @@
+# Builds the container image on pull requests that change it, without
+# pushing. The release workflow's `container` job publishes it for each tag;
+# this uses the latest release's binaries, so it needs no release of its own.
+# Not a required check: it only runs when these files change.
+name: container
+
+on:
+  pull_request:
+    paths:
+      - "packaging/docker/**"
+      - ".github/workflows/container.yml"
+      - ".github/workflows/release.yml"
+
+concurrency:
+  group: container-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: container image
+    runs-on: ubuntu-latest
+    # Reads the latest release's assets.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Fetch and verify the latest release's Linux binaries
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName -q .tagName)
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/dist" \
+            -p SHA256SUMS -p SHA256SUMS.sig -p '*-unknown-linux-musl.tar.gz'
+          packaging/docker/prepare.sh "$tag" "$RUNNER_TEMP/dist" "$RUNNER_TEMP/image"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - name: Test the image on each platform
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: packaging/docker/test.sh "$RUNNER_TEMP/image" "$VERSION"
+      - name: Build the multi-arch image
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: ${{ runner.temp }}/image
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: false
+          provenance: false
+          sbom: false
+          build-args: |
+            VERSION=${{ steps.release.outputs.version }}
+            REVISION=${{ github.sha }}

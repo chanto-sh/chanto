@@ -42,6 +42,7 @@ curl -fsSL https://chanto.sh/install.sh | sh      # macOS and Linux
 brew install chanto-sh/tap/chanto                 # Homebrew
 npm i -g @chanto/cli                              # npm
 cargo install chanto --locked                     # from source (Rust 1.95+)
+docker run --rm -it -v "$PWD:/work" -e OPENAI_API_KEY ghcr.io/chanto-sh/chanto   # container
 ```
 
 On Windows (PowerShell): `irm https://chanto.sh/install.ps1 | iex`. The installers check the release signature and the download's checksum and put `chanto` in `~/.local/bin`; `chanto upgrade` updates it.
