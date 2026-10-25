@@ -1,0 +1,74 @@
+# The OpenSSF Scorecard checks that only need the repository's files, run on
+# every pull request so a change can't lower the score that scorecard.yml
+# publishes each week: known vulnerabilities in the lockfiles (osv-scanner,
+# as Scorecard's Vulnerabilities check), workflow security (zizmor), and
+# Scorecard itself in local mode for pinned dependencies, token permissions,
+# dangerous workflows and binary artifacts. scripts/scorecard-check.sh holds
+# the checks and their floors, and runs the same way locally.
+#
+# The tools are release binaries, pinned by version and checksum.
+name: scorecard guard
+# The merge queue needs every required check to report, so this runs there too.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+concurrency:
+  group: scorecard-guard-${{ github.ref }}
+  cancel-in-progress: true
+
+# The checks only read the repository.
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: scorecard guard
+    runs-on: ubuntu-latest
+    env:
+      OSV_SCANNER_VERSION: 2.6.0
+      OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
+      ZIZMOR_VERSION: 1.31.1
+      ZIZMOR_SHA256: d185f726bdaf92df78273217dfdd24ebcd6b0ef48cf3ce776ff5762b6e138c99
+      SCORECARD_VERSION: 5.6.0
+      SCORECARD_SHA256: 19bde07129450cb65a95c6e3b9f34e034341579e6f0e241546ec3ae6efb2dd9a
+      # A missing tool fails here rather than being skipped.
+      SCORECARD_CHECK_REQUIRE: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Install osv-scanner, zizmor and scorecard
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          cd "$RUNNER_TEMP"
+          curl -fsSL -o osv-scanner \
+            "https://github.com/google/osv-scanner/releases/download/v${OSV_SCANNER_VERSION}/osv-scanner_linux_amd64"
+          echo "$OSV_SCANNER_SHA256  osv-scanner" | sha256sum --check --strict
+          install -m 755 osv-scanner "$bin/osv-scanner"
+          curl -fsSL -o zizmor.tar.gz \
+            "https://github.com/zizmorcore/zizmor/releases/download/v${ZIZMOR_VERSION}/zizmor-x86_64-unknown-linux-gnu.tar.gz"
+          echo "$ZIZMOR_SHA256  zizmor.tar.gz" | sha256sum --check --strict
+          tar -xzf zizmor.tar.gz -C "$bin" zizmor
+          curl -fsSL -o scorecard.tar.gz \
+            "https://github.com/ossf/scorecard/releases/download/v${SCORECARD_VERSION}/scorecard_${SCORECARD_VERSION}_linux_amd64.tar.gz"
+          echo "$SCORECARD_SHA256  scorecard.tar.gz" | sha256sum --check --strict
+          tar -xzf scorecard.tar.gz -C "$bin" scorecard
+      # Each check is its own step, and the later ones still run after an
+      # earlier failure, so one run reports every problem.
+      - name: Vulnerabilities (osv-scanner)
+        run: PATH="$RUNNER_TEMP/bin:$PATH" scripts/scorecard-check.sh osv
+      # The token lets zizmor ask GitHub about the pinned actions (impostor
+      # commits, known-vulnerable versions); it can only read.
+      - name: Workflows (zizmor)
+        if: ${{ !cancelled() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: PATH="$RUNNER_TEMP/bin:$PATH" scripts/scorecard-check.sh zizmor
+      - name: Scorecard (local checks)
+        if: ${{ !cancelled() }}
+        run: PATH="$RUNNER_TEMP/bin:$PATH" scripts/scorecard-check.sh scorecard

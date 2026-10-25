@@ -134,4 +134,29 @@ if printf '%s\n' "$staged" | grep -qE '(^|/)Cargo\.(toml|lock)$' && command -v c
     fi
 fi
 
+# --- Scorecard guard: the cheap parts of the CI `scorecard guard` job --------
+# Each only when its files are staged, and only if the tool is installed;
+# scripts/scorecard-check.sh runs the full set. zizmor runs offline (no
+# GitHub lookups), so it stays fast.
+if printf '%s\n' "$staged" | grep -q '^\.github/workflows/' && command -v zizmor >/dev/null 2>&1; then
+    if ! out=$(zizmor --offline --min-severity=medium --no-progress .github/workflows/ 2>&1); then
+        printf '%s\n' "$out" >&2
+        echo "error: zizmor found a workflow problem; run \`scripts/scorecard-check.sh zizmor\`" >&2
+        status=1
+    fi
+fi
+
+# osv-scanner over the staged lockfiles only, each with the osv-scanner.toml
+# next to it (as Scorecard reads them).
+lockfiles=$(printf '%s\n' "$staged" | grep -E '(^|/)(Cargo\.lock|package-lock\.json)$' || true)
+if [ -n "$lockfiles" ] && command -v osv-scanner >/dev/null 2>&1; then
+    set --
+    for f in $lockfiles; do set -- "$@" -L "$f"; done
+    if ! out=$(osv-scanner scan source "$@" 2>&1); then
+        printf '%s\n' "$out" >&2
+        echo "error: osv-scanner found a known vulnerability in a staged lockfile; run \`scripts/scorecard-check.sh osv\`" >&2
+        status=1
+    fi
+fi
+
 exit "$status"
