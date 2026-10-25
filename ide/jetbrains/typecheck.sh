@@ -1,7 +1,7 @@
 #!/bin/sh
 # Type-check the IntelliJ-facing sources (IntelliJIde, ChantoIdeService,
 # ChantoActions) against a locally installed IntelliJ platform. This is the
-# fast check while working; `./gradlew buildPlugin` is the real build and runs
+# fast check while working; `gradle buildPlugin` is the real build and runs
 # the plugin verifier too.
 #
 # Skips cleanly when no IDE is installed. Point CHANTO_IDEA_HOME at the
@@ -35,7 +35,7 @@ find_idea() {
 IDEA="$(find_idea || true)"
 if [ -z "$IDEA" ]; then
     echo "no local IntelliJ installation found; skipping the platform type-check"
-    echo "(set CHANTO_IDEA_HOME=$PWD-style path to '.app/Contents', or use ./gradlew buildPlugin)"
+    echo "(set CHANTO_IDEA_HOME=$PWD-style path to '.app/Contents', or use gradle buildPlugin)"
     exit 0
 fi
 

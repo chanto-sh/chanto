@@ -28,13 +28,28 @@ from the lockfile.
 
 ```sh
 cd ide/jetbrains
-./gradlew buildPlugin          # build/distributions/chanto-jetbrains-0.1.0.zip
-./gradlew runIde               # launch a sandbox IDE with the plugin
+gradle buildPlugin             # build/distributions/chanto-jetbrains-<version>.zip
+gradle runIde                  # launch a sandbox IDE with the plugin
 ```
 
 Requires JDK 21; an IDE's bundled runtime works, e.g.
-`JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home"`. The Gradle
-wrapper resolves the IntelliJ Platform (`platformVersion` in `gradle.properties`,
+`JAVA_HOME="/Applications/IntelliJ IDEA.app/Contents/jbr/Contents/Home"`.
+
+Gradle's wrapper jar isn't committed, so use an installed Gradle (`brew install
+gradle`; 9.8.1 is the version CI uses, from
+`gradle/wrapper/gradle-wrapper.properties`), or generate the wrapper once and use
+`./gradlew` from then on:
+
+```sh
+gradle wrapper --gradle-version 9.8.1 \
+    --gradle-distribution-sha256-sum dce76f55f8e251a3a1f130eb120f30b3d271de2b76c9b0729d316b5a1b6dc01f
+```
+
+The generated `gradlew`, `gradlew.bat` and wrapper jar are gitignored. When
+bumping Gradle, update `gradle-wrapper.properties` and the `gradle-version` of
+the `jetbrains` job in `.github/workflows/ci.yml` together.
+
+The build resolves the IntelliJ Platform (`platformVersion` in `gradle.properties`,
 default 2025.3.1), or builds against an installed IDE with
 `-PlocalIde="/Applications/IntelliJ IDEA.app"`.
 

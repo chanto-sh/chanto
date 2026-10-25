@@ -83,14 +83,11 @@ run_scorecard() {
         status=1
         return 0
     fi
-    # The floor is 10 for every check but Binary-Artifacts: Gradle's wrapper
-    # jar (ide/jetbrains) counts as a binary in local mode, while the hosted
-    # Scorecard sees the gradle-wrapper CI job validate it and scores 10. Any
-    # other binary takes the score below 9.
+    # The floor is 10 for every check.
     python3 - "$tree/.scorecard.json" <<'PY' || status=1
 import json, sys
 
-floor = {"Binary-Artifacts": 9}
+floor = {}
 failed = False
 for check in json.load(open(sys.argv[1]))["checks"]:
     name, score = check["name"], check["score"]
