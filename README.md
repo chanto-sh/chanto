@@ -93,7 +93,7 @@ In a session:
 |---|---|
 | **Local and cloud models** | OpenAI, Anthropic, Gemini, DeepSeek, OpenRouter and more; ChatGPT and coding plans; Bedrock, Vertex AI and Azure; local OpenAI-compatible servers |
 | **Permission controls** | Ask before risky actions, or use plan, accept-edits and auto modes. Shell sandboxing covers macOS and Linux; Windows restricts writes, with read/network limits described in the [security model](docs/security-model.md) |
-| **Verified mode** | `--verify` runs project checks before accepting completion and detects weakened existing tests; `--verify-full` runs the full suite ([reference](docs/reference.md#verified-mode-guardrails)) |
+| **Verification** | `--verify` adds a project-check gate before completion; `--verify-full` runs the full suite. The test-weakening guard also runs on ordinary turns ([reference](docs/reference.md#verified-mode-guardrails)) |
 | **Sessions and undo** | Resume, fork and rewind conversations with file changes; share redacted transcripts |
 | **Background work** | Run tasks in separate worktrees, monitor jobs, and apply their results while continuing your session |
 | **Goals and teams** | Keep working toward agreed criteria or split a task across agents with checks and limits |
