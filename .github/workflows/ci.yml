@@ -50,6 +50,8 @@ jobs:
         with:
           components: rustfmt
       - run: cargo fmt --all --check
+      - name: Test release metadata checks
+        run: python3 -m unittest discover -s packaging -p test_release.py
   # clippy over the whole workspace, on every push. The desktop app needs the
   # same GTK/WebKit packages as `desktop-linux` to build on Linux.
   clippy:

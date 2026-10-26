@@ -8,8 +8,31 @@ on:
 permissions:
   contents: read
 
+# Publication jobs update shared latest pointers; never overlap or cancel them.
+concurrency:
+  group: release-publication
+  cancel-in-progress: false
+
+env:
+  RELEASE_RUST_VERSION: 1.99.1
+
 jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Check release metadata and ancestry
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 packaging/check-release.py "$TAG"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
   build:
+    needs: preflight
     strategy:
       fail-fast: false
       matrix:
@@ -38,23 +61,16 @@ jobs:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: ${{ env.RELEASE_RUST_VERSION }}
           targets: ${{ matrix.target }}
       # No build cache: a release builds from a clean slate, so a cache
       # poisoned by some other workflow run can't end up in a shipped binary.
       - name: Install cross
         if: matrix.cross
-        run: cargo install cross --locked
+        run: cargo install cross --version 0.2.5 --locked
       - name: Install NASM (aws-lc-sys on Windows)
         if: matrix.os == 'windows-latest'
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
-      - name: Check release version
-        shell: bash
-        run: |
-          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
-          test "$GITHUB_REF_NAME" = "v$version"
-          # The GitHub release notes are this version's CHANGELOG.md section,
-          # dated (not "unreleased") before tagging.
-          grep -E "^## $GITHUB_REF_NAME \(" CHANGELOG.md | grep -qv unreleased
       - name: Build
         shell: bash
         run: |
@@ -336,6 +352,8 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RELEASE_RUST_VERSION }}
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
         id: auth
       - name: Publish
