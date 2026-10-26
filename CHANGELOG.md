@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Security: an apostrophe inside double quotes could hide command substitutions.** Prefix allow rules such as `Bash(echo:*)` could miss substitutions after quoted text containing an apostrophe. The permission check now keeps single and double quote state separate. Found by fuzzing.
 - **UI regression tests.** Deterministic text and style snapshots cover 72 terminal frames across common UI states, widths and themes. CI publishes a PNG/GIF preview gallery for review.
 
 - **Usage limits.** The footer shows the most-used reported quota window, its local reset time and `/usage`, dropping extra details on narrow terminals. A heads-up appears once at 25% and 10% remaining and re-arms after a window resets. Missing quota data is never estimated.
