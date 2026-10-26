@@ -206,7 +206,7 @@ pub(super) fn render_block(
         Kind::Tool(t) => {
             let (dot, color) = match (t.elapsed, t.is_error) {
                 (None, _) => {
-                    let on = (t.started.elapsed().as_millis() / 500) % 2 == 0;
+                    let on = (view_time::elapsed(t.started).as_millis() / 500).is_multiple_of(2);
                     (if on { "▸" } else { " " }, pal().dim)
                 }
                 (Some(_), false) => ("▸", pal().success),
@@ -228,7 +228,10 @@ pub(super) fn render_block(
             // The command or path stands out in the inline-code colour rather
             // than blending into the dim chrome.
             header.push(Span::styled(rest, Style::default().fg(pal().code)));
-            let secs = t.elapsed.unwrap_or_else(|| t.started.elapsed()).as_secs();
+            let secs = t
+                .elapsed
+                .unwrap_or_else(|| view_time::elapsed(t.started))
+                .as_secs();
             if secs >= 3 {
                 header.push(Span::styled(
                     format!(" · {}", crate::util::duration(secs)),
@@ -509,8 +512,8 @@ pub(super) fn quota_reset(at: i64, now: i64) -> Option<String> {
     if at <= now {
         return Some("reset due".into());
     }
-    let at = chrono::DateTime::from_timestamp(at, 0)?.with_timezone(&chrono::Local);
-    let now = chrono::DateTime::from_timestamp(now, 0)?.with_timezone(&chrono::Local);
+    let at = view_time::local_time(at)?;
+    let now = view_time::local_time(now)?;
     let format = if at.date_naive() == now.date_naive() {
         "resets at %-I:%M %p"
     } else {
