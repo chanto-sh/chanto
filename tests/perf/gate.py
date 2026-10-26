@@ -11,11 +11,12 @@ time is zero:
 
 Each one is compared with the same measurement of another binary (in CI, the
 pull request's base commit built from its own source) and with a fixed
-ceiling in `tests/perf/budgets.json`. A metric fails when either it is over
-its ceiling, or it is both outside `tolerance` and significantly slower than
-the base by a one-sided Mann-Whitney U test at `alpha`. Requiring both keeps
-a lucky run of a few milliseconds from failing a pull request, while still
-catching a real regression that is smaller than the ceiling allows.
+ceiling in `tests/perf/budgets.json`. A metric fails when it is over its
+ceiling, when it is both outside `tolerance` and significantly slower than
+the base by a one-sided Mann-Whitney U test at `alpha`, or when it is slower
+by more than `large_change` whatever the p-value. Requiring a tolerance keeps
+a lucky run of a few milliseconds from failing a pull request; the hard cap
+catches a real regression that noise spread over both groups.
 
 Runs of the two binaries are interleaved, and the binaries are measured
 through the kernel's rusage (`wait4`), not the wall clock, so scheduling and
@@ -282,7 +283,7 @@ def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
         "significant": significant,
         "over_budget": over_budget,
         "too_big": too_big,
-        "near_budget": budget is not None and head_value > budget * 0.6,
+        "near_budget": budget is not None and head_value > budget * 0.75,
         "verdict": verdict,
         "base_samples": base,
         "head_samples": head,
@@ -350,7 +351,7 @@ def run(head, base, config):
             cfg["ceilings"].get(metric),
             cfg["tolerance"][metric],
             cfg["alpha"],
-            cfg["large_change"],
+            cfg["large_change"][metric],
         )
     report = {
         "platform": cfg["platform"],
@@ -410,7 +411,7 @@ def markdown(report):
         if m["verdict"] == "pass" and m.get("near_budget")
     ]
     if near:
-        lines += ["", "> Within budget but over 60% of the ceiling, so consider "
+        lines += ["", "> Within budget but over 75% of the ceiling, so consider "
                   f"lowering it: {', '.join(near)}."]
     return "\n".join(lines) + "\n"
 
