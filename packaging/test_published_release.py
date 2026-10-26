@@ -64,8 +64,9 @@ class PublishedReleaseTests(unittest.TestCase):
         self.assertTrue(any("checksum mismatch" in f for f in self.failures()))
 
     def test_private_container_is_not_success(self):
-        del self.records["https://ghcr.io/token?service=ghcr.io&scope=repository:chanto-sh/chanto:pull"]
-        self.assertTrue(any("ghcr.io" in f for f in self.failures()))
+        url = "https://ghcr.io/token?service=ghcr.io&scope=repository:chanto-sh/chanto:pull"
+        del self.records[url]
+        self.assertEqual(self.failures(), [f"{url}: HTTP Error 404: still processing"])
 
 
 if __name__ == "__main__":
