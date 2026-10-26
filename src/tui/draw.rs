@@ -5,6 +5,10 @@ use super::render::*;
 use super::stream::*;
 use super::*;
 
+/// How many todos the panel lists before it counts the rest. `heights` and
+/// `draw_todos` both read it, so the panel is always as tall as what it draws.
+const TODOS_SHOWN: usize = 8;
+
 impl App {
     // ------------------------------------------------------------- render
 
@@ -54,7 +58,12 @@ impl App {
             && !self.todos.is_empty()
             && !self.todos.iter().all(|t| t.status == "completed")
         {
-            (self.todos.len().min(8) as u16) + 1
+            // One row for the header, one blank row between the list and the
+            // status line (so a running turn isn't read as a todo), and one for
+            // the "more" line when not every todo fits.
+            (self.todos.len().min(TODOS_SHOWN) as u16)
+                + 2
+                + u16::from(self.todos.len() > TODOS_SHOWN)
         } else {
             0
         };
@@ -451,10 +460,10 @@ impl App {
 
     pub(super) fn draw_todos(&mut self, f: &mut Frame, area: Rect) {
         let mut lines = vec![Line::from(Span::styled(
-            " Todos (ctrl+t to hide)",
+            "Todos (ctrl+t to hide)",
             Style::default().fg(pal().dim),
         ))];
-        for t in self.todos.iter().take(8) {
+        for t in self.todos.iter().take(TODOS_SHOWN) {
             let (mark, st) = match t.status.as_str() {
                 "completed" => (
                     "☒",
@@ -475,10 +484,20 @@ impl App {
             } else {
                 &t.content
             };
+            // "   ", the mark and a space; cut the rest at a word so a long
+            // title ends in "…" rather than being clipped by the frame.
+            let text = fit_words(text, (area.width as usize).saturating_sub(5));
             lines.push(Line::from(vec![
                 Span::raw("   "),
                 Span::styled(format!("{mark} {text}"), st),
             ]));
+        }
+        let hidden = self.todos.len().saturating_sub(TODOS_SHOWN);
+        if hidden > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("   … {hidden} more"),
+                Style::default().fg(pal().dim),
+            )));
         }
         for (i, l) in lines.iter().enumerate() {
             let text: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect();

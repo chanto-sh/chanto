@@ -429,6 +429,13 @@ pub async fn login_chatgpt(
 
 /// Current bearer token for a login-backed provider, refreshing it when due.
 pub async fn token(provider: &str) -> Result<String> {
+    let t = token_inner(provider).await?;
+    // A sign-in token is a secret like any key in the environment.
+    crate::secrets::register(&format!("{}_TOKEN", provider.to_uppercase()), &t);
+    Ok(t)
+}
+
+async fn token_inner(provider: &str) -> Result<String> {
     static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _g = LOCK.lock().await;
     let key = active_key(&load_all(), provider);

@@ -4,6 +4,25 @@ use serde_json::json;
 use std::collections::VecDeque;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+#[test]
+fn tool_event_masks_before_truncating_output() {
+    let _g = crate::secrets::TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let secret = "truncate-boundary-secret-value";
+    crate::secrets::register("BOUNDARY_TOKEN", secret);
+    let event = Event::ToolEnd {
+        id: "test".into(),
+        display: String::new(),
+        content: format!("{}{secret}", "x".repeat(1990)),
+        is_error: false,
+        images: vec![],
+        parent: None,
+    };
+    let value = event_json(&event).unwrap();
+    assert!(!value["output"].as_str().unwrap().contains("truncate-b"));
+}
+
 struct NullFrontend;
 #[test]
 fn checkpoint_files_round_trip_compactly() {
@@ -3671,6 +3690,47 @@ async fn auto_compacts_near_context_limit() {
     assert!(
         !seen[1].to_string().contains("\"two"),
         "the summary request leaves it out"
+    );
+}
+
+/// Side calls build their own requests from the raw history; the provider
+/// masks them all, so a summary request can't carry what a turn would mask.
+#[tokio::test]
+async fn compaction_requests_are_masked_like_turns() {
+    let _g = crate::secrets::TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let dir = tmpdir("compact-secrets");
+    // Key-shaped, assembled at runtime so the source holds no such literal.
+    let key = &format!("{}-{}", "sk-ant-api03", "Zx9Yw8Vu7Ts6Rq5Po4Nm3Lk2");
+    let key = key.as_str();
+    let (base, seen) = mock_server(vec![
+        json!({"content": "first answer", "prompt_tokens": 7900}),
+        json!({"content": "SUMMARY OF EVERYTHING"}),
+        json!({"content": "second answer"}),
+    ])
+    .await;
+    let env = make_env(&base, &dir, Mode::Default, 8192);
+    crate::secrets::init(&env.config, &dir);
+    let mut agent = Agent::new(env);
+    agent
+        .run_turn(
+            &format!("use the key {key}"),
+            vec![],
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    agent
+        .run_turn("two", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 3);
+    let summary = seen[1]["messages"].to_string();
+    assert!(
+        !summary.contains(key) && summary.contains("[REDACTED:ANTHROPIC_KEY]"),
+        "{summary}"
     );
 }
 
