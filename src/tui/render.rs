@@ -151,14 +151,9 @@ pub(super) fn render_block(
             let st = Style::default().add_modifier(Modifier::BOLD);
             for (i, l) in t.lines().enumerate() {
                 let p = if i == 0 { "> " } else { "  " };
-                push_wrapped(
-                    &mut out,
-                    Line::from(vec![
-                        Span::styled(p, Style::default().fg(pal().dim)),
-                        Span::styled(l.to_string(), st),
-                    ]),
-                    2,
-                );
+                let mut spans = vec![Span::styled(p, Style::default().fg(pal().dim))];
+                spans.extend(markdown::link_spans(l, st));
+                push_wrapped(&mut out, Line::from(spans), 2);
             }
         }
         Kind::Assistant(t) => {
@@ -206,7 +201,7 @@ pub(super) fn render_block(
         Kind::Tool(t) => {
             let (dot, color) = match (t.elapsed, t.is_error) {
                 (None, _) => {
-                    let on = (t.started.elapsed().as_millis() / 500) % 2 == 0;
+                    let on = (view_time::elapsed(t.started).as_millis() / 500).is_multiple_of(2);
                     (if on { "▸" } else { " " }, pal().dim)
                 }
                 (Some(_), false) => ("▸", pal().success),
@@ -228,7 +223,10 @@ pub(super) fn render_block(
             // The command or path stands out in the inline-code colour rather
             // than blending into the dim chrome.
             header.push(Span::styled(rest, Style::default().fg(pal().code)));
-            let secs = t.elapsed.unwrap_or_else(|| t.started.elapsed()).as_secs();
+            let secs = t
+                .elapsed
+                .unwrap_or_else(|| view_time::elapsed(t.started))
+                .as_secs();
             if secs >= 3 {
                 header.push(Span::styled(
                     format!(" · {}", crate::util::duration(secs)),
@@ -316,7 +314,18 @@ pub(super) fn render_block(
                     let preview = expanded && has_more && display_is_preview(d, content);
                     let shown = if preview { content } else { d.as_str() };
                     let lines: Vec<Line<'static>> = {
-                        let mut v = markdown::ansi_lines(shown.trim_end());
+                        let raw_output =
+                            display_is_preview(d, content) && !shown.starts_with("Blocked:");
+                        let mut v = if shown.contains('\u{1b}') || raw_output {
+                            markdown::ansi_lines(shown.trim_end())
+                        } else {
+                            // Summaries can style code ticks; a preview of raw
+                            // command output must keep its literal characters.
+                            markdown::code_ticks_lines(shown.trim_end())
+                        };
+                        for line in &mut v {
+                            markdown::linkify_urls(line);
+                        }
                         while v.last().map(|l| l.width() == 0).unwrap_or(false) {
                             v.pop();
                         }
@@ -424,7 +433,7 @@ pub(super) fn render_block(
             for l in s.lines() {
                 push_wrapped(
                     &mut out,
-                    Line::styled(l.to_string(), Style::default().fg(*c)),
+                    Line::from(markdown::link_spans(l, Style::default().fg(*c))),
                     2,
                 );
             }
@@ -509,8 +518,8 @@ pub(super) fn quota_reset(at: i64, now: i64) -> Option<String> {
     if at <= now {
         return Some("reset due".into());
     }
-    let at = chrono::DateTime::from_timestamp(at, 0)?.with_timezone(&chrono::Local);
-    let now = chrono::DateTime::from_timestamp(now, 0)?.with_timezone(&chrono::Local);
+    let at = view_time::local_time(at)?;
+    let now = view_time::local_time(now)?;
     let format = if at.date_naive() == now.date_naive() {
         "resets at %-I:%M %p"
     } else {

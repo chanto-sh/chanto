@@ -5,6 +5,10 @@ use super::render::*;
 use super::stream::*;
 use super::*;
 
+/// How many todos the panel lists before it counts the rest. `heights` and
+/// `draw_todos` both read it, so the panel is always as tall as what it draws.
+const TODOS_SHOWN: usize = 8;
+
 impl App {
     // ------------------------------------------------------------- render
 
@@ -54,7 +58,12 @@ impl App {
             && !self.todos.is_empty()
             && !self.todos.iter().all(|t| t.status == "completed")
         {
-            (self.todos.len().min(8) as u16) + 1
+            // One row for the header, one blank row between the list and the
+            // status line (so a running turn isn't read as a todo), and one for
+            // the "more" line when not every todo fits.
+            (self.todos.len().min(TODOS_SHOWN) as u16)
+                + 2
+                + u16::from(self.todos.len() > TODOS_SHOWN)
         } else {
             0
         };
@@ -164,6 +173,7 @@ impl App {
         // Plain text of the last frame, rebuilt from scratch: the selection reads
         // it back and paints over it, so it must never be a frame stale.
         self.row_text = vec![None; area.height as usize];
+        self.screen_links.clear();
         let input_w = w.saturating_sub(6) as usize;
         let (rows, cursor) = self.input.layout(input_w);
         let hs = self.heights(
@@ -334,7 +344,7 @@ impl App {
         }
         let links = link_regions(&shown, area.width);
         f.render_widget(Paragraph::new(shown), area);
-        paint_links(f.buffer_mut(), area, &links);
+        self.paint_screen_links(f.buffer_mut(), area, &links);
     }
 
     pub(super) fn draw_transcript(&mut self, f: &mut Frame, area: Rect) {
@@ -427,7 +437,7 @@ impl App {
         // The help overlay is drawn over these rows later; decorating them
         // would leave its cells carrying the transcript's link attributes.
         if !self.help {
-            paint_links(f.buffer_mut(), widget, &links);
+            self.paint_screen_links(f.buffer_mut(), widget, &links);
         }
         if self.scroll > 0 {
             let s = format!(
@@ -451,10 +461,10 @@ impl App {
 
     pub(super) fn draw_todos(&mut self, f: &mut Frame, area: Rect) {
         let mut lines = vec![Line::from(Span::styled(
-            " Todos (ctrl+t to hide)",
+            "Todos (ctrl+t to hide)",
             Style::default().fg(pal().dim),
         ))];
-        for t in self.todos.iter().take(8) {
+        for t in self.todos.iter().take(TODOS_SHOWN) {
             let (mark, st) = match t.status.as_str() {
                 "completed" => (
                     "☒",
@@ -475,10 +485,20 @@ impl App {
             } else {
                 &t.content
             };
+            // "   ", the mark and a space; cut the rest at a word so a long
+            // title ends in "…" rather than being clipped by the frame.
+            let text = fit_words(text, (area.width as usize).saturating_sub(5));
             lines.push(Line::from(vec![
                 Span::raw("   "),
                 Span::styled(format!("{mark} {text}"), st),
             ]));
+        }
+        let hidden = self.todos.len().saturating_sub(TODOS_SHOWN);
+        if hidden > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("   … {hidden} more"),
+                Style::default().fg(pal().dim),
+            )));
         }
         for (i, l) in lines.iter().enumerate() {
             let text: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect();
@@ -515,9 +535,7 @@ impl App {
             .values()
             .filter(|s| s.exit.lock().unwrap().is_none())
             .map(|s| {
-                // A monitor's description says what it watches; its command is a
-                // long watch loop that would crowd the row out.
-                let label = s.monitor.clone().unwrap_or_else(|| s.command.clone());
+                let label = crate::util::one_line(&s.title(), 60);
                 (s.id.clone(), label, s.monitor.is_some())
             })
             .collect();
@@ -747,31 +765,36 @@ impl App {
             let text: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect();
             self.record_row(area.y + i as u16, area.x + 1, &text);
         }
-        f.render_widget(
-            Paragraph::new(visible),
-            Rect {
-                x: area.x + 1,
-                width,
-                ..area
-            },
-        );
+        let widget = Rect {
+            x: area.x + 1,
+            width,
+            ..area
+        };
+        let links = link_regions(&visible, width);
+        f.render_widget(Paragraph::new(visible), widget);
+        self.paint_screen_links(f.buffer_mut(), widget, &links);
     }
 
     pub(super) fn draw_status(&mut self, f: &mut Frame, area: Rect) {
         let mut lines = Vec::new();
         if self.busy {
-            let el = self.busy_since.elapsed();
-            let frame = busy_frame(crate::a11y::reduce_motion(), el.as_millis());
+            let el = view_time::elapsed(self.busy_since);
+            let reduce_motion = crate::a11y::reduce_motion();
+            let frame = busy_frame(reduce_motion, el.as_millis());
             // While reasoning is streaming, use progressive wording so a slow
             // model reads as still working rather than frozen.
             let thinking = self.open_think.and_then(|i| match &self.blocks[i].kind {
-                Kind::Thinking { started, .. } => Some(started.elapsed().as_secs()),
+                Kind::Thinking { started, .. } => Some(view_time::elapsed(*started).as_secs()),
                 _ => None,
             });
             // A prompt waiting on the user isn't the model thinking, and the
             // time spent deciding isn't counted (see `sync_wait`).
             let waiting = self.waiting_on_user();
-            let el = el.saturating_sub(self.wait_started.map(|t| t.elapsed()).unwrap_or_default());
+            let el = el.saturating_sub(
+                self.wait_started
+                    .map(view_time::elapsed)
+                    .unwrap_or_default(),
+            );
             let verb = match thinking {
                 _ if waiting => "Waiting for you".to_string(),
                 Some(s) => crate::util::capitalize(thinking_verb(s)),
@@ -802,11 +825,20 @@ impl App {
                 ));
             }
             detail.push_str(" · esc to interrupt)");
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {frame} "), Style::default().fg(pal().accent)),
-                Span::styled(format!("{verb}…"), Style::default().fg(pal().accent)),
-                Span::styled(detail, Style::default().fg(pal().dim)),
-            ]));
+            lines.push(Line::from({
+                let mut spans = vec![Span::styled(
+                    format!(" {frame} "),
+                    Style::default().fg(pal().accent),
+                )];
+                spans.extend(shimmer_spans(
+                    &format!("{verb}…"),
+                    pal().accent,
+                    reduce_motion,
+                    el.as_millis(),
+                ));
+                spans.push(Span::styled(detail, Style::default().fg(pal().dim)));
+                spans
+            }));
         }
         for (i, q) in self.queue.iter().take(3).enumerate() {
             let hint = if i == 0 {
@@ -1388,7 +1420,7 @@ impl App {
         // MCP servers at a glance: connected out of configured, amber when one
         // failed or needs sign-in. `/mcp` opens the full list.
         let (mcp_ok, mcp_total, mcp_attention) = crate::commands::mcp_summary(&self.env);
-        if mcp_total > 0 {
+        if mcp_total > 0 && (mcp_attention || mcp_ok < mcp_total) {
             right.push((
                 format!("mcp {mcp_ok}/{mcp_total}"),
                 Style::default().fg(if mcp_attention { warn() } else { pal().dim }),
@@ -1402,10 +1434,13 @@ impl App {
                 5,
             ));
         }
-        if let Some(b) = &self.branch {
+        let pr_status = self.pr_status.lock().unwrap().clone();
+        if pr_status.is_none()
+            && let Some(b) = &self.branch
+        {
             right.push((format!("⎇ {b}"), dim, 3));
         }
-        if let Some(pr) = self.pr_status.lock().unwrap().clone() {
+        if let Some(pr) = pr_status {
             let color = if pr.contains("failing") || pr.contains("changes requested") {
                 warn()
             } else {
@@ -1414,7 +1449,11 @@ impl App {
             right.push((pr, Style::default().fg(color), 4));
         }
         // Read live: /model (idle or mid-turn), the picker and resume all change it.
-        right.push((self.env.model(), dim, 8));
+        let model = self.env.model();
+        let model = model
+            .split_once('/')
+            .map_or(model.as_str(), |(_, name)| name);
+        right.push((model.to_string(), dim, 8));
         // Reasoning effort, when it isn't the provider's default (/effort, --effort).
         if let Some(effort) = effort_label(self.env.think(), self.env.effort()) {
             right.push((effort, dim, 4));
@@ -1451,7 +1490,7 @@ impl App {
                 ));
                 if let Some(reset) = w
                     .resets_at
-                    .and_then(|at| quota_reset(at, chrono::Utc::now().timestamp()))
+                    .and_then(|at| quota_reset(at, view_time::timestamp()))
                 {
                     right.push((reset, Style::default().fg(color), 5));
                 }
@@ -1463,8 +1502,9 @@ impl App {
             Style::default().fg(ctx_color),
             7,
         ));
-        // Why the Mac isn't sleeping: Chanto is holding it awake (`keep_awake`).
-        if crate::awake::active() {
+        // While working, wake inhibition is expected. At idle it explains why
+        // a persistent setting or background job is still preventing sleep.
+        if !self.busy && crate::awake::active() {
             right.push(("awake".into(), dim, 1));
         }
         if let Some(cost) = cost_label(self.total_cost_usd, self.price_unknown) {

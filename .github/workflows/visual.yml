@@ -1,0 +1,47 @@
+name: visual
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: visual-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  visual:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - name: Compare visual baselines
+        run: cargo test --locked --lib visual_snapshots -- --ignored --test-threads=1
+        env:
+          INSTA_UPDATE: new
+          CHANTO_VISUAL_OUT: ${{ github.workspace }}/target/visual
+          CHANTO_HOME: ${{ runner.temp }}/chanto-visual-home
+          CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-visual-compat
+          TZ: UTC
+      - name: Install preview renderer
+        if: ${{ !cancelled() }}
+        uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf
+        with:
+          version: v0.12.1
+      - name: Render preview gallery
+        if: ${{ !cancelled() }}
+        run: python3 tests/visual/previews.py
+      - name: Upload UI previews and snapshot diffs
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: chanto-ui-previews
+          path: |
+            target/visual/
+            src/tui/snapshots/visual/
+          retention-days: 14
+          if-no-files-found: warn

@@ -146,7 +146,7 @@ impl Agent {
             &serde_json::to_string(&req.tools).unwrap_or_default(),
             &req.messages,
         );
-        self.emit(Event::Busy(Some("Thinking…".into())));
+        self.emit(Event::Busy(Some("Working…".into())));
         self.emit(Event::AssistantStart);
         let env = self.env.clone();
         let quiet = self.depth > 0;
@@ -213,7 +213,8 @@ impl Agent {
         // Times this request waited out a usage limit (a reset that doesn't take mustn't loop forever).
         let mut limit_waits = 0;
         let resp = loop {
-            let fut = provider.chat(&req, &mut on_delta);
+            // Masked above (`message_redactor`).
+            let fut = provider.chat_masked(&req, &mut on_delta);
             let r = tokio::select! {
                 r = fut => Some(r),
                 _ = cancel.cancelled() => None,

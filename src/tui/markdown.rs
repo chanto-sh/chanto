@@ -246,7 +246,7 @@ pub struct Logical {
 /// URLs as plain text at least as often as they write `[text](url)`, and those
 /// deserve to read as links too. Sentence punctuation that trails the URL
 /// stays outside the link, as does a `)` the URL itself did not open.
-fn link_spans(text: &str, style: Style) -> Vec<Span<'static>> {
+pub(super) fn link_spans(text: &str, style: Style) -> Vec<Span<'static>> {
     let link = style.fg(pal().link).add_modifier(Modifier::UNDERLINED);
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut at = 0;
@@ -287,6 +287,57 @@ fn link_spans(text: &str, style: Style) -> Vec<Span<'static>> {
         out.push(Span::styled(text[at..].to_string(), style));
     }
     out
+}
+
+/// Add web-link styling without changing literal text or surrounding ANSI
+/// styles. Find URLs across span boundaries, since colors can split a URL.
+pub(super) fn linkify_urls(line: &mut Line<'static>) {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    if !text.contains("http") {
+        return;
+    }
+    let mut offset = 0;
+    let ranges: Vec<_> = link_spans(&text, Style::default())
+        .into_iter()
+        .filter_map(|s| {
+            let start = offset;
+            offset += s.content.len();
+            is_link_style(s.style).then_some(start..offset)
+        })
+        .collect();
+    if ranges.is_empty() {
+        return;
+    }
+    let mut out = Vec::new();
+    offset = 0;
+    for span in std::mem::take(&mut line.spans) {
+        let end = offset + span.content.len();
+        let mut at = 0;
+        for range in &ranges {
+            let start = range.start.max(offset);
+            let stop = range.end.min(end);
+            if start >= stop {
+                continue;
+            }
+            let (start, stop) = (start - offset, stop - offset);
+            if at < start {
+                out.push(Span::styled(
+                    span.content[at..start].to_string(),
+                    span.style,
+                ));
+            }
+            out.push(Span::styled(
+                span.content[start..stop].to_string(),
+                span.style.fg(pal().link).add_modifier(Modifier::UNDERLINED),
+            ));
+            at = stop;
+        }
+        if at < span.content.len() {
+            out.push(Span::styled(span.content[at..].to_string(), span.style));
+        }
+        offset = end;
+    }
+    line.spans = out;
 }
 
 /// A run of link-styled text on a rendered line, by screen column.
@@ -917,6 +968,44 @@ pub fn ansi_lines(s: &str) -> Vec<Line<'static>> {
     lines
 }
 
+/// Split a plain summary line into spans, styling backtick runs the way the
+/// Markdown renderer styles a code span. Tool displays are ANSI text, not
+/// Markdown, so a message Chanto wrote ("Blocked: a foreground `sleep 20`
+/// only uses up time") would otherwise show its ticks. An unpaired tick is
+/// kept as text.
+pub fn code_ticks_lines(s: &str) -> Vec<Line<'static>> {
+    s.split('\n')
+        .map(|raw| {
+            let mut spans = Vec::new();
+            let mut buf = String::new();
+            let mut open = false;
+            for c in raw.chars() {
+                if c != '`' {
+                    buf.push(c);
+                    continue;
+                }
+                if open {
+                    spans.push(Span::styled(
+                        std::mem::take(&mut buf),
+                        Style::default().fg(pal().code),
+                    ));
+                } else if !buf.is_empty() {
+                    spans.push(Span::raw(std::mem::take(&mut buf)));
+                }
+                open = !open;
+            }
+            if open {
+                // No closing tick: the backtick was text all along.
+                buf.insert(0, '`');
+            }
+            if !buf.is_empty() {
+                spans.push(Span::raw(buf));
+            }
+            Line::from(spans)
+        })
+        .collect()
+}
+
 fn apply_sgr(mut st: Style, code: &str) -> Style {
     let parts: Vec<u16> = code.split(';').map(|p| p.parse().unwrap_or(0)).collect();
     let mut i = 0;
@@ -1148,6 +1237,31 @@ mod tests {
         assert!(w.len() >= 3);
         assert!(w.iter().all(|x| x.width() <= 15));
         assert!(text(&w[1]).starts_with("  "));
+    }
+
+    #[test]
+    fn plain_summaries_style_their_code_ticks() {
+        let line = &code_ticks_lines("Blocked: a foreground `sleep 20` only uses up time.")[0];
+        assert_eq!(
+            text(line),
+            "Blocked: a foreground sleep 20 only uses up time."
+        );
+        let code = line
+            .spans
+            .iter()
+            .find(|s| s.content == "sleep 20")
+            .expect("the code run is its own span");
+        assert_eq!(code.style.fg, Some(pal().code));
+
+        // A tick with no partner is text, not a code span.
+        let line = &code_ticks_lines("a lone ` tick")[0];
+        assert_eq!(text(line), "a lone ` tick");
+        assert!(line.spans.iter().all(|s| s.style.fg != Some(pal().code)));
+
+        // Each line is parsed on its own, so a tick cannot pair across lines.
+        let lines = code_ticks_lines("a `b\nc` d");
+        assert_eq!(text(&lines[0]), "a `b");
+        assert_eq!(text(&lines[1]), "c` d");
     }
 
     #[test]

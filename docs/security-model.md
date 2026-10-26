@@ -182,11 +182,16 @@ language servers, or skills and commands that run `` !`cmd` `` blocks, register
 
 ### 4. Your secrets ↔ the model and logs
 
-Known secret values (from the environment, config, `.env` files and provider
-settings) and secret-shaped strings are replaced with placeholders before
-anything goes to the model, into logs, session files or shared transcripts.
-Credentials Chanto stores itself are written with owner-only permissions, or
-to the macOS keychain.
+Known secret values (from the environment, config, `.env` files, provider
+settings and sign-in tokens) and secret-shaped strings are replaced with
+placeholders before anything goes to the model, into logs, session files,
+run event logs, event streams or shared transcripts. Masking happens in the
+provider layer every model request goes through, so side calls (compaction,
+hooks, the permission classifier) are covered like turns. Credentials Chanto
+stores itself, and background runs' records and logs, are written with
+owner-only permissions (on Unix), or to the macOS keychain. On Linux,
+Chanto's process is non-dumpable, so commands it starts can't read its
+environment from `/proc` or attach to it (nor can debuggers without root).
 
 ### 5. Local servers ↔ other programs
 
@@ -226,6 +231,27 @@ refuses to downgrade, and the scripts refuse a "latest" older than a floor
 they carry (v0.1.5, raised with each security release). Within the floor, or
 for a version asked for by name, rollback remains possible. See [Verifying a
 release](reference.md#verifying-a-release).
+
+## Repository checks and review policy
+
+Changes to `main` require a pull request and the configured CI checks, including
+tests, static analysis, secret scanning and fuzzing. Force pushes and deletion
+are blocked, and these rules apply to administrators too. Release tags are
+protected separately.
+
+Chanto currently has one maintainer. Another person's approval, code-owner
+approval and last-push approval are therefore not required. The merge queue and
+up-to-date-branch requirement are intentionally disabled; a maintainer can merge
+a passing pull request without repeatedly rebasing unrelated changes. Changes
+that overlap still need their conflicts resolved and their combined behavior
+checked.
+
+OpenSSF Scorecard's **Branch-Protection** baseline is **3** for this policy.
+Its warnings about approvals and up-to-date branches remain visible; this
+baseline records the deliberate tradeoff rather than claiming maximal branch
+protection. The separate static-analysis baseline is **10**, matching the
+published result. Other baseline drops still fail the regression workflow.
+Review this policy when more maintainers join.
 
 ## Secure design principles
 

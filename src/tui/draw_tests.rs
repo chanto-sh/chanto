@@ -122,6 +122,74 @@ async fn todos_and_status_panels() {
 }
 
 #[tokio::test]
+async fn the_todo_list_keeps_a_blank_row_above_the_status_line() {
+    let mut t = test_app();
+    t.busy = true;
+    t.todos = vec![Todo {
+        content: "ship".into(),
+        status: "in_progress".into(),
+        active_form: "shipping".into(),
+    }];
+    let rows = t.render(100, 30);
+    let last = rows
+        .iter()
+        .position(|r| r.contains("shipping"))
+        .expect("the todo row");
+    assert!(
+        rows[last + 1].trim().is_empty(),
+        "a running turn's status is not part of the list: {:?}",
+        &rows[last..last + 3]
+    );
+    assert!(
+        !rows[last + 2].trim().is_empty(),
+        "the status line follows the gap: {:?}",
+        &rows[last..last + 3]
+    );
+}
+
+#[tokio::test]
+async fn a_long_todo_is_cut_to_the_panel_with_an_ellipsis() {
+    let mut t = test_app();
+    t.todos = vec![Todo {
+        content: "fix the Windows signature check in the installer so a BOM cannot break it".into(),
+        status: "pending".into(),
+        active_form: String::new(),
+    }];
+    let rows = t.render(40, 30);
+    let row = rows
+        .iter()
+        .find(|r| r.contains("fix the"))
+        .expect("the todo row");
+    assert!(row.ends_with('…'), "cut at a word, not clipped: {row:?}");
+    assert!(row.chars().count() <= 40, "fits the panel: {row:?}");
+}
+
+#[tokio::test]
+async fn the_todo_list_says_what_it_hides() {
+    let mut t = test_app();
+    t.todos = (1..=10)
+        .map(|n| Todo {
+            content: format!("task {n}"),
+            status: "pending".into(),
+            active_form: String::new(),
+        })
+        .collect();
+    let rows = t.render(100, 30);
+    let s = rows.join("\n");
+    assert!(s.contains("task 8"), "{s}");
+    assert!(!s.contains("task 9"), "only eight fit: {s}");
+    let more = rows
+        .iter()
+        .position(|r| r.contains("2 more"))
+        .unwrap_or_else(|| panic!("the count is drawn: {s}"));
+    assert!(
+        rows[more + 1].trim().is_empty(),
+        "and the panel still leaves room under it: {:?}",
+        &rows[more..more + 2]
+    );
+}
+
+#[tokio::test]
 async fn a_permission_dialog_replaces_the_prompt() {
     let mut t = test_app();
     let (tx, _rx) = oneshot::channel();
@@ -370,7 +438,6 @@ async fn the_footer_shows_mode_hints_and_session_facts() {
     let footer = t.render(200, 20).pop().unwrap();
     for part in [
         "custom status",
-        "⎇ feature/x",
         "PR #3 checks failing",
         "$1.25",
         "33 tok/s",
@@ -379,6 +446,14 @@ async fn the_footer_shows_mode_hints_and_session_facts() {
     ] {
         assert!(footer.contains(part), "{part}: {footer}");
     }
+    assert!(!footer.contains("feature/x"), "{footer}");
+    *t.pr_status.lock().unwrap() = None;
+    assert!(t.render(200, 20).pop().unwrap().contains("⎇ feature/x"));
+    t.env.set_model("deepseek/deepseek-flash");
+    let footer = t.render(200, 20).pop().unwrap();
+    assert!(footer.contains("deepseek-flash"), "{footer}");
+    assert!(!footer.contains("deepseek/deepseek-flash"), "{footer}");
+    t.env.set_model("mock");
     // A fresh hint wins over the status text.
     t.hint = Some(("Copied".into(), Instant::now()));
     assert!(t.render(200, 20).pop().unwrap().contains("Copied"));
