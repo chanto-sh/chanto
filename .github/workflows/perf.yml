@@ -7,6 +7,12 @@
 # (one-sided Mann-Whitney U at alpha), or when it is slower by more than
 # large_change. See tests/perf/gate.py.
 #
+# Every platform is measured: a regression that only shows up where the code
+# takes a different path (libc, the allocator, process startup) would otherwise
+# land unnoticed. GitHub's standard runners are free for a public repository,
+# macOS and Windows included; the cost is build time, so the three run in
+# parallel.
+#
 # The job is expected to be a required check; it needs no secrets and runs
 # read-only, so pull requests from forks are measured the same way.
 name: perf
@@ -51,14 +57,31 @@ jobs:
     # The merge queue and manual runs always measure; a pull request only when
     # it changes Rust.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true') }}
-    runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    strategy:
+      # One platform failing says nothing about the other two.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+          - os: macos-latest
+          # Two jobs, like the rest of CI: a release build uses every core the
+          # runner has and this one is close to its memory limit.
+          - os: windows-2022
+            cargo_flags: -j 2
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     permissions:
       contents: read
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       # The commit the pull request is based on, or the merge queue's target.
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+      # setup-python is not used, and the Windows image calls it `python`.
+      PYTHON: ${{ startsWith(matrix.os, 'windows') && 'python' || 'python3' }}
+    defaults:
+      # Git Bash on Windows as well, so one script serves all three.
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -68,36 +91,56 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: perf
+      # Git Bash is handed Windows paths in $RUNNER_TEMP and
+      # $CARGO_TARGET_DIR but its own commands need POSIX ones, and the built
+      # binary carries an extension here.
+      - name: Paths
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            temp="$(cygpath -u "$RUNNER_TEMP")"
+            target="$(cygpath -u "$CARGO_TARGET_DIR")"
+            bin=chanto.exe
+          else
+            temp="$RUNNER_TEMP"
+            target="$CARGO_TARGET_DIR"
+            bin=chanto
+          fi
+          {
+            echo "BENCH_TEMP=$temp"
+            echo "BENCH_TARGET=$target"
+            echo "BENCH_BIN=$bin"
+          } >> "$GITHUB_ENV"
       # The gate's own tests are pure Python: run them before the builds.
       - name: Test the gate
-        run: python3 -m unittest discover -s tests/perf -p 'test_*.py'
+        run: $PYTHON -m unittest discover -s tests/perf -p 'test_*.py'
       - name: Build the pull request
         run: |
-          cargo build --release --locked
-          cp "$CARGO_TARGET_DIR/release/chanto" "$RUNNER_TEMP/chanto-head"
+          cargo build --release --locked ${{ matrix.cargo_flags }}
+          cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-head"
       # Built second, in the same target directory: the dependencies are
       # already compiled, so this is mostly the crate itself.
       - name: Build the base commit
         if: env.BASE_SHA != ''
         run: |
-          git worktree add --detach "$RUNNER_TEMP/base" "$BASE_SHA"
-          cargo build --release --locked --manifest-path "$RUNNER_TEMP/base/Cargo.toml"
-          cp "$CARGO_TARGET_DIR/release/chanto" "$RUNNER_TEMP/chanto-base"
+          git worktree add --detach "$BENCH_TEMP/base" "$BASE_SHA"
+          cargo build --release --locked ${{ matrix.cargo_flags }} \
+            --manifest-path "$BENCH_TEMP/base/Cargo.toml"
+          cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-base"
       - name: Measure
         run: |
           base=()
-          if [ -f "$RUNNER_TEMP/chanto-base" ]; then
-            base=(--base "$RUNNER_TEMP/chanto-base")
+          if [ -f "$BENCH_TEMP/chanto-base" ]; then
+            base=(--base "$BENCH_TEMP/chanto-base")
           fi
-          python3 tests/perf/gate.py \
-            --head "$RUNNER_TEMP/chanto-head" "${base[@]}" \
-            --json "$RUNNER_TEMP/perf.json" \
-            --summary-md "$RUNNER_TEMP/perf.md"
+          $PYTHON tests/perf/gate.py \
+            --head "$BENCH_TEMP/chanto-head" "${base[@]}" \
+            --json "$BENCH_TEMP/perf.json" \
+            --summary-md "$BENCH_TEMP/perf.md"
       - name: Upload the report
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: chanto-perf
+          name: chanto-perf-${{ matrix.os }}
           path: ${{ runner.temp }}/perf.json
           retention-days: 14
           if-no-files-found: warn

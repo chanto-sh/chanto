@@ -19,8 +19,9 @@ a lucky run of a few milliseconds from failing a pull request; the hard cap
 catches a real regression that noise spread over both groups.
 
 Runs of the two binaries are interleaved, and the binaries are measured
-through the kernel's rusage (`wait4`), not the wall clock, so scheduling and
-an idle machine do not count.
+through the kernel, not the wall clock, so scheduling and an idle machine do
+not count: rusage (`wait4`) on Unix, `GetProcessTimes` and
+`GetProcessMemoryInfo` on Windows.
 
     python3 tests/perf/gate.py --head target/release/chanto
     python3 tests/perf/gate.py --head target/release/chanto --base /tmp/base/chanto
@@ -30,6 +31,7 @@ the same table to `$GITHUB_STEP_SUMMARY` when that is set. Exits 1 when a gate
 fails and 2 when the measurement itself is unusable.
 """
 import argparse
+import collections
 import json
 import math
 import os
@@ -52,6 +54,10 @@ LABELS = {
     "turn_cpu_ms": "CPU per request (ms)",
     "turn_rss_mb": "Peak RSS, 40 turns (MB)",
 }
+
+# The kernels report CPU and peak memory the same way, but not through the
+# same call; a measurement is one of these.
+Usage = collections.namedtuple("Usage", "cpu_ms rss_mb")
 
 
 class GateError(Exception):
@@ -92,12 +98,18 @@ def child_env(home, port):
     for k in ("LANG", "LC_ALL"):
         if k in os.environ:
             env[k] = os.environ[k]
+    # Windows will not start a child without these, and Chanto finds its
+    # temporary and configuration directories through them.
+    for k in ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "PATHEXT",
+              "USERPROFILE", "APPDATA", "LOCALAPPDATA"):
+        if k in os.environ:
+            env[k] = os.environ[k]
     env["TZ"] = "UTC"
     return env
 
 
-def wait_with_rusage(binary, args, env):
-    """Run one child to completion and return its rusage and exit code."""
+def wait_with_usage(binary, args, env):
+    """Run one child to completion and return its usage and exit code."""
     p = subprocess.Popen(
         [binary, *args],
         env=env,
@@ -105,10 +117,15 @@ def wait_with_rusage(binary, args, env):
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
+    if sys.platform == "win32":
+        code = p.wait()
+        # Read after the exit, so the numbers are final; the handle stays
+        # readable until Popen closes it.
+        return windows_usage(p), code
     _, status, ru = os.wait4(p.pid, 0)
     # Reaped above, so tell Popen not to wait again.
     p.returncode = os.waitstatus_to_exitcode(status)
-    return ru, p.returncode
+    return Usage((ru.ru_utime + ru.ru_stime) * 1000, peak_rss_mb(ru)), p.returncode
 
 
 def peak_rss_mb(ru):
@@ -116,6 +133,61 @@ def peak_rss_mb(ru):
     if sys.platform == "darwin":
         return ru.ru_maxrss / (1024 * 1024)
     return ru.ru_maxrss / 1024
+
+
+def windows_usage(p):
+    """CPU ms and peak working set MB of a child that has exited.
+
+    Windows has no `wait4`. The kernel counts CPU in 100 ns units in
+    `GetProcessTimes` and the peak working set in `GetProcessMemoryInfo`
+    (`PROCESS_MEMORY_COUNTERS_EX`), the same numbers the counters report, and
+    both stay readable on the handle after the process exits.
+    """
+    import ctypes
+
+    class FileTime(ctypes.Structure):
+        _fields_ = [("low", ctypes.c_uint32), ("high", ctypes.c_uint32)]
+
+    class Counters(ctypes.Structure):
+        _fields_ = [
+            ("cb", ctypes.c_uint32),
+            ("page_faults", ctypes.c_uint32),
+            ("peak_working_set", ctypes.c_size_t),
+            ("working_set", ctypes.c_size_t),
+            ("quota_peak_paged", ctypes.c_size_t),
+            ("quota_paged", ctypes.c_size_t),
+            ("quota_peak_nonpaged", ctypes.c_size_t),
+            ("quota_nonpaged", ctypes.c_size_t),
+            ("pagefile", ctypes.c_size_t),
+            ("peak_pagefile", ctypes.c_size_t),
+            ("private", ctypes.c_size_t),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    psapi = ctypes.WinDLL("psapi", use_last_error=True)
+    handle = ctypes.c_void_p(int(p._handle))
+    created, exited, kernel, user = FileTime(), FileTime(), FileTime(), FileTime()
+    if not kernel32.GetProcessTimes(
+        handle,
+        ctypes.byref(created),
+        ctypes.byref(exited),
+        ctypes.byref(kernel),
+        ctypes.byref(user),
+    ):
+        raise GateError(f"GetProcessTimes failed: {ctypes.get_last_error()}")
+    counters = Counters()
+    counters.cb = ctypes.sizeof(counters)
+    if not psapi.GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
+        raise GateError(f"GetProcessMemoryInfo failed: {ctypes.get_last_error()}")
+
+    def ticks(ft):
+        """A FILETIME as the number of 100 ns units it holds."""
+        return (ft.high << 32) | ft.low
+
+    return Usage(
+        (ticks(kernel) + ticks(user)) / 10_000,
+        counters.peak_working_set / (1024 * 1024),
+    )
 
 
 def chat_requests(log):
@@ -167,12 +239,12 @@ class StartupBench:
 
     def run(self, binary):
         """CPU ms and peak RSS MB of one `-p` request."""
-        ru, code = wait_with_rusage(
+        usage, code = wait_with_usage(
             binary, ["-p", "hello", "--cwd", str(self.work)], self.env
         )
         if code != 0:
             raise GateError(f"{binary} exited {code} on a one-shot run")
-        return (ru.ru_utime + ru.ru_stime) * 1000, peak_rss_mb(ru)
+        return usage.cpu_ms, usage.rss_mb
 
     def close(self):
         self.mock.kill()
@@ -187,7 +259,7 @@ def turn_run(binary, work, home, project, scenario, turns, tag):
     log = work / f"turns-{tag}.log"
     mock, port = mock_start(scenario, log)
     try:
-        ru, code = wait_with_rusage(
+        usage, code = wait_with_usage(
             binary,
             ["-p", "read the files as I direct", "--cwd", str(project)],
             child_env(home, port),
@@ -199,7 +271,7 @@ def turn_run(binary, work, home, project, scenario, turns, tag):
     n = chat_requests(log)
     if n != turns + 1:
         raise GateError(f"{binary} made {n} of {turns + 1} requests in the {turns}-turn run")
-    return (ru.ru_utime + ru.ru_stime) * 1000 / n, peak_rss_mb(ru)
+    return usage.cpu_ms / n, usage.rss_mb
 
 
 def alternating(names, i):
@@ -290,13 +362,15 @@ def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
     }
 
 
+PLATFORM = {"darwin": "darwin", "win32": "windows"}.get(sys.platform, "linux")
+
+
 def load_config(path):
     cfg = json.loads(Path(path).read_text())
-    platform = "darwin" if sys.platform == "darwin" else "linux"
-    if platform not in cfg["budgets"]:
-        raise GateError(f"{path} has no {platform} ceilings")
-    cfg["platform"] = platform
-    cfg["ceilings"] = cfg["budgets"][platform]
+    if PLATFORM not in cfg["budgets"]:
+        raise GateError(f"{path} has no {PLATFORM} ceilings")
+    cfg["platform"] = PLATFORM
+    cfg["ceilings"] = cfg["budgets"][PLATFORM]
     return cfg
 
 
