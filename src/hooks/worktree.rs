@@ -108,14 +108,15 @@ pub fn finish_hook_worktree(
     dir: &std::path::Path,
 ) {
     let git = |args: &[&str], at: &std::path::Path| {
-        std::process::Command::new("git")
+        crate::hostgit::command(at)
             .args(args)
-            .current_dir(at)
             .output()
             .ok()
             .filter(|o| o.status.success())
     };
-    if git(&["status", "--porcelain"], dir).is_some_and(|o| !o.stdout.is_empty()) {
+    if git(&["status", "--porcelain", "--ignore-submodules=all"], dir)
+        .is_some_and(|o| !o.stdout.is_empty())
+    {
         eprintln!("Changes are in {}; kept it.", dir.display());
         return;
     }

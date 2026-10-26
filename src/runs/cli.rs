@@ -358,6 +358,8 @@ pub async fn apply_remote(
     run: &Run,
     pr: bool,
 ) -> Result<String> {
+    // The id names the download path below; the branch and base reach git.
+    super::git::check_imported(run)?;
     let bytes = c.get_bytes(&format!("/runs/{}/bundle", run.id)).await?;
     let path = std::env::temp_dir().join(format!(
         "chanto-apply-{}-{}.bundle",

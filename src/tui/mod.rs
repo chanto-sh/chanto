@@ -1084,14 +1084,7 @@ struct Search {
 }
 
 pub(crate) fn git_branch(cwd: &std::path::Path) -> Option<String> {
-    let o = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    o.status
-        .success()
-        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    crate::hostgit::read(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
 }
 
 const VERBS: &[&str] = &[

@@ -182,7 +182,7 @@ async fn report_network_blocks(domains: Vec<String>, ctx: &Ctx) -> String {
     report
 }
 
-fn build_command_with(
+pub(crate) fn build_command_with(
     script: &str,
     cwd: &std::path::Path,
     sandbox: Option<&crate::config::SandboxConfig>,
