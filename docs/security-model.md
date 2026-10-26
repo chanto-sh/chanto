@@ -232,6 +232,27 @@ they carry (v0.1.5, raised with each security release). Within the floor, or
 for a version asked for by name, rollback remains possible. See [Verifying a
 release](reference.md#verifying-a-release).
 
+## Repository checks and review policy
+
+Changes to `main` require a pull request and the configured CI checks, including
+tests, static analysis, secret scanning and fuzzing. Force pushes and deletion
+are blocked, and these rules apply to administrators too. Release tags are
+protected separately.
+
+Chanto currently has one maintainer. Another person's approval, code-owner
+approval and last-push approval are therefore not required. The merge queue and
+up-to-date-branch requirement are intentionally disabled; a maintainer can merge
+a passing pull request without repeatedly rebasing unrelated changes. Changes
+that overlap still need their conflicts resolved and their combined behavior
+checked.
+
+OpenSSF Scorecard's **Branch-Protection** baseline is **3** for this policy.
+Its warnings about approvals and up-to-date branches remain visible; this
+baseline records the deliberate tradeoff rather than claiming maximal branch
+protection. The separate static-analysis baseline is **10**, matching the
+published result. Other baseline drops still fail the regression workflow.
+Review this policy when more maintainers join.
+
 ## Secure design principles
 
 - **Least privilege:** asking is the default; modes and rules widen it only on
