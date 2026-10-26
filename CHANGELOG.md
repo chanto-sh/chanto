@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Clickable links.** In full-screen mode, a click on a visible web link opens it in your browser even when the terminal does not support OSC 8. Wrapped URLs keep their full destination, and links in provider notices, user messages and subagent transcripts work too. Dragging still selects text; non-web schemes and control characters are rejected.
+- **UI regression tests.** Deterministic text and style snapshots cover 72 terminal frames across common UI states, widths and themes. CI publishes a PNG/GIF preview gallery for review.
 
 - **Usage limits.** The footer shows the most-used reported quota window, its local reset time and `/usage`, dropping extra details on narrow terminals. A heads-up appears once at 25% and 10% remaining and re-arms after a window resets. Missing quota data is never estimated.
 

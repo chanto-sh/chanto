@@ -159,3 +159,6 @@ landlock = "0.4.7"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Isolation", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Console", "Win32_System_StationsAndDesktops", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+insta = "1"

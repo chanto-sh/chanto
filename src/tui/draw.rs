@@ -780,18 +780,22 @@ impl App {
     pub(super) fn draw_status(&mut self, f: &mut Frame, area: Rect) {
         let mut lines = Vec::new();
         if self.busy {
-            let el = self.busy_since.elapsed();
+            let el = view_time::elapsed(self.busy_since);
             let frame = busy_frame(crate::a11y::reduce_motion(), el.as_millis());
             // While reasoning is streaming, use progressive wording so a slow
             // model reads as still working rather than frozen.
             let thinking = self.open_think.and_then(|i| match &self.blocks[i].kind {
-                Kind::Thinking { started, .. } => Some(started.elapsed().as_secs()),
+                Kind::Thinking { started, .. } => Some(view_time::elapsed(*started).as_secs()),
                 _ => None,
             });
             // A prompt waiting on the user isn't the model thinking, and the
             // time spent deciding isn't counted (see `sync_wait`).
             let waiting = self.waiting_on_user();
-            let el = el.saturating_sub(self.wait_started.map(|t| t.elapsed()).unwrap_or_default());
+            let el = el.saturating_sub(
+                self.wait_started
+                    .map(view_time::elapsed)
+                    .unwrap_or_default(),
+            );
             let verb = match thinking {
                 _ if waiting => "Waiting for you".to_string(),
                 Some(s) => crate::util::capitalize(thinking_verb(s)),
@@ -1471,7 +1475,7 @@ impl App {
                 ));
                 if let Some(reset) = w
                     .resets_at
-                    .and_then(|at| quota_reset(at, chrono::Utc::now().timestamp()))
+                    .and_then(|at| quota_reset(at, view_time::timestamp()))
                 {
                     right.push((reset, Style::default().fg(color), 5));
                 }
