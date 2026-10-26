@@ -148,6 +148,8 @@ impl Provider {
         let mut partial: std::collections::BTreeMap<u64, (String, String, String)> =
             Default::default();
         let mut done: std::collections::BTreeMap<u64, Value> = Default::default();
+        let mut refused = false;
+        let mut refusal_text_sent = false;
         sse_json(self.body(resp), |v| {
             let idx = v["output_index"].as_u64().unwrap_or(0);
             match v["type"].as_str().unwrap_or("") {
@@ -157,6 +159,20 @@ impl Provider {
                         out.text.push_str(t);
                         on_delta(Delta::Text(t.to_string()));
                     }
+                }
+                "response.refusal.delta" | "response.refusal.done" => {
+                    let delta = v["type"] == "response.refusal.delta";
+                    if delta || !refusal_text_sent {
+                        let t = v[if delta { "delta" } else { "refusal" }]
+                            .as_str()
+                            .unwrap_or("");
+                        if !t.is_empty() {
+                            refusal_text_sent = true;
+                            out.text.push_str(t);
+                            on_delta(Delta::Text(t.to_string()));
+                        }
+                    }
+                    refused = true;
                 }
                 "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
                     let t = v["delta"].as_str().unwrap_or("");
@@ -197,6 +213,9 @@ impl Provider {
                 }
                 "response.completed" | "response.incomplete" => {
                     let r = &v["response"];
+                    for (i, item) in r["output"].as_array().into_iter().flatten().enumerate() {
+                        done.entry(i as u64).or_insert_with(|| item.clone());
+                    }
                     out.usage.prompt_tokens = r["usage"]["input_tokens"].as_u64().unwrap_or(0);
                     out.usage.completion_tokens = r["usage"]["output_tokens"].as_u64().unwrap_or(0);
                     out.usage.cached_tokens = r["usage"]["input_tokens_details"]["cached_tokens"]
@@ -278,10 +297,39 @@ impl Provider {
                 ));
             }
         }
+        if !refusal_text_sent {
+            for it in done.values().filter(|it| it["type"] == "message") {
+                for c in it["content"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter(|c| c["type"] == "refusal")
+                {
+                    refused = true;
+                    let t = c["refusal"].as_str().unwrap_or("");
+                    if !t.is_empty() {
+                        let t = if out.text.is_empty() {
+                            t.to_string()
+                        } else {
+                            format!("\n\n{t}")
+                        };
+                        out.text.push_str(&t);
+                        on_delta(Delta::Text(t));
+                    }
+                }
+            }
+        }
         if out.text.is_empty() {
             for it in done.values().filter(|it| it["type"] == "message") {
                 for c in it["content"].as_array().into_iter().flatten() {
-                    out.text.push_str(c["text"].as_str().unwrap_or(""));
+                    let t = if c["type"] == "refusal" {
+                        refused = true;
+                        c["refusal"].as_str().unwrap_or("")
+                    } else {
+                        c["text"].as_str().unwrap_or("")
+                    };
+                    out.text.push_str(t);
+                    on_delta(Delta::Text(t.to_string()));
                 }
             }
         }
@@ -301,6 +349,9 @@ impl Provider {
         }
         if !out.tool_calls.is_empty() && out.finish_reason.as_deref() == Some("stop") {
             out.finish_reason = Some("tool_calls".into());
+        }
+        if refused && out.finish_reason.as_deref() != Some("content_filter") {
+            out.finish_reason = Some("refusal".into());
         }
         Ok(out)
     }

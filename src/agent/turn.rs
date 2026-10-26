@@ -491,6 +491,11 @@ impl Agent {
                 ));
             }
             let mut text = resp.text.clone();
+            if resp.safety_stopped() {
+                self.messages.push(Message::assistant(text.clone()));
+                self.stats.turns += 1;
+                return Ok(TurnEnd::Done(text));
+            }
             let mut calls = resp.tool_calls.clone();
             if calls.is_empty()
                 && (text.contains("<tool_call>")

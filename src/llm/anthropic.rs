@@ -537,9 +537,6 @@ impl AnthropicStream {
                 _ => {}
             }
         }
-        if out.finish_reason.as_deref() == Some("refusal") && out.text.trim().is_empty() {
-            out.text = "(The model declined to respond to this request.)".into();
-        }
         // Thinking must be sent back unchanged with the turn it belongs to.
         if blocks
             .iter()
