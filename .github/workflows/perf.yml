@@ -57,6 +57,9 @@ jobs:
     # The merge queue and manual runs always measure; a pull request only when
     # it changes Rust.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true') }}
+    # Spelled out rather than left to the default, which also lists the extra
+    # matrix values and would change the check's name.
+    name: bench (${{ matrix.os }})
     strategy:
       # One platform failing says nothing about the other two.
       fail-fast: false
