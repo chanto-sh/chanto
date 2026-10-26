@@ -255,6 +255,8 @@ jobs:
   # provenance and a keyless cosign signature, both from this workflow's
   # OIDC identity. See packaging/docker/.
   container:
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
@@ -382,3 +384,75 @@ jobs:
     # Only the fallback token npm.yml declares, not every repository secret.
     secrets:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  verify:
+    name: verify published release
+    needs: [release, homebrew, crates, npm, container]
+    if: ${{ !cancelled() && needs.release.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Verify public archives and provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir dist
+          openssl base64 -d -A -in dist/SHA256SUMS.sig -out "$RUNNER_TEMP/sig.bin"
+          openssl pkeyutl -verify -pubin -inkey packaging/release-signing-key.pub -rawin \
+            -in dist/SHA256SUMS -sigfile "$RUNNER_TEMP/sig.bin"
+          ssh-keygen -Y verify -f packaging/release-allowed-signers -I chanto-release -n chanto-release \
+            -s dist/SHA256SUMS.sshsig < dist/SHA256SUMS
+          (cd dist && sha256sum --strict --check SHA256SUMS)
+          for target in aarch64-apple-darwin x86_64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl x86_64-pc-windows-msvc; do
+            name="chanto-$TAG-$target"
+            extension=tar.gz
+            case "$target" in *windows*) extension=zip;; esac
+            gh attestation verify "dist/$name.$extension" --repo "$GITHUB_REPOSITORY" \
+              --bundle "dist/$name.intoto.jsonl" \
+              --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+              --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA"
+          done
+          name="chanto-$TAG-x86_64-unknown-linux-musl"
+          tar -xzf "dist/$name.tar.gz" -C "$RUNNER_TEMP" "$name/chanto"
+          test "$("$RUNNER_TEMP/$name/chanto" --version)" = "chanto ${TAG#v}"
+      - name: Require successful distribution jobs
+        env:
+          HOMEBREW: ${{ needs.homebrew.result }}
+          CRATES: ${{ needs.crates.result }}
+          NPM: ${{ needs.npm.result }}
+          CONTAINER: ${{ needs.container.result }}
+        run: |
+          test "$HOMEBREW" = success
+          test "$CRATES" = success
+          test "$NPM" = success
+          test "$CONTAINER" = success
+      - name: Verify public package availability
+        env:
+          TAG: ${{ github.ref_name }}
+        run: python3 packaging/check-published.py "$TAG" dist/SHA256SUMS --wait-seconds 600
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: Verify published container signature and provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DIGEST: ${{ needs.container.outputs.digest }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$DIGEST"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}@$DIGEST"
+          cosign verify "$image" \
+            --certificate-identity "https://github.com/$GITHUB_REPOSITORY/.github/workflows/release.yml@refs/tags/$TAG" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          gh attestation verify "oci://$image" --repo "$GITHUB_REPOSITORY" \
+            --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
+            --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA"
