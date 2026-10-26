@@ -802,11 +802,19 @@ impl App {
                 ));
             }
             detail.push_str(" · esc to interrupt)");
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {frame} "), Style::default().fg(pal().accent)),
-                Span::styled(format!("{verb}…"), Style::default().fg(pal().accent)),
-                Span::styled(detail, Style::default().fg(pal().dim)),
-            ]));
+            lines.push(Line::from({
+                let mut spans = vec![Span::styled(
+                    format!(" {frame} "),
+                    Style::default().fg(pal().accent),
+                )];
+                spans.extend(shimmer_spans(
+                    &format!("{verb}…"),
+                    pal().accent,
+                    el.as_millis(),
+                ));
+                spans.push(Span::styled(detail, Style::default().fg(pal().dim)));
+                spans
+            }));
         }
         for (i, q) in self.queue.iter().take(3).enumerate() {
             let hint = if i == 0 {

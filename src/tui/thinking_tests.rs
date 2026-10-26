@@ -155,6 +155,29 @@ fn the_title_icon_is_steady_while_busy() {
 }
 
 #[test]
+fn the_shimmer_sweeps_across_the_busy_verb() {
+    let base = Color::Rgb(200, 120, 60);
+    let spans = shimmer_spans("Working…", base, 350);
+    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "Working…", "the words are unchanged, only split");
+    assert!(
+        spans.iter().any(|s| s.style.fg != Some(base)),
+        "part of the band is lifted toward white"
+    );
+    // The sweep returns to where it started after one period.
+    assert_eq!(
+        shimmer_spans("Working…", base, 0),
+        shimmer_spans("Working…", base, SHIMMER_PERIOD_MS)
+    );
+    // A theme parsed without RGB, or an empty label, stays one flat span.
+    for (text, color) in [("Working…", Color::Blue), ("", base)] {
+        let flat = shimmer_spans(text, color, 300);
+        assert_eq!(flat.len(), 1);
+        assert_eq!(flat[0].style.fg, Some(color));
+    }
+}
+
+#[test]
 fn the_window_title_names_the_project_but_not_twice() {
     assert_eq!(window_title("❯", Some("api")), "❯ api — chanto");
     assert_eq!(window_title("✓", Some("chanto")), "✓ chanto");

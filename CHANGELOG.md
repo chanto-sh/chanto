@@ -6,6 +6,7 @@
 
 - **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
 
+- **Working.** The status line says "Working…" instead of "Thinking…", and a highlight sweeps across the verb every 1.4s so a slow model call reads as moving before anything streams. Reduced motion and themes without RGB colours keep the flat accent.
 - **Provider safety messages.** Refusal explanations and links now appear in streamed replies and transcripts. A provider safety filter that supplies no explanation shows a clear notice, and filtered turns end without retries or tool execution.
 - **Streaming and large requests.** Stream framing borrows complete lines and compacts once per network read, avoiding per-line allocations and repeated buffer shifts. Buffered model request retries share the serialized body instead of copying it. The standard 40-turn overhead benchmark shows no measurable CPU or peak-memory improvement from these changes.
 

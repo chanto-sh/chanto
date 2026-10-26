@@ -146,7 +146,7 @@ impl Agent {
             &serde_json::to_string(&req.tools).unwrap_or_default(),
             &req.messages,
         );
-        self.emit(Event::Busy(Some("Thinking…".into())));
+        self.emit(Event::Busy(Some("Working…".into())));
         self.emit(Event::AssistantStart);
         let env = self.env.clone();
         let quiet = self.depth > 0;
