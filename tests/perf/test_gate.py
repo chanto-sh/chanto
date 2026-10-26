@@ -108,18 +108,14 @@ class ConfigTest(unittest.TestCase):
         for platform, ceilings in self.cfg["budgets"].items():
             self.assertEqual(sorted(ceilings), sorted(gate.LABELS), platform)
         self.assertEqual(sorted(self.cfg["tolerance"]), sorted(gate.LABELS))
-        self.assertEqual(sorted(self.cfg["large_change"]), sorted(gate.LABELS))
 
     def test_the_thresholds_are_sane(self):
         self.assertLess(0, self.cfg["alpha"])
         self.assertLess(self.cfg["alpha"], 0.5)
-        for metric, value in self.cfg["tolerance"].items():
+        self.assertLess(0, self.cfg["large_change"])
+        for value in self.cfg["tolerance"].values():
             self.assertLess(0, value)
-            # A change that fails without a p-value must be worse than one that
-            # only fails with one.
-            self.assertLess(value, self.cfg["large_change"][metric])
-        for value in self.cfg["large_change"].values():
-            self.assertLess(value, 0.5)
+            self.assertLess(value, self.cfg["large_change"])
 
     def test_the_published_workload_is_what_the_gate_runs(self):
         # docs/reference.md describes the public benchmark as 40 turns of

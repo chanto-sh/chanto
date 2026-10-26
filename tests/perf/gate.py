@@ -351,7 +351,7 @@ def run(head, base, config):
             cfg["ceilings"].get(metric),
             cfg["tolerance"][metric],
             cfg["alpha"],
-            cfg["large_change"][metric],
+            cfg["large_change"],
         )
     report = {
         "platform": cfg["platform"],

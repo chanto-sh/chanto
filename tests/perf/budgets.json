@@ -37,12 +37,7 @@
     "turn_cpu_ms": 0.04,
     "turn_rss_mb": 0.08
   },
-  "large_change": {
-    "startup_cpu_ms": 0.10,
-    "startup_rss_mb": 0.12,
-    "turn_cpu_ms": 0.10,
-    "turn_rss_mb": 0.12
-  },
+  "large_change": 0.10,
   "budgets": {
     "linux": {
       "startup_cpu_ms": 80,
