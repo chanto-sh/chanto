@@ -207,7 +207,6 @@ def alternating(names, i):
     return names if i % 2 == 0 else list(reversed(names))
 
 
-
 def aggregate(metric, samples):
     """CPU is a median: one slow rep should not speak for the run. Peak RSS is
     a maximum: the gate exists to catch a blow-up, not an average."""
@@ -234,8 +233,8 @@ def mann_whitney_greater(base, head):
     """One-sided p that `head` values are stochastically larger than `base`.
 
     Normal approximation with tie correction and a continuity correction;
-    the sample sizes here (15 and 5) are large enough for it, and it needs no
-    dependency beyond the standard library.
+    the sample sizes here (15 startup runs, 10 sessions) are large enough for
+    it, and it needs no dependency beyond the standard library.
     """
     n1, n2 = len(base), len(head)
     if n1 < 2 or n2 < 2:
@@ -294,7 +293,7 @@ def load_config(path):
     cfg = json.loads(Path(path).read_text())
     platform = "darwin" if sys.platform == "darwin" else "linux"
     if platform not in cfg["budgets"]:
-        raise GateError(f"tests/perf/budgets.json has no {platform} ceilings")
+        raise GateError(f"{path} has no {platform} ceilings")
     cfg["platform"] = platform
     cfg["ceilings"] = cfg["budgets"][platform]
     return cfg
