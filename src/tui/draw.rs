@@ -173,6 +173,7 @@ impl App {
         // Plain text of the last frame, rebuilt from scratch: the selection reads
         // it back and paints over it, so it must never be a frame stale.
         self.row_text = vec![None; area.height as usize];
+        self.screen_links.clear();
         let input_w = w.saturating_sub(6) as usize;
         let (rows, cursor) = self.input.layout(input_w);
         let hs = self.heights(
@@ -343,7 +344,7 @@ impl App {
         }
         let links = link_regions(&shown, area.width);
         f.render_widget(Paragraph::new(shown), area);
-        paint_links(f.buffer_mut(), area, &links);
+        self.paint_screen_links(f.buffer_mut(), area, &links);
     }
 
     pub(super) fn draw_transcript(&mut self, f: &mut Frame, area: Rect) {
@@ -436,7 +437,7 @@ impl App {
         // The help overlay is drawn over these rows later; decorating them
         // would leave its cells carrying the transcript's link attributes.
         if !self.help {
-            paint_links(f.buffer_mut(), widget, &links);
+            self.paint_screen_links(f.buffer_mut(), widget, &links);
         }
         if self.scroll > 0 {
             let s = format!(
@@ -764,14 +765,14 @@ impl App {
             let text: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect();
             self.record_row(area.y + i as u16, area.x + 1, &text);
         }
-        f.render_widget(
-            Paragraph::new(visible),
-            Rect {
-                x: area.x + 1,
-                width,
-                ..area
-            },
-        );
+        let widget = Rect {
+            x: area.x + 1,
+            width,
+            ..area
+        };
+        let links = link_regions(&visible, width);
+        f.render_widget(Paragraph::new(visible), widget);
+        self.paint_screen_links(f.buffer_mut(), widget, &links);
     }
 
     pub(super) fn draw_status(&mut self, f: &mut Frame, area: Rect) {

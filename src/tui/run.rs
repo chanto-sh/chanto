@@ -215,6 +215,8 @@ impl App {
             click_count: 0,
             click_toggle: None,
             row_text: Vec::new(),
+            screen_links: Vec::new(),
+            open_link: None,
             help: false,
             scroll: 0,
             scroll_anchor: None,
@@ -695,6 +697,16 @@ pub async fn run(cli: Cli) -> Result<()> {
             }
         }
         dirty |= app.drop_answered_dialogs();
+        if let Some(url) = app.open_link.take() {
+            app.hint = Some((
+                match crate::mcp_auth::try_open_browser(&url) {
+                    Ok(()) => "Opening link in your browser".into(),
+                    Err(e) => format!("Could not open {url}: {e}"),
+                },
+                Instant::now(),
+            ));
+            dirty = true;
+        }
         if app.open_editor || app.edit_proposal {
             let proposal = match &app.dialog {
                 Some(Dialog::Permission { req, .. }) if app.edit_proposal => req.proposed.clone(),

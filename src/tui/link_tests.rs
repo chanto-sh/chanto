@@ -52,6 +52,23 @@ fn two_urls_on_consecutive_lines_stay_separate() {
 }
 
 #[test]
+fn colored_output_links_across_style_boundaries_without_changing_text() {
+    let mut lines = markdown::ansi_lines(
+        "\x1b[31merror:\x1b[0m `literal` https://exa\x1b[32mmple.com/report\x1b[0m now",
+    );
+    let original_style = lines[0].spans[0].style;
+    for line in &mut lines {
+        markdown::linkify_urls(line);
+    }
+    let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "error: `literal` https://example.com/report now");
+    assert_eq!(lines[0].spans[0].style, original_style);
+    let targets = link_regions(&lines, 80);
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].3, "https://example.com/report");
+}
+
+#[test]
 fn painting_a_link_wraps_each_cell_in_osc8() {
     let mut buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 20, 1));
     buf.set_string(0, 0, "hello", Style::default());
@@ -81,10 +98,93 @@ fn a_link_url_cannot_carry_control_characters() {
         area,
         &[(0, 0, 1, "https://x\x1b]0;evil\x07".to_string())],
     );
-    assert_eq!(
-        buf[(0, 0)].symbol(),
-        "\x1b]8;;https://x]0;evil\x1b\\x\x1b]8;;\x1b\\"
+    assert_eq!(buf[(0, 0)].symbol(), "x");
+}
+
+#[test]
+fn web_navigation_rejects_non_web_schemes() {
+    let area = Rect::new(0, 0, 10, 1);
+    for url in [
+        "javascript:alert(1)",
+        "file:///etc/passwd",
+        "data:text/html,hello",
+    ] {
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        buf.set_string(0, 0, "x", Style::default());
+        paint_links(&mut buf, area, &[(0, 0, 1, url.into())]);
+        assert_eq!(buf[(0, 0)].symbol(), "x", "{url}");
+    }
+}
+
+#[tokio::test]
+async fn a_click_opens_the_full_link_but_a_drag_remains_selection() {
+    use super::app_tests::*;
+    let mut t = test_app_with(|c| c.copy_on_select = Some(false), false);
+    t.push(Kind::Assistant(
+        "See [docs](https://example.com/docs).".into(),
+    ));
+    t.render(50, 24);
+    let (row, start, _, url) = t.screen_links[0].clone();
+    let event = |kind, column| crossterm::event::MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    t.on_mouse(event(MouseEventKind::Down(MouseButton::Left), start));
+    assert!(t.open_link.is_none(), "press alone never opens a link");
+    t.on_mouse(event(MouseEventKind::Up(MouseButton::Left), start));
+    assert_eq!(t.open_link.take().as_deref(), Some(url.as_str()));
+    t.last_click = None;
+    t.on_mouse(event(MouseEventKind::Down(MouseButton::Left), start));
+    t.on_mouse(event(MouseEventKind::Drag(MouseButton::Left), start + 2));
+    t.on_mouse(event(MouseEventKind::Up(MouseButton::Left), start + 2));
+    assert!(t.open_link.is_none());
+    t.help = true;
+    assert!(t.web_link_at(row, start).is_none());
+    t.help = false;
+    t.popup = Some(Popup {
+        items: vec![],
+        sel: 0,
+        kind: PopupKind::Slash,
+    });
+    assert!(t.web_link_at(row, start).is_none());
+    t.popup = None;
+    t.blocks.clear();
+    t.render(50, 24);
+    assert!(
+        t.web_link_at(row, start).is_none(),
+        "redraw clears stale targets"
     );
+}
+
+#[tokio::test]
+async fn provider_notes_and_user_urls_are_clickable() {
+    use super::app_tests::*;
+    let mut t = test_app();
+    t.push(Kind::Note(
+        "Capacity details: https://example.com/status".into(),
+        pal().error,
+    ));
+    t.push(Kind::User("https://example.com/report".into()));
+    t.render(80, 24);
+    for url in ["https://example.com/status", "https://example.com/report"] {
+        assert!(t.screen_links.iter().any(|r| r.3 == url), "{url}");
+    }
+}
+
+#[tokio::test]
+async fn wrapped_link_cells_keep_the_full_destination() {
+    use super::app_tests::*;
+    let mut t = test_app();
+    let url = "https://example.com/oauth/authorize?client_id=abcdefghijk&scope=read&state=long-state-value";
+    t.push(Kind::Assistant(format!("Open {url} to continue.")));
+    t.render(40, 30);
+    assert!(t.screen_links.len() > 1);
+    for (row, start, _, target) in &t.screen_links {
+        assert_eq!(target, url);
+        assert_eq!(t.web_link_at(*row, *start), Some(url));
+    }
 }
 
 #[test]

@@ -613,6 +613,10 @@ pub async fn refresh(http: &reqwest::Client, t: &Tokens) -> Result<Tokens> {
 
 /// Open a URL in the user's browser (best effort).
 pub fn open_browser(url: &str) {
+    let _ = try_open_browser(url);
+}
+
+pub(crate) fn try_open_browser(url: &str) -> std::io::Result<()> {
     let mut cmd = if cfg!(target_os = "macos") {
         std::process::Command::new("open")
     } else if cfg!(windows) {
@@ -623,12 +627,12 @@ pub fn open_browser(url: &str) {
     } else {
         std::process::Command::new("xdg-open")
     };
-    let _ = cmd
-        .arg(url)
+    cmd.arg(url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .spawn();
+        .spawn()
+        .map(|_| ())
 }
 
 #[cfg(test)]

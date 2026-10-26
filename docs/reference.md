@@ -396,7 +396,7 @@ Note that Chanto's `--agents` takes either form: a number is the team size, as b
 | `ctrl+c` | clear input or stop the turn; twice to quit |
 | `ctrl+o` | expand/collapse all tool output and thinking; on a `[Pasted text #n]` tag in the input, expand that paste |
 | `?` | show the shortcuts panel (on an empty prompt; any key closes it) |
-| click | expand/collapse a tool or thinking block |
+| click | with Chanto's mouse handling enabled, open an HTTP(S) link in your browser, or expand/collapse a tool or thinking block |
 | `ctrl+r` | search prompt history |
 | `ctrl+f` | search the transcript (`ctrl+f`/`↑` older match, `↓` newer) |
 | `ctrl+g` | edit the prompt in `$VISUAL`/`$EDITOR` |
