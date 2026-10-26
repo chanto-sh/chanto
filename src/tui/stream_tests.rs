@@ -317,6 +317,24 @@ fn a_blocked_call_styles_its_code_ticks() {
     assert!(!joined.contains('`'), "no ticks survive: {rows:?}");
 }
 
+#[test]
+fn command_output_keeps_literal_backticks_when_collapsed_or_expanded() {
+    let mut b = bash_block(8);
+    let Kind::Tool(t) = &mut b.kind else {
+        unreachable!()
+    };
+    t.display = Some("literal `ticks`\n… +7 lines".into());
+    t.content = Some("literal `ticks`\nsecond `line`\nthird".into());
+    t.is_error = true;
+    for expanded in [false, true] {
+        let joined = text(&render_block(&b, 80, expanded, false)).join("\n");
+        assert!(joined.contains("literal `ticks`"), "{joined}");
+        if expanded {
+            assert!(joined.contains("second `line`"), "{joined}");
+        }
+    }
+}
+
 fn bash_block(n: usize) -> Block {
     let content: String = (1..=n).map(|i| format!("row {i}\n")).collect();
     let lines: Vec<&str> = content.lines().collect();
