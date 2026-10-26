@@ -66,8 +66,7 @@ commands on your machine. Reports that are most useful concern, for example:
 
 - ways a model or untrusted input can cause actions outside the intended
   permission model (the risk classifier, the sandbox, permission prompts),
-- secrets or credentials being logged, leaked, or sent to an unintended host,
-- the hosted service at api.chanto.sh exposing one user's resources to another.
+- secrets or credentials being logged, leaked, or sent to an unintended host.
 
 Running an agent against untrusted code or prompts carries inherent risk; the
 permission system and sandbox are defense-in-depth, not a guarantee. Findings
