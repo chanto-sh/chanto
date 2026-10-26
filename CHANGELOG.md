@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Usage limits.** The footer shows the most-used reported quota window, its local reset time and `/usage`, dropping extra details on narrow terminals. A heads-up appears once at 25% and 10% remaining and re-arms after a window resets. Missing quota data is never estimated.
+
+- **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
+
 - **Provider safety messages.** Refusal explanations and links now appear in streamed replies and transcripts. A provider safety filter that supplies no explanation shows a clear notice, and filtered turns end without retries or tool execution.
 
 - **Container image.** Each release now publishes `ghcr.io/chanto-sh/chanto:<version>` and `:latest` for linux/amd64 and linux/arm64, built from the release's own signed Linux binaries, with build provenance and a cosign signature. See [Container image](docs/reference.md#container-image).

@@ -222,17 +222,21 @@ impl App {
                 ),
                 pal().dim,
             ),
-            // The status line carries this, so don't also print it inline.
+            // Keep the footer current and warn once at each low-quota threshold.
             Event::Limits(s) => {
                 // Say so once as a window passes 75% and 90%;
                 // the status line alone is easy to miss.
                 let now = chrono::Utc::now().timestamp();
                 for w in [&s.primary, &s.secondary].into_iter().flatten() {
                     let warned = self.limit_warned.entry(w.label()).or_insert(0);
-                    if w.used_percent < 75.0 {
+                    let new_window = self.limits.as_ref().into_iter()
+                        .flat_map(|old| [&old.primary, &old.secondary]).flatten()
+                        .find(|old| old.label() == w.label())
+                        .is_some_and(|old| matches!((old.resets_at, w.resets_at), (Some(a), Some(b)) if a <= now && b > now));
+                    if w.used_percent < 75.0 || new_window {
                         *warned = 0;
-                    } else if let Some((level, msg)) = crate::llm::limits::warning(w, *warned, now)
-                    {
+                    }
+                    if let Some((level, msg)) = crate::llm::limits::warning(w, *warned, now) {
                         *warned = level;
                         let color = if level >= 90 { pal().error } else { warn() };
                         self.note(format!("⚠ {msg}"), color);

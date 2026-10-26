@@ -567,7 +567,7 @@ impl Agent {
 
     pub(super) fn label_for(&self, call: &ToolCall) -> String {
         self.lookup_tool(&call.name)
-            .map(|t| t.label(&call.arguments))
+            .map(|t| t.label_in(&call.arguments, &self.env))
             .unwrap_or_else(|| call.name.clone())
     }
 }

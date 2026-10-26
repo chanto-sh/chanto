@@ -112,10 +112,9 @@ pub fn warning(w: &Window, warned: u8, now: i64) -> Option<(u8, String)> {
     Some((
         level,
         format!(
-            "{:.0}% of your {} usage limit is used ({:.0}% left{reset}).",
-            w.used_percent,
+            "Heads up: {:.0}% of your {} limit is left{reset}. Run /usage for details.",
+            w.left_percent(),
             w.label(),
-            w.left_percent()
         ),
     ))
 }
@@ -590,7 +589,9 @@ mod tests {
         let (level, msg) = warning(&w(80.0), 0, 1_000).unwrap();
         assert_eq!(level, 75);
         assert!(
-            msg.contains("80% of your 5h usage limit") && msg.contains("resets"),
+            msg.contains("Heads up: 20% of your 5h limit is left")
+                && msg.contains("resets")
+                && msg.contains("/usage"),
             "{msg}"
         );
         assert!(warning(&w(85.0), 75, 1_000).is_none(), "75% already shown");

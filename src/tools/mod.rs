@@ -121,6 +121,11 @@ pub trait Tool: Send + Sync {
             crate::util::one_line(&args.to_string(), 60)
         )
     }
+    /// Transcript label with access to live tool state, such as the command
+    /// associated with a background-shell id.
+    fn label_in(&self, args: &Value, _env: &crate::agent::Env) -> String {
+        self.label(args)
+    }
     /// Kind may depend on arguments (e.g. Browser screenshot vs click).
     fn kind_for(&self, _args: &Value) -> ToolKind {
         self.kind()
