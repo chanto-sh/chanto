@@ -6016,3 +6016,38 @@ async fn a_prompt_no_frontend_marked_typed_is_the_agents_task() {
     assert!(requests.contains("(none recorded"), "{input}");
     assert!(task.contains("pre-approved writing out.txt"), "{input}");
 }
+
+#[tokio::test]
+async fn safety_filter_stops_without_retrying_or_running_tools() {
+    for text in [
+        "",
+        "<tool_call>{\"name\":\"Write\",\"arguments\":{\"file_path\":\"blocked.txt\",\"content\":\"no\"}}</tool_call>",
+    ] {
+        let (base, seen) = mock_server(vec![json!({
+            "content": text, "finish_reason": "content_filter",
+            "tool_calls": tc("Write", json!({"file_path":"blocked.txt","content":"no"}))
+        })])
+        .await;
+        let dir = tmpdir("safety-stop");
+        let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
+        let end = agent
+            .run_turn("hello", vec![], CancellationToken::new())
+            .await
+            .unwrap();
+        assert!(
+            matches!(end, TurnEnd::Done(ref text) if text.contains("provider's safety filter"))
+        );
+        assert_eq!(seen.lock().unwrap().len(), 1);
+        assert!(!dir.join("blocked.txt").exists());
+        assert!(
+            agent
+                .messages
+                .last()
+                .unwrap()
+                .content
+                .contains("provider's safety filter")
+        );
+        assert!(agent.messages.last().unwrap().tool_calls.is_empty());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

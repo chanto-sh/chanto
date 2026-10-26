@@ -15,6 +15,7 @@ pub(crate) mod limits;
 #[cfg(test)]
 pub(crate) mod mock;
 mod responses;
+mod safety;
 
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
@@ -908,6 +909,9 @@ impl Provider {
             }
             ProviderKind::Azure => self.chat_openai(req, on_delta).await,
         };
+        if let Ok(response) = &mut result {
+            response.show_safety_notice(on_delta);
+        }
         if let Some(a) = &self.accounting {
             let provider = self.billing_id();
             // Local models and plan logins (ChatGPT) cost nothing per call.
@@ -1773,6 +1777,11 @@ impl Provider {
                     continue;
                 };
                 let d = &choice["delta"];
+                if let Some(t) = d["refusal"].as_str().filter(|t| !t.is_empty()) {
+                    out.text.push_str(t);
+                    on_delta(Delta::Text(t.to_string()));
+                    out.finish_reason = Some("refusal".into());
+                }
                 // Some servers send the same text under both names.
                 let reasoning = ["reasoning_content", "reasoning"]
                     .iter()
@@ -1836,7 +1845,9 @@ impl Provider {
                         }
                     }
                 }
-                if let Some(f) = choice["finish_reason"].as_str() {
+                if let Some(f) = choice["finish_reason"].as_str()
+                    && (out.finish_reason.as_deref() != Some("refusal") || f == "content_filter")
+                {
                     out.finish_reason = Some(f.to_string());
                 }
             }
