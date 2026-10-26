@@ -444,7 +444,9 @@ BashOutput(Build release binary · bash_6)
 
 ### Background work panel
 
-While subagents run (foreground `Task` calls, including parallel ones, and background agents), the agents panel under the prompt lists a `main` row and one row per agent: its type, what it's doing now (its latest tool call or line of text), how long it has run and its tokens so far (input plus output). Background shells follow.
+While subagents run (foreground `Task` calls, including parallel ones, and background agents), the agents panel under the prompt lists a `main` row and one row per agent: its type, what it's doing now (its latest tool call or line of text), how long it has run and its tokens so far (input plus output). Background shells follow, using their short description when available and a bounded command preview otherwise. `/bashes` shows the full commands.
+
+The footer shows the model name without repeating the provider prefix. PR status takes the branch label's place when available; otherwise the branch remains visible. Fully connected MCP servers stay out of the footer; incomplete connections and failures remain visible, with details in `/mcp`. `/model` shows the full provider/model selection.
 
 ```
  ● main
@@ -505,7 +507,7 @@ Besides the `✓`/spinner tab title (OSC 0), Chanto reports what the TUI session
 
 ### Keeping the machine awake
 
-A long turn, a `/loop` or a background run stops when the computer idles into sleep. By default Chanto prevents idle sleep while it's working, and releases it as soon as it's waiting for you, so it never keeps the machine up at the prompt. The status line shows `awake` while it holds it.
+A long turn, a `/loop` or a background run stops when the computer idles into sleep. By default Chanto prevents idle sleep while it's working, and releases it as soon as it's waiting for you. At an idle prompt, the status line shows `awake` if a background job or the `always` setting is still preventing sleep.
 
 ```toml
 keep_awake = "working"   # default; or "never", or "always" (the whole session)

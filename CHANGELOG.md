@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Quieter status area.** Background jobs use short descriptions and bounded command previews. The footer avoids repeating the provider and branch, hides healthy MCP connections, and shows `awake` only when idle.
 - **Security: an apostrophe inside double quotes could hide command substitutions.** Prefix allow rules such as `Bash(echo:*)` could miss substitutions after quoted text containing an apostrophe. The permission check now keeps single and double quote state separate. Found by fuzzing.
 - **UI regression tests.** Deterministic text and style snapshots cover 72 terminal frames across common UI states, widths and themes. CI publishes a PNG/GIF preview gallery for review.
 

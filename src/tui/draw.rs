@@ -534,9 +534,7 @@ impl App {
             .values()
             .filter(|s| s.exit.lock().unwrap().is_none())
             .map(|s| {
-                // A monitor's description says what it watches; its command is a
-                // long watch loop that would crowd the row out.
-                let label = s.monitor.clone().unwrap_or_else(|| s.command.clone());
+                let label = crate::util::one_line(&s.title(), 60);
                 (s.id.clone(), label, s.monitor.is_some())
             })
             .collect();
@@ -1421,7 +1419,7 @@ impl App {
         // MCP servers at a glance: connected out of configured, amber when one
         // failed or needs sign-in. `/mcp` opens the full list.
         let (mcp_ok, mcp_total, mcp_attention) = crate::commands::mcp_summary(&self.env);
-        if mcp_total > 0 {
+        if mcp_total > 0 && (mcp_attention || mcp_ok < mcp_total) {
             right.push((
                 format!("mcp {mcp_ok}/{mcp_total}"),
                 Style::default().fg(if mcp_attention { warn() } else { pal().dim }),
@@ -1435,10 +1433,13 @@ impl App {
                 5,
             ));
         }
-        if let Some(b) = &self.branch {
+        let pr_status = self.pr_status.lock().unwrap().clone();
+        if pr_status.is_none()
+            && let Some(b) = &self.branch
+        {
             right.push((format!("⎇ {b}"), dim, 3));
         }
-        if let Some(pr) = self.pr_status.lock().unwrap().clone() {
+        if let Some(pr) = pr_status {
             let color = if pr.contains("failing") || pr.contains("changes requested") {
                 warn()
             } else {
@@ -1447,7 +1448,11 @@ impl App {
             right.push((pr, Style::default().fg(color), 4));
         }
         // Read live: /model (idle or mid-turn), the picker and resume all change it.
-        right.push((self.env.model(), dim, 8));
+        let model = self.env.model();
+        let model = model
+            .split_once('/')
+            .map_or(model.as_str(), |(_, name)| name);
+        right.push((model.to_string(), dim, 8));
         // Reasoning effort, when it isn't the provider's default (/effort, --effort).
         if let Some(effort) = effort_label(self.env.think(), self.env.effort()) {
             right.push((effort, dim, 4));
@@ -1496,8 +1501,9 @@ impl App {
             Style::default().fg(ctx_color),
             7,
         ));
-        // Why the Mac isn't sleeping: Chanto is holding it awake (`keep_awake`).
-        if crate::awake::active() {
+        // While working, wake inhibition is expected. At idle it explains why
+        // a persistent setting or background job is still preventing sleep.
+        if !self.busy && crate::awake::active() {
             right.push(("awake".into(), dim, 1));
         }
         if let Some(cost) = cost_label(self.total_cost_usd, self.price_unknown) {
