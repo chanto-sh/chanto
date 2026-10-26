@@ -316,7 +316,13 @@ pub(super) fn render_block(
                     let preview = expanded && has_more && display_is_preview(d, content);
                     let shown = if preview { content } else { d.as_str() };
                     let lines: Vec<Line<'static>> = {
-                        let mut v = markdown::ansi_lines(shown.trim_end());
+                        let mut v = if shown.contains('\u{1b}') {
+                            markdown::ansi_lines(shown.trim_end())
+                        } else {
+                            // No escapes means Chanto's own prose, not output:
+                            // style its code ticks instead of showing them.
+                            markdown::code_ticks_lines(shown.trim_end())
+                        };
                         while v.last().map(|l| l.width() == 0).unwrap_or(false) {
                             v.pop();
                         }
