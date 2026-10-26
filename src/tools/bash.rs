@@ -47,7 +47,7 @@ pub struct BgShell {
 }
 
 impl BgShell {
-    fn title(&self) -> String {
+    pub(crate) fn title(&self) -> String {
         crate::util::one_line(
             self.description
                 .as_deref()

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Quieter status area.** Background jobs use short descriptions and bounded command previews. The footer avoids repeating the provider and branch, hides healthy MCP connections, and shows `awake` only when idle.
+
 - **Usage limits.** The footer shows the most-used reported quota window, its local reset time and `/usage`, dropping extra details on narrow terminals. A heads-up appears once at 25% and 10% remaining and re-arms after a window resets. Missing quota data is never estimated.
 
 - **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
