@@ -14,6 +14,8 @@ mod hosted_tests;
 pub(crate) mod limits;
 #[cfg(test)]
 pub(crate) mod mock;
+#[cfg(test)]
+mod overhead_tests;
 mod responses;
 mod safety;
 
@@ -324,22 +326,33 @@ pub enum ProviderKind {
 #[derive(Default)]
 pub(crate) struct LineBuf {
     buf: Vec<u8>,
+    /// The start of the next unread line.
+    start: usize,
     /// Bytes already known to hold no newline.
     scanned: usize,
 }
 
 impl LineBuf {
     pub(crate) fn push(&mut self, bytes: &[u8]) {
+        // Compact once per read, rather than shifting the unread chunk for
+        // every line. Retain capacity for the next network read.
+        if self.start > 0 {
+            self.buf.copy_within(self.start.., 0);
+            self.buf.truncate(self.buf.len() - self.start);
+            self.scanned -= self.start;
+            self.start = 0;
+        }
         self.buf.extend_from_slice(bytes);
     }
 
     /// The next complete line, with its `\n`.
-    pub(crate) fn next_line(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn next_line(&mut self) -> Option<&[u8]> {
         match self.buf[self.scanned..].iter().position(|&b| b == b'\n') {
             Some(off) => {
-                let end = self.scanned + off;
-                self.scanned = 0;
-                Some(self.buf.drain(..=end).collect())
+                let start = self.start;
+                self.scanned += off + 1;
+                self.start = self.scanned;
+                Some(&self.buf[start..self.start])
             }
             None => {
                 self.scanned = self.buf.len();
@@ -350,6 +363,8 @@ impl LineBuf {
 
     /// What's left after the stream ended: a last line without its `\n`.
     pub(crate) fn rest(&mut self) -> Vec<u8> {
+        self.buf.drain(..self.start);
+        self.start = 0;
         self.scanned = 0;
         std::mem::take(&mut self.buf)
     }
@@ -1287,18 +1302,26 @@ impl Provider {
         body: Vec<u8>,
         headers: &[(String, String)],
     ) -> Result<reqwest::Response> {
+        // Building transfers the serialized Vec into reqwest's shared body.
+        // Cloned requests then share those bytes, including the first send.
+        let mut rb = self
+            .http
+            .post(url)
+            .header("content-type", "application/json")
+            .body(body);
+        for (k, v) in headers {
+            rb = rb.header(k.as_str(), v);
+        }
+        let request = rb.build()?;
         let mut attempt = 0u32;
         loop {
-            let mut rb = self
+            let resp = self
                 .http
-                .post(url)
-                .header("content-type", "application/json")
-                .body(body.clone());
-            for (k, v) in headers {
-                rb = rb.header(k.as_str(), v);
-            }
-            let resp = rb
-                .send()
+                .execute(
+                    request
+                        .try_clone()
+                        .context("cloning a buffered model request")?,
+                )
                 .await
                 .with_context(|| format!("connecting to {}", crate::util::truncate(url, 200)))?;
             let status = resp.status().as_u16();
@@ -1439,7 +1462,7 @@ impl Provider {
         while let Some(chunk) = stream.next().await {
             lines.push(&chunk?);
             while let Some(line) = lines.next_line() {
-                let line = String::from_utf8_lossy(&line);
+                let line = String::from_utf8_lossy(line);
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -1742,7 +1765,7 @@ impl Provider {
         'outer: while let Some(chunk) = stream.next().await {
             lines.push(&chunk?);
             while let Some(line) = lines.next_line() {
-                let line = String::from_utf8_lossy(&line);
+                let line = String::from_utf8_lossy(line);
                 let line = line.trim();
                 let Some(data) = line.strip_prefix("data:") else {
                     if line.starts_with('{') && ollama_shaped(line) {
@@ -2778,11 +2801,11 @@ mod tests {
     fn line_buf_splits_across_reads_and_scans_long_lines_once() {
         let mut l = LineBuf::default();
         l.push(b"data: a\ndata: b");
-        assert_eq!(l.next_line().as_deref(), Some(&b"data: a\n"[..]));
+        assert_eq!(l.next_line(), Some(&b"data: a\n"[..]));
         assert_eq!(l.next_line(), None);
         l.push(b"c\n\nx");
-        assert_eq!(l.next_line().as_deref(), Some(&b"data: bc\n"[..]));
-        assert_eq!(l.next_line().as_deref(), Some(&b"\n"[..]));
+        assert_eq!(l.next_line(), Some(&b"data: bc\n"[..]));
+        assert_eq!(l.next_line(), Some(&b"\n"[..]));
         assert_eq!(l.next_line(), None);
         // A 20 MB line in 16 KB reads: linear, so this is instant.
         let mut l = LineBuf::default();

@@ -269,7 +269,7 @@ pub(super) async fn sse_json(
     while let Some(chunk) = stream.next().await {
         lines.push(&chunk?);
         while let Some(line) = lines.next_line() {
-            let line = String::from_utf8_lossy(&line);
+            let line = String::from_utf8_lossy(line);
             let Some(data) = line.trim().strip_prefix("data:") else {
                 continue;
             };

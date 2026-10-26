@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Provider safety messages.** Refusal explanations and links now appear in streamed replies and transcripts. A provider safety filter that supplies no explanation shows a clear notice, and filtered turns end without retries or tool execution.
+- **Streaming and large requests.** Stream framing borrows complete lines and compacts once per network read, avoiding per-line allocations and repeated buffer shifts. Buffered model request retries share the serialized body instead of copying it. The standard 40-turn overhead benchmark shows no measurable CPU or peak-memory improvement from these changes.
 
 - **Container image.** Each release now publishes `ghcr.io/chanto-sh/chanto:<version>` and `:latest` for linux/amd64 and linux/arm64, built from the release's own signed Linux binaries, with build provenance and a cosign signature. See [Container image](docs/reference.md#container-image).
 - **Security: the auto-mode classifier only counts what you typed as your request.** Prompts that Chanto or another agent wrote were shown to it as yours. This covered subagent tasks, goal, team and outcome steps, background run tasks and reports, slash-command expansions, and files attached to a prompt. A model could write "the user approved this" and get its own action cleared. Those prompts are now labelled as the agent's task. Files, resources and `<system-reminder>` context are cut from what you typed.
