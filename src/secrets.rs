@@ -418,6 +418,7 @@ fn env_file_values(text: &str) -> Vec<(String, String)> {
 /// Collect known secret values: environment, Chanto's config and the project's env files.
 pub fn init(cfg: &crate::config::Config, root: &Path) {
     ENABLED.store(cfg.secrets.redact, std::sync::atomic::Ordering::Relaxed);
+    *SESSION_CONFIG.write().unwrap_or_else(|e| e.into_inner()) = Some(cfg.secrets.clone());
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     for (k, v) in std::env::vars() {
         if secret_value(&k, &v) && maskable(&v) {
@@ -1069,6 +1070,24 @@ pub fn withhold_env(name: &str, cfg: &SecretsConfig) -> bool {
             None => p == name,
         })
         && !run_secret_names().iter().any(|n| n == name)
+}
+
+/// The session's secrets settings, for children started without a config at hand.
+static SESSION_CONFIG: RwLock<Option<SecretsConfig>> = RwLock::new(None);
+
+/// Variables in this process's environment to withhold from a child Chanto
+/// starts on the project's behalf (a language server, say), under the
+/// session's settings (the defaults before a session sets them).
+pub fn withheld_env_names() -> Vec<String> {
+    let cfg = SESSION_CONFIG
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+        .unwrap_or_default();
+    std::env::vars_os()
+        .filter_map(|(k, _)| k.into_string().ok())
+        .filter(|k| withhold_env(k, &cfg))
+        .collect()
 }
 
 #[cfg(test)]

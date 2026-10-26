@@ -1024,6 +1024,9 @@ struct App {
     attention: Option<(Instant, String)>,
     /// The running turn was started by the loop, so esc ends the loop too.
     loop_turn: bool,
+    /// The next turn's prompt is Chanto's, not the user's (a scheduled task,
+    /// background reports): see [`crate::agent::Agent::typed_input`].
+    agent_input: bool,
     /// When the last turn finished, until the user types again: drives the
     /// `idle_prompt` Notification hook and the away recap.
     idle_since: Option<Instant>,
@@ -1081,14 +1084,7 @@ struct Search {
 }
 
 pub(crate) fn git_branch(cwd: &std::path::Path) -> Option<String> {
-    let o = std::process::Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(cwd)
-        .output()
-        .ok()?;
-    o.status
-        .success()
-        .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
+    crate::hostgit::read(cwd, &["rev-parse", "--abbrev-ref", "HEAD"])
 }
 
 const VERBS: &[&str] = &[
@@ -2127,7 +2123,9 @@ impl App {
     /// scheduled prompts).
     fn start_hidden(&mut self, text: String, literal: bool) {
         let n = self.blocks.len();
+        self.agent_input = true;
         crate::remote::quietly(|| self.start_as(text, literal));
+        self.agent_input = false;
         if let Some(Kind::User(_)) = self.blocks.get(n).map(|b| &b.kind) {
             self.blocks.remove(n);
         }
@@ -2149,6 +2147,7 @@ impl App {
         } else {
             std::mem::take(&mut self.images)
         };
+        let mut agent_input = self.agent_input || literal;
         let tx = self.tx.clone();
         let agent = self.agent.clone();
         let cancel = CancellationToken::new();
@@ -2243,8 +2242,21 @@ impl App {
                         let _ = tx.send(AppMsg::TurnDone(None));
                         return;
                     }
-                    Outcome::Prompt(p) => prompt = p,
+                    Outcome::Prompt(p) => {
+                        // The user typed the command; the prompt it expands to
+                        // (a skill, `loop.md`, a built-in) is not their words.
+                        if !agent_input {
+                            a.env.record_user_request(&trimmed);
+                        }
+                        agent_input = true;
+                        prompt = p;
+                    }
                     Outcome::Run(job) => {
+                        // A goal, team or outcome: the user typed the
+                        // command; the prompts the job writes are its own.
+                        if !agent_input {
+                            a.env.record_user_request(&trimmed);
+                        }
                         let label = job.label();
                         let msg = match job.run(&mut a, cancel).await {
                             Ok(r) => AppMsg::Show(r),
@@ -2263,6 +2275,7 @@ impl App {
                 let prompt = expand_image_tags(&prompt, &image_paths);
                 commands::expand_mentions(&a, &prompt).await
             };
+            a.typed_input = !agent_input;
             let res = a.run_turn(&text, images, cancel).await;
             a.save_session();
             let err = match res {
@@ -2623,3 +2636,6 @@ mod draw_tests;
 
 #[cfg(test)]
 mod run_tests;
+
+#[cfg(test)]
+mod quota_tests;

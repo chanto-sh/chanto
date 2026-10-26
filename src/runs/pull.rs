@@ -42,7 +42,10 @@ Take runs from a Chanto cloud queue (or any compatible server) and run them here
   --ephemeral           take one job, then deregister (for throwaway VMs and containers)
   --once                exit after one job
   --own-model           always use this machine's model configuration, even when the
-                        server offers its model endpoint (also CHANTO_RUNNER_OWN_MODEL=1)";
+                        server offers its model endpoint (also CHANTO_RUNNER_OWN_MODEL=1)
+  --allow-scripts       run the shell scripts runs come with (sandboxed, without this
+                        machine's secrets); off by default, as they're the server's
+                        commands (also CHANTO_RUNNER_ALLOW_SCRIPTS=1)";
 
 /// Events are sent in batches this often (and at the end).
 const FLUSH_EVERY: Duration = Duration::from_secs(2);
@@ -102,6 +105,8 @@ struct Opts {
     once: bool,
     /// Ignore the model endpoint the server offers.
     own_model: bool,
+    /// Run the scripts jobs come with.
+    allow_scripts: bool,
 }
 
 fn parse(args: &[String]) -> Result<Opts> {
@@ -117,6 +122,8 @@ fn parse(args: &[String]) -> Result<Opts> {
         ephemeral: false,
         once: false,
         own_model: std::env::var("CHANTO_RUNNER_OWN_MODEL").is_ok_and(|v| v == "1" || v == "true"),
+        allow_scripts: std::env::var("CHANTO_RUNNER_ALLOW_SCRIPTS")
+            .is_ok_and(|v| v == "1" || v == "true"),
     };
     let mut url = std::env::var("CHANTO_CLOUD_URL").ok();
     while let Some(a) = it.next() {
@@ -133,6 +140,7 @@ fn parse(args: &[String]) -> Result<Opts> {
             "--ephemeral" => o.ephemeral = true,
             "--once" => o.once = true,
             "--own-model" => o.own_model = true,
+            "--allow-scripts" => o.allow_scripts = true,
             "-h" | "--help" | "help" => bail!("{USAGE}"),
             s if s.starts_with('-') => bail!("unknown flag {s}\n{USAGE}"),
             s => url = Some(s.to_string()),
@@ -326,6 +334,24 @@ pub async fn cli(args: &[String]) -> Result<()> {
         url: o.url.clone(),
         token: saved.token,
     };
+    // Scripts run sandboxed under this machine's settings, as Bash commands do.
+    let (cfg, _) = crate::config::Config::load(&store_dir(), false).unwrap_or_default();
+    crate::tools::bash::SANDBOX_ACTIVE.store(
+        cfg.sandbox.enabled && crate::tools::bash::sandbox_available(),
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    if cfg.sandbox.enabled {
+        crate::tools::bash::start_sandbox_probe();
+    }
+    crate::guardrails::set_policy(&cfg.sandbox, &cfg.secrets);
+    if o.allow_scripts && !crate::tools::bash::sandbox_on() {
+        eprintln!(
+            "{}",
+            crate::ui::dim(
+                "! scripts are allowed but the OS sandbox is off here: they run as you, without your secrets"
+            )
+        );
+    }
     let exe = std::env::current_exe().context("finding the Chanto executable")?;
     let manager = Manager::open(Store::new(store_dir()), Launcher::Process(exe), 1);
     // Leftovers from a runner that stopped mid-run: their leases are gone.
@@ -363,6 +389,11 @@ pub async fn cli(args: &[String]) -> Result<()> {
             _ = tokio::signal::ctrl_c() => break,
         };
         let Some(job) = job else { continue };
+        // The id goes into request paths, branch names and a local path.
+        if !valid_run_id(&job.run_id) {
+            eprintln!("Ignoring a run with an invalid id {:?}", job.run_id);
+            continue;
+        }
         eprintln!(
             "Run {} (attempt {}): {}",
             job.run_id,
@@ -370,7 +401,7 @@ pub async fn cli(args: &[String]) -> Result<()> {
             crate::util::one_line(&job.task, 80)
         );
         let done = tokio::select! {
-            r = execute(&client, &manager, &job, o.mode.clone(), o.own_model) => r,
+            r = execute(&client, &manager, &job, o.mode.clone(), o.own_model, o.allow_scripts) => r,
             _ = tokio::signal::ctrl_c() => {
                 eprintln!("Stopping; the run goes back to the queue when its lease runs out.");
                 for r in manager.list().into_iter().filter(|r| r.state.is_active()) {
@@ -553,6 +584,7 @@ async fn execute(
     job: &Job,
     mode: Option<String>,
     own_model: bool,
+    allow_scripts: bool,
 ) -> Result<RunStatus> {
     let id_path = |what: &str| run_path(job, what);
     let creds = match credentials(client, job).await {
@@ -601,6 +633,27 @@ async fn execute(
     // The script, if any: the deterministic part, before (or instead of) the model.
     let mut script: Option<ScriptRun> = None;
     if let Some(commands) = job.script.as_deref().filter(|s| !s.trim().is_empty()) {
+        if !allow_scripts {
+            let result = RunResult {
+                summary: "This runner doesn't run scripts: they are the server's shell commands. \
+                          Start it with `chanto runner connect --allow-scripts` to run them (sandboxed, without the machine's secrets)."
+                    .into(),
+                branch: None,
+                pr_url: None,
+                pr_error: None,
+                commit: None,
+            };
+            client
+                .post_empty(
+                    &id_path("complete"),
+                    &CompleteRun {
+                        status: RunStatus::Failed,
+                        result,
+                    },
+                )
+                .await?;
+            return Ok(RunStatus::Failed);
+        }
         let outcome = match keep_lease(
             client,
             job,
@@ -996,6 +1049,8 @@ struct ScriptRun {
 /// What a run's script did, in a checkout of its own.
 struct ScriptOutcome {
     dir: PathBuf,
+    /// The checkout's git directory, kept apart from it (see [`run_script`]).
+    git_dir: PathBuf,
     ok: bool,
     code: Option<i32>,
     /// The end of what it printed (stdout and stderr together).
@@ -1054,8 +1109,9 @@ impl ScriptOutcome {
         branch: &str,
         task: &str,
     ) -> Result<()> {
-        let (dir, url, auth, branch) = (
+        let (dir, gd, url, auth, branch) = (
             self.dir.clone(),
+            self.git_dir.clone(),
             url.to_string(),
             auth.to_vec(),
             branch.to_string(),
@@ -1080,14 +1136,16 @@ impl ScriptOutcome {
                 "-c",
                 "user.email=chanto@users.noreply.github.com",
             ];
-            super::git::git_with(&dir, &["checkout", "-q", "-b", &branch], &[])?;
-            super::git::git_with(&dir, &["add", "-A"], &[])?;
-            super::git::git_with(
+            script_git(&gd, &dir, &["checkout", "-q", "-b", &branch], &[])?;
+            script_git(&gd, &dir, &["add", "-A"], &[])?;
+            script_git(
+                &gd,
                 &dir,
                 &[&id[..], &["commit", "-q", "-m", &message]].concat(),
                 &[],
             )?;
-            super::git::git_with(
+            script_git(
+                &gd,
                 &dir,
                 &[
                     "push",
@@ -1109,14 +1167,16 @@ impl ScriptOutcome {
         auth: &[(String, String)],
         branch: &str,
     ) -> Result<()> {
-        let (dir, url, auth, branch) = (
+        let (dir, gd, url, auth, branch) = (
             self.dir.clone(),
+            self.git_dir.clone(),
             url.to_string(),
             auth.to_vec(),
             branch.to_string(),
         );
         tokio::task::spawn_blocking(move || {
-            super::git::git_with(
+            script_git(
+                &gd,
                 &dir,
                 &["push", "-q", "--", &url, &format!(":refs/heads/{branch}")],
                 &auth,
@@ -1128,6 +1188,7 @@ impl ScriptOutcome {
 
     fn cleanup(&self) {
         let _ = std::fs::remove_dir_all(&self.dir);
+        let _ = std::fs::remove_dir_all(&self.git_dir);
     }
 }
 
@@ -1149,8 +1210,34 @@ fn script_env(env: &[(String, String)]) -> Vec<(String, String)> {
     out
 }
 
+/// Whether a server's run id is safe in request paths, branch names and
+/// local paths.
+fn valid_run_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Git in a script's checkout, with its git directory given explicitly: the
+/// script can rewrite the checkout's `.git` file, not the directory itself.
+fn script_git(
+    git_dir: &std::path::Path,
+    dir: &std::path::Path,
+    args: &[&str],
+    env: &[(String, String)],
+) -> Result<String> {
+    super::git::git_dirs_with(git_dir, dir, args, env)
+}
+
 /// Clones the run's repository at its ref and runs the script there with bash
-/// (`-e`: it stops at the first failing command).
+/// (`-e`: it stops at the first failing command). The script is the server's
+/// code, so it runs as a Bash tool command does: in the OS sandbox, with
+/// secret-named variables withheld (the run's own secrets are passed). Its
+/// git directory lives under the Chanto home, out of the sandbox's reach, so
+/// what git runs on the host afterwards (commit, push) can't be configured
+/// by the script.
 async fn run_script(
     job: &Job,
     url: &str,
@@ -1158,10 +1245,18 @@ async fn run_script(
     env: &[(String, String)],
     script: &str,
 ) -> Result<ScriptOutcome> {
+    if !valid_run_id(&job.run_id) {
+        bail!("invalid run id {:?}", job.run_id);
+    }
     let dir = std::env::temp_dir().join(format!("chanto-script-{}", job.run_id));
+    let git_dir = store_dir()
+        .join("scripts")
+        .join(format!("{}.git", job.run_id));
     let _ = std::fs::remove_dir_all(&dir);
-    let (d, u, a, r) = (
+    let _ = std::fs::remove_dir_all(&git_dir);
+    let (d, gd, u, a, r) = (
         dir.clone(),
+        git_dir.clone(),
         url.to_string(),
         auth.to_vec(),
         job.git_ref.clone(),
@@ -1172,6 +1267,7 @@ async fn run_script(
             .file_name()
             .and_then(|n| n.to_str())
             .context("bad directory name")?;
+        std::fs::create_dir_all(gd.parent().context("no store directory")?)?;
         super::git::git_with(
             parent,
             &[
@@ -1179,6 +1275,7 @@ async fn run_script(
                 "-q",
                 "--no-tags",
                 "--filter=blob:none",
+                &format!("--separate-git-dir={}", gd.display()),
                 "--",
                 &u,
                 name,
@@ -1187,25 +1284,31 @@ async fn run_script(
         )
         .context("cloning the repository")?;
         if let Some(r) = r.as_deref().filter(|r| !r.is_empty()) {
-            super::git::git_with(&d, &["checkout", "-q", r, "--"], &a)
+            if r.starts_with('-') {
+                bail!("invalid ref {r}");
+            }
+            script_git(&gd, &d, &["checkout", "-q", r, "--"], &a)
                 .with_context(|| format!("checking out {r}"))?;
         }
-        Ok(super::git::git_with(&d, &["rev-parse", "HEAD"], &[])
+        Ok(script_git(&gd, &d, &["rev-parse", "HEAD"], &[])
             .ok()
             .map(|s| s.trim().to_string()))
     })
     .await??;
     let bash = crate::shell::bash()
         .context("this script needs bash; on Windows install Git for Windows (Git Bash)")?;
-    let mut cmd = tokio::process::Command::new(bash);
-    cmd.args(["--noprofile", "--norc", "-eo", "pipefail", "-c"])
-        .arg(format!("exec 2>&1\n{script}"))
-        .current_dir(&dir)
+    // The sandboxed shell starts bash on the script, both passed in the
+    // environment so neither needs quoting.
+    let launch =
+        r#"exec "$CHANTO_SCRIPT_BASH" --noprofile --norc -eo pipefail -c "$CHANTO_SCRIPT""#;
+    let (mut cmd, lease) =
+        crate::guardrails::script_command(launch, &dir).context("setting up the sandbox")?;
+    cmd.env("CHANTO_SCRIPT_BASH", &bash)
+        .env("CHANTO_SCRIPT", format!("exec 2>&1\n{script}"))
         .envs(env.iter().map(|(k, v)| (k, v)))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
         .kill_on_drop(true);
     let child = cmd.spawn().context("starting bash")?;
+    let pid = child.id();
     let (ok, code, output) =
         match tokio::time::timeout(SCRIPT_TIMEOUT, child.wait_with_output()).await {
             Ok(out) => {
@@ -1213,15 +1316,22 @@ async fn run_script(
                 (
                     out.status.success(),
                     out.status.code(),
-                    String::from_utf8_lossy(&out.stdout).into_owned(),
+                    String::from_utf8_lossy(&out.stdout).into_owned()
+                        + &String::from_utf8_lossy(&out.stderr),
                 )
             }
-            Err(_) => (
-                false,
-                None,
-                format!("(stopped after {} minutes)", SCRIPT_TIMEOUT.as_secs() / 60),
-            ),
+            Err(_) => {
+                if let Some(pid) = pid {
+                    crate::tools::bash::kill_group(pid);
+                }
+                (
+                    false,
+                    None,
+                    format!("(stopped after {} minutes)", SCRIPT_TIMEOUT.as_secs() / 60),
+                )
+            }
         };
+    drop(lease);
     let tail: String = {
         let chars: Vec<char> = output.chars().collect();
         chars[chars.len().saturating_sub(SCRIPT_OUTPUT_CHARS)..]
@@ -1230,14 +1340,21 @@ async fn run_script(
     };
     // It goes to the server (events, summary) and to the model's task.
     let tail = crate::secrets::redact_always(&tail).into_owned();
-    let d = dir.clone();
+    let (d, gd) = (dir.clone(), git_dir.clone());
     let changed = tokio::task::spawn_blocking(move || {
-        super::git::git_with(&d, &["status", "--porcelain"], &[]).map(|s| !s.trim().is_empty())
+        script_git(
+            &gd,
+            &d,
+            &["status", "--porcelain", "--ignore-submodules=all"],
+            &[],
+        )
+        .map(|s| !s.trim().is_empty())
     })
     .await?
     .unwrap_or(false);
     Ok(ScriptOutcome {
         dir,
+        git_dir,
         ok,
         code,
         output: tail,
@@ -1433,6 +1550,8 @@ mod tests {
 
     #[tokio::test]
     async fn scripts_run_in_a_checkout_and_say_what_they_did() {
+        // Script git directories go under the Chanto home: keep it still.
+        let _home = crate::runs::tests::TestHome::new("pull-script-unit");
         let (origin, url) = origin();
         let mut j = job(&url);
         j.run_id = format!("{}", uuid::Uuid::new_v4().simple());
@@ -1464,6 +1583,25 @@ mod tests {
             .unwrap();
         assert!(String::from_utf8_lossy(&branches.stdout).contains("chanto/run/test"));
         o.cleanup();
+
+        // Nor do this machine's secrets, and the git directory is kept out of
+        // the checkout, where the script could configure it.
+        let name = format!("CHANTO_PULL_PROBE_{}_TOKEN", std::process::id());
+        unsafe { std::env::set_var(&name, "machine-secret") };
+        let o2 = run_script(
+            &j,
+            &url,
+            &[],
+            &[],
+            &format!("echo \"[${{{name}:-withheld}}]\""),
+        )
+        .await;
+        unsafe { std::env::remove_var(&name) };
+        let o2 = o2.unwrap();
+        assert!(o2.output.contains("[withheld]"), "{}", o2.output);
+        assert!(o2.dir.join(".git").is_file() && o2.git_dir.join("HEAD").is_file());
+        assert!(!o2.git_dir.starts_with(&o2.dir));
+        o2.cleanup();
 
         // Stops at the first failing command, and says so.
         let o = run_script(&j, &url, &[], &[], "echo before\nfalse\necho after")

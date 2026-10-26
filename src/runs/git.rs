@@ -14,16 +14,53 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn command(dir: &Path, args: &[&str]) -> Command {
-    let mut c = Command::new("git");
-    // Run worktrees live under the Chanto home, a few levels deeper than the
-    // project; let Git for Windows write paths past MAX_PATH there.
+    // Run directories are Chanto's own records: a bare one is named explicitly.
+    let mut c = crate::hostgit::for_repo(dir);
+    longpaths(&mut c);
+    c.args(args);
+    c
+}
+
+/// Run worktrees live under the Chanto home, a few levels deeper than the
+/// project; let Git for Windows write paths past MAX_PATH there.
+fn longpaths(c: &mut Command) {
     if cfg!(windows) {
         c.args(["-c", "core.longpaths=true"]);
     }
+}
+
+/// `git` in a run's worktree, with the git directory that `repo` records for
+/// it. Never the worktree's own `.git` file: the run can rewrite that to
+/// point at a repository whose config runs programs.
+pub(crate) fn wt_git(repo: &Path, worktree: &Path, args: &[&str]) -> Result<String> {
+    let mut c = crate::hostgit::in_worktree(repo, worktree)?;
+    longpaths(&mut c);
+    c.args(args);
+    output(c, args)
+}
+
+/// `git` with a git directory and work tree Chanto keeps itself (a runner
+/// script's checkout), and [`git_with`]'s transport limits.
+pub(crate) fn git_dirs_with(
+    git_dir: &Path,
+    work_tree: &Path,
+    args: &[&str],
+    env: &[(String, String)],
+) -> Result<String> {
+    let mut c = crate::hostgit::with_dirs(git_dir, work_tree);
+    longpaths(&mut c);
     c.args(args)
-        .current_dir(dir)
-        .stdin(std::process::Stdio::null());
-    c
+        .env("GIT_ALLOW_PROTOCOL", "file:http:https:ssh")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .envs(env.iter().map(|(k, v)| (k, v)));
+    output(c, args)
+}
+
+/// [`wt_git`] with the committer identity [`git_ident`] adds.
+pub(crate) fn wt_git_ident(repo: &Path, worktree: &Path, args: &[&str]) -> Result<String> {
+    let mut all = ident(repo);
+    all.extend_from_slice(args);
+    wt_git(repo, worktree, &all)
 }
 
 pub(crate) fn git_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Result<String> {
@@ -35,8 +72,12 @@ pub(crate) fn git_env(dir: &Path, args: &[&str], env: &[(&str, &Path)]) -> Resul
 }
 
 /// `git` with extra environment, e.g. [`auth_env`].
+/// Also for URLs a server supplied: only the usual transports (no `ext::`
+/// or `fd::`), and never a credential prompt.
 pub(crate) fn git_with(dir: &Path, args: &[&str], env: &[(String, String)]) -> Result<String> {
     let mut c = command(dir, args);
+    c.env("GIT_ALLOW_PROTOCOL", "file:http:https:ssh")
+        .env("GIT_TERMINAL_PROMPT", "0");
     c.envs(env.iter().map(|(k, v)| (k, v)));
     output(c, args)
 }
@@ -61,8 +102,23 @@ pub(crate) fn auth_env(url: &str, username: &str, password: &str) -> Vec<(String
     .collect()
 }
 
+/// `CHANTO_DEBUG_GIT=1`: print each failing git command (temporary, for
+/// Windows CI).
+fn debug_git() -> bool {
+    std::env::var_os("CHANTO_DEBUG_GIT").is_some()
+}
+
 fn output(mut c: Command, args: &[&str]) -> Result<String> {
     let o = c.output().context("running git")?;
+    if debug_git() {
+        eprintln!(
+            "[git] {:?} in {:?} -> {}: {}",
+            c.get_args().collect::<Vec<_>>(),
+            c.get_current_dir(),
+            o.status,
+            String::from_utf8_lossy(&o.stderr).trim()
+        );
+    }
     if !o.status.success() {
         bail!(
             "git {}: {}",
@@ -431,7 +487,7 @@ pub fn prepare_remote(
 /// client that started it has).
 pub fn run_bundle(run: &super::Run) -> Result<PathBuf> {
     let repo = &run.source.path;
-    finalize(&run.worktree, &run.id, &run.task)?;
+    finalize(&run.source.path, &run.worktree, &run.id, &run.task)?;
     if commit_count(repo, &run.base, &run.branch) == 0 {
         bail!(
             "run {} made no changes; there is nothing to download",
@@ -458,44 +514,115 @@ pub fn run_bundle(run: &super::Run) -> Result<PathBuf> {
 /// the run's branch, and return the run as if it had run here.
 pub fn import_run(cwd: &Path, run: &super::Run, bundle: &Path) -> Result<super::Run> {
     let repo = toplevel(cwd)?;
+    check_imported(run)?;
+    // Fetch into a private ref, never with `+` onto a branch: the server
+    // named the branch, and a forced fetch could reset any branch it chose.
     let r = format!("refs/heads/{}", run.branch);
-    git(
+    let staging = format!("refs/chanto/import/{}", run.id);
+    let _ = git(&repo, &["update-ref", "-d", &staging]);
+    git_with(
         &repo,
         &[
+            "-c",
+            "transfer.fsckObjects=true",
             "fetch",
             "-q",
             "--no-tags",
+            "--",
             &bundle.display().to_string(),
-            &format!("+{r}:{r}"),
+            &format!("{r}:{staging}"),
         ],
+        &[],
     )?;
+    let tip = git(&repo, &["rev-parse", "--verify", "-q", &staging]);
+    let _ = git(&repo, &["update-ref", "-d", &staging]);
+    let tip = tip?;
+    // The run's base must be a commit of this checkout, below its work.
+    if git(&repo, &["merge-base", "--is-ancestor", &run.base, &tip]).is_err() {
+        bail!(
+            "run {}'s base {} isn't a commit of this repository below its work",
+            run.id,
+            run.base
+        );
+    }
+    match git(&repo, &["rev-parse", "--verify", "-q", &r]) {
+        Ok(had) if had == tip => {}
+        Ok(_) => bail!(
+            "branch {} already exists here with other commits; delete it (`git branch -D {}`) to fetch run {} again",
+            run.branch,
+            run.branch,
+            run.id
+        ),
+        // Empty old value: create only, failing if the branch appeared meanwhile.
+        Err(_) => {
+            git(&repo, &["update-ref", &r, &tip, ""])?;
+        }
+    }
     let mut local = run.clone();
     local.source.path = repo;
     local.worktree = PathBuf::new();
     Ok(local)
 }
 
-/// Commit whatever the run left uncommitted in its worktree. Returns whether
-/// a commit was made.
-pub fn finalize(worktree: &Path, id: &str, task: &str) -> Result<bool> {
+/// Refuse a run from a server whose id, branch or base could steer local git:
+/// the branch must be the run's own `chanto/run/<id>` and the base a full
+/// commit hash (so neither can pass for an option or another ref).
+pub(crate) fn check_imported(run: &super::Run) -> Result<()> {
+    if run.id.is_empty()
+        || run.id.len() > 64
+        || !run
+            .id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        bail!("the server sent an invalid run id {:?}", run.id);
+    }
+    if run.branch != format!("chanto/run/{}", run.id) {
+        bail!(
+            "run {} has branch {:?}; only chanto/run/{} can be fetched",
+            run.id,
+            run.branch,
+            run.id
+        );
+    }
+    if !matches!(run.base.len(), 40 | 64) || !run.base.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("run {} has an invalid base commit {:?}", run.id, run.base);
+    }
+    Ok(())
+}
+
+/// Commit whatever the run left uncommitted in its worktree (of `repo`).
+/// Returns whether a commit was made.
+pub fn finalize(repo: &Path, worktree: &Path, id: &str, task: &str) -> Result<bool> {
     if worktree.as_os_str().is_empty() || !worktree.exists() {
         return Ok(false);
     }
-    git(worktree, &["add", "-A", "."])?;
-    if git(worktree, &["status", "--porcelain"])?.is_empty() {
+    wt_git(repo, worktree, &["add", "-A", "."])?;
+    if wt_git(
+        repo,
+        worktree,
+        &["status", "--porcelain", "--ignore-submodules=all"],
+    )?
+    .is_empty()
+    {
         return Ok(false);
     }
     let msg = format!(
         "{}\n\nBackground run {id}.",
         crate::util::one_line(task, 72)
     );
-    git_ident(worktree, &["commit", "-q", "--no-verify", "-m", &msg])?;
+    wt_git_ident(repo, worktree, &["commit", "-q", "--no-verify", "-m", &msg])?;
     Ok(true)
 }
 
 /// Commits the run made (after its base).
 pub fn commit_count(repo: &Path, base: &str, branch: &str) -> usize {
     git(repo, &["rev-list", "--count", &format!("{base}..{branch}")])
+        .inspect_err(|e| {
+            if debug_git() {
+                eprintln!("[git] commit_count: {e:#}");
+            }
+        })
         .ok()
         .and_then(|n| n.trim().parse().ok())
         .unwrap_or(0)
@@ -504,9 +631,23 @@ pub fn commit_count(repo: &Path, base: &str, branch: &str) -> usize {
 /// `git diff --stat` of the run's work, plus anything still uncommitted.
 pub fn diff_stat(run: &super::Run) -> String {
     let repo = &run.source.path;
-    let mut s = git(repo, &["diff", "--stat", &run.base, &run.branch]).unwrap_or_default();
+    let mut s = git(
+        repo,
+        &[
+            &["diff", "--stat"][..],
+            &crate::hostgit::DIFF_ARGS,
+            &[&run.base, &run.branch],
+        ]
+        .concat(),
+    )
+    .unwrap_or_default();
     if run.worktree.exists() {
-        let dirty = git(&run.worktree, &["status", "--short"]).unwrap_or_default();
+        let dirty = wt_git(
+            repo,
+            &run.worktree,
+            &["status", "--short", "--ignore-submodules=all"],
+        )
+        .unwrap_or_default();
         if !dirty.trim().is_empty() {
             if !s.is_empty() {
                 s.push('\n');
@@ -537,17 +678,32 @@ pub fn apply(cwd: &Path, run: &super::Run) -> Result<String> {
             run.branch
         );
     }
-    finalize(&run.worktree, &run.id, &run.task)?;
+    finalize(&run.source.path, &run.worktree, &run.id, &run.task)?;
     let n = commit_count(&here, &run.base, &run.branch);
     if n == 0 {
         return Ok(format!("Run {} made no changes; nothing to apply.", run.id));
     }
-    let dirty = !git(&here, &["status", "--porcelain", "--untracked-files=no"])?.is_empty();
+    let dirty = !git(
+        &here,
+        &[
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--ignore-submodules=all",
+        ],
+    )?
+    .is_empty();
     if dirty {
-        let diff = git(&here, &["diff", "--binary", &run.base, &run.branch])? + "\n";
-        let mut child = Command::new("git")
-            .args(["apply", "--whitespace=nowarn", "-"])
-            .current_dir(&here)
+        let diff = git(
+            &here,
+            &[
+                &["diff", "--binary"][..],
+                &crate::hostgit::DIFF_ARGS,
+                &[&run.base, &run.branch],
+            ]
+            .concat(),
+        )? + "\n";
+        let mut child = command(&here, &["apply", "--whitespace=nowarn", "-"])
             .stdin(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
@@ -585,7 +741,7 @@ pub fn apply(cwd: &Path, run: &super::Run) -> Result<String> {
 /// Push the run's branch and open a pull request with `gh`.
 pub fn open_pr(run: &super::Run, remote: &str) -> Result<String> {
     let repo = &run.source.path;
-    finalize(&run.worktree, &run.id, &run.task)?;
+    finalize(&run.source.path, &run.worktree, &run.id, &run.task)?;
     if commit_count(repo, &run.base, &run.branch) == 0 {
         bail!(
             "run {} made no changes; there is nothing to open a pull request for",
@@ -652,3 +808,7 @@ pub fn remove(run: &super::Run) {
     let _ = git(repo, &["worktree", "prune"]);
     let _ = git(repo, &["branch", "-D", &run.branch]);
 }
+
+#[cfg(test)]
+#[path = "git_tests.rs"]
+mod tests;

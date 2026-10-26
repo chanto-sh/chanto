@@ -362,6 +362,35 @@ fn mounts_of_a_plain_checkout_are_just_the_worktree_and_scratch() {
 }
 
 #[test]
+fn a_worktrees_records_are_mounted_read_only() {
+    let home = TestHome::new("engine-wt-mounts");
+    let repo = make_repo(&home);
+    let wt = home.dir.join("wt");
+    sh(
+        &repo,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            "w",
+            &wt.display().to_string(),
+        ],
+    );
+    let m = mounts(&wt, &home.dir.join("scratch"));
+    let gd = crate::hostgit::worktree_git_dir(&repo, &wt).unwrap();
+    let mode = |p: &Path| {
+        let p = std::fs::canonicalize(p).unwrap();
+        m.iter()
+            .find(|x| std::fs::canonicalize(&x.path).ok().as_deref() == Some(p.as_path()))
+            .map(|x| x.read_only)
+    };
+    assert_eq!(mode(&gd), Some(false), "{m:?}");
+    assert_eq!(mode(&gd.join("commondir")), Some(true), "{m:?}");
+    assert_eq!(mode(&gd.join("gitdir")), Some(true), "{m:?}");
+}
+
+#[test]
 fn isolation_labels_and_net_modes() {
     let mut i = iso("docker", NetMode::Allowlist);
     assert_eq!(

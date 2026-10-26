@@ -665,9 +665,8 @@ pub fn mounts(worktree: &Path, scratch: &Path) -> Vec<Mount> {
         },
     ];
     let git = |arg: &str| -> Option<PathBuf> {
-        let o = std::process::Command::new("git")
+        let o = crate::hostgit::command(worktree)
             .args(["rev-parse", "--path-format=absolute", arg])
-            .current_dir(worktree)
             .output()
             .ok()?;
         o.status
@@ -682,10 +681,22 @@ pub fn mounts(worktree: &Path, scratch: &Path) -> Vec<Mount> {
             read_only: true,
         });
         if own != common && !own.starts_with(worktree) {
+            // Its records of where the repository and the worktree are stay
+            // read-only: a `commondir` pointed elsewhere would hand the host's
+            // git another repository's config.
+            let records: Vec<PathBuf> = ["commondir", "gitdir"]
+                .iter()
+                .map(|f| own.join(f))
+                .filter(|p| p.is_file())
+                .collect();
             m.push(Mount {
                 path: own,
                 read_only: false,
             });
+            m.extend(records.into_iter().map(|path| Mount {
+                path,
+                read_only: true,
+            }));
         }
     }
     m

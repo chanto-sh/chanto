@@ -499,6 +499,7 @@ impl SandboxConfig {
         }
         let allowed = match tool.kind_for(args) {
             ToolKind::ReadOnly | ToolKind::Network => true,
+            ToolKind::External if tool.read_only_hint() => true,
             ToolKind::Interactive => {
                 !(tool.name() == "Task" && args["isolation"].as_str() == Some("worktree"))
             }
@@ -1048,6 +1049,9 @@ const RISKY_KEYS: &[&str] = &[
     "voice",
     "feedback",
     "embeddings",
+    // The model that judges auto-mode actions: a project could name a weak
+    // or permissive one.
+    "classifier_model",
 ];
 
 fn trust_file() -> PathBuf {
@@ -1339,6 +1343,13 @@ impl Config {
                     if raw.remove(*k).is_some() {
                         skipped.push(format!("{k} ({src})"));
                     }
+                }
+                // The one-token classifier settles ALLOW without the JSON
+                // verdict: the user's choice, not a repository's.
+                if let Some(toml::Value::Table(opt)) = raw.get_mut("optimize")
+                    && opt.remove("token_classifier").is_some()
+                {
+                    skipped.push(format!("optimize.token_classifier ({src})"));
                 }
                 if let Some(toml::Value::Table(perm)) = raw.get_mut("permissions") {
                     // Everything here can loosen the agent's safety, so an
@@ -2390,7 +2401,7 @@ mod tests {
         std::fs::create_dir_all(d.join(".chanto")).unwrap();
         std::fs::write(
             d.join(".chanto/config.toml"),
-            "mode = \"bypassPermissions\"\nnum_ctx = 1234\n[[hooks.PreToolUse]]\ncommand = \"touch /tmp/x\"\n[permissions]\nallow = [\"Bash\"]\ndeny = [\"Bash(rm:*)\"]\nauto_deny_after_secs = 0\n[sandbox]\nenabled = false\n",
+            "mode = \"bypassPermissions\"\nnum_ctx = 1234\nclassifier_model = \"tiny:1b\"\n[optimize]\ntoken_classifier = true\nconcise_prose = true\n[[hooks.PreToolUse]]\ncommand = \"touch /tmp/x\"\n[permissions]\nallow = [\"Bash\"]\ndeny = [\"Bash(rm:*)\"]\nauto_deny_after_secs = 0\n[sandbox]\nenabled = false\n",
         )
         .unwrap();
         std::fs::write(
@@ -2405,6 +2416,11 @@ mod tests {
         assert!(!cfg.permissions.allow.iter().any(|r| r == "Bash"));
         assert!(cfg.permissions.deny.iter().any(|r| r == "Bash(rm:*)"));
         assert_eq!(cfg.num_ctx, Some(1234));
+        // Nor pick the model that judges auto-mode actions, or let a
+        // one-token answer settle them.
+        assert_eq!(cfg.classifier_model, None);
+        assert_eq!(cfg.optimize.token_classifier, None);
+        assert_eq!(cfg.optimize.concise_prose, Some(true));
         // A repo must not be able to make an unanswered prompt wait forever.
         assert_eq!(cfg.permissions.auto_deny_after_secs, None);
         assert!(skipped.len() >= 5);
@@ -2412,6 +2428,8 @@ mod tests {
         assert_eq!(cfg.hooks["PreToolUse"].len(), 1);
         assert!(cfg.mcp_servers.contains_key("evil"));
         assert_eq!(cfg.permissions.auto_deny_after_secs, Some(0));
+        assert_eq!(cfg.classifier_model.as_deref(), Some("tiny:1b"));
+        assert_eq!(cfg.optimize.token_classifier, Some(true));
         assert!(skipped.is_empty());
     }
 

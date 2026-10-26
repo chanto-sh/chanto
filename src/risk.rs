@@ -62,6 +62,13 @@ const HARD_GUARDS: &[&str] = &[
     "mentions:secret",
     "kill",
     "inline_write",
+    // Code given on the command line (`node -e`, `python -c`) can do anything
+    // its text says, and that text isn't scored: only the model reads it.
+    "inline_code",
+    // A package or module fetched to run (`npx github:x/y`, `go run x@latest`).
+    "arg:remote_spec",
+    // A config file of options (`curl -K`, `wget -e`): flags the scorer never sees.
+    "http:config",
 ];
 
 /// (program, subcommand) pairs that are groups of further subcommands.
@@ -614,6 +621,22 @@ pub fn feature_parts(cmd: &str) -> (Vec<String>, Vec<Vec<String>>) {
             match target {
                 Some(k) => {
                     f.push(format!("runner:{b}"));
+                    // `npx github:x/y`, `npx -p https://…`: code from elsewhere.
+                    if matches!(b.as_str(), "npx" | "bunx" | "pnpx")
+                        || matches!(ws.get(i + 1).map(String::as_str), Some("dlx" | "exec"))
+                    {
+                        let spec = |w: &str| {
+                            let w = w.strip_prefix("--package=").unwrap_or(w);
+                            !w.starts_with('-')
+                                && (w.contains(':')
+                                    || (w.contains('/') && !w.starts_with('@'))
+                                    || w.ends_with(".tgz")
+                                    || w.ends_with(".tar.gz"))
+                        };
+                        if ws[i + 1..=k].iter().any(|w| spec(w)) {
+                            f.push("arg:remote_spec".into());
+                        }
+                    }
                     i = k;
                 }
                 None => break,
@@ -655,10 +678,19 @@ pub fn feature_parts(cmd: &str) -> (Vec<String>, Vec<Vec<String>>) {
         }
         f.push(format!("bin:{bin}"));
         let rest = &ws[i + 1..];
+        // Short options cluster: `python3 -Bc`, `perl -ne`, `node -pe`, `bash -lc`.
+        let inline_flag = |w: &str| {
+            matches!(w, "--eval" | "--print" | "--command")
+                || w.strip_prefix('-').is_some_and(|s| {
+                    !s.is_empty()
+                        && !s.starts_with('-')
+                        && s.chars().all(|c| c.is_ascii_alphabetic())
+                        && s.contains(['c', 'e', 'E', 'p', 'r'])
+                })
+        };
         if INTERPRETERS.contains(&bin.as_str())
-            && rest
-                .iter()
-                .any(|w| matches!(w.as_str(), "-c" | "-e" | "-p" | "--eval" | "-r"))
+            && (rest.iter().any(|w| inline_flag(w))
+                || (bin == "deno" && rest.first().is_some_and(|w| w == "eval")))
         {
             f.push("inline_code".into());
             if inline_file_write(seg) {
@@ -669,6 +701,35 @@ pub fn feature_parts(cmd: &str) -> (Vec<String>, Vec<Vec<String>>) {
             || (f.contains(&"inline_code".to_string()) && inline_http_write(seg))
         {
             f.push("http:write".into());
+        }
+        // `go run example.com/x@latest`: a module downloaded to run.
+        if bin == "go"
+            && matches!(rest.first().map(String::as_str), Some("run" | "install"))
+            && rest[1..].iter().any(|w| {
+                !w.starts_with('-')
+                    && (w.contains('@')
+                        || (!w.starts_with('.')
+                            && w.split('/').count() > 1
+                            && w.split('/').next().is_some_and(|h| h.contains('.'))))
+            })
+        {
+            f.push("arg:remote_spec".into());
+        }
+        // A config file or command list for the HTTP client.
+        if (bin == "curl"
+            && rest.iter().any(|w| {
+                w.split('=').next() == Some("--config")
+                    || w.strip_prefix('-')
+                        .is_some_and(|s| !s.starts_with('-') && s.contains('K'))
+            }))
+            || (bin == "wget"
+                && rest.iter().any(|w| {
+                    matches!(w.split('=').next().unwrap_or(""), "--execute" | "--config")
+                        || w.strip_prefix('-')
+                            .is_some_and(|s| !s.starts_with('-') && s.contains('e'))
+                }))
+        {
+            f.push("http:config".into());
         }
         if matches!(bin.as_str(), "kill" | "pkill" | "killall") {
             f.push("kill".into());

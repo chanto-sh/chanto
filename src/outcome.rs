@@ -200,10 +200,13 @@ pub fn risks(changed: &[(String, char)], diff: &str) -> Vec<Risk> {
 }
 
 fn git(root: &Path, args: &[&str]) -> String {
-    std::process::Command::new("git")
-        .args(args)
-        .current_dir(root)
-        .output()
+    let mut c = crate::hostgit::command(root);
+    c.args(args);
+    // A repository's diff drivers are programs too.
+    if args.first() == Some(&"diff") {
+        c.args(crate::hostgit::DIFF_ARGS);
+    }
+    c.output()
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
         .unwrap_or_default()
 }
@@ -396,6 +399,54 @@ pub async fn run_with_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn the_outcome_diff_runs_no_diff_drivers() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let d =
+            std::env::temp_dir().join(format!("chanto-outcome-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&d).unwrap();
+        let sh = |args: &[&str]| {
+            let o = std::process::Command::new("git")
+                .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+                .args(args)
+                .current_dir(&d)
+                .output()
+                .unwrap();
+            assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        };
+        let program = |name: &str| {
+            let p = d.join(format!(".{name}.sh"));
+            let marker = d.join(format!(".{name}-ran"));
+            std::fs::write(
+                &p,
+                format!("#!/bin/sh\ntouch '{}'\ncat \"$1\"\n", marker.display()),
+            )
+            .unwrap();
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+            (p.display().to_string(), marker)
+        };
+        let (external, ext_ran) = program("external");
+        let (textconv, tc_ran) = program("textconv");
+        sh(&["init", "-q"]);
+        std::fs::write(d.join(".gitattributes"), "*.txt diff=tc\n").unwrap();
+        std::fs::write(d.join("a.txt"), "one\n").unwrap();
+        sh(&["add", "-A"]);
+        sh(&["commit", "-q", "-m", "init"]);
+        sh(&["config", "diff.external", &external]);
+        sh(&["config", "diff.tc.textconv", &textconv]);
+        std::fs::write(d.join("a.txt"), "two\n").unwrap();
+        let (files, diff) = changed_files(&d, "HEAD");
+        assert!(
+            files.iter().any(|(f, st)| f == "a.txt" && *st == 'M'),
+            "{files:?}"
+        );
+        assert!(diff.contains("+two"), "{diff}");
+        assert!(!ext_ran.exists(), "diff.external ran");
+        assert!(!tc_ran.exists(), "the textconv driver ran");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn flags_risky_changes() {

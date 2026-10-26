@@ -504,6 +504,21 @@ pub(super) fn fit_words(s: &str, width: usize) -> String {
     format!("{out}…")
 }
 
+/// Local reset time for the footer; do not imply that stale quota data refreshed.
+pub(super) fn quota_reset(at: i64, now: i64) -> Option<String> {
+    if at <= now {
+        return Some("reset due".into());
+    }
+    let at = chrono::DateTime::from_timestamp(at, 0)?.with_timezone(&chrono::Local);
+    let now = chrono::DateTime::from_timestamp(now, 0)?.with_timezone(&chrono::Local);
+    let format = if at.date_naive() == now.date_naive() {
+        "resets at %-I:%M %p"
+    } else {
+        "resets %b %-d at %-I:%M %p"
+    };
+    Some(at.format(format).to_string())
+}
+
 /// The footer's left text: the label, then the mode's shortcut hint only when
 /// it fits whole. The hint is a teaching aid, not a status, so it never pays
 /// for itself by cutting the label or pushing a right-side item (the context

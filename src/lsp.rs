@@ -440,6 +440,11 @@ impl Client {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .kill_on_drop(true);
+        // A server loads project code (build scripts, plugins): keep the
+        // session's secrets out of its environment, as for Bash commands.
+        for k in crate::secrets::withheld_env_names() {
+            cmd.env_remove(k);
+        }
         #[cfg(unix)]
         cmd.process_group(0);
         let mut child = cmd

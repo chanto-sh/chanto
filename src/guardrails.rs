@@ -13,7 +13,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+mod policy;
 mod select;
+pub use policy::{script_command, set_policy};
 use select::{related, selection_broken};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -125,13 +127,7 @@ pub fn detect_checks(root: &Path) -> Vec<String> {
             .iter()
             .any(|p| is_test_file(p) && p.extension().and_then(|e| e.to_str()) == Some("py"));
     if py {
-        // The first Python with pytest (Homebrew's `python` may have it when `python3` doesn't).
-        let pytest = ["python3", "python"].into_iter().find(|py| {
-            std::process::Command::new(py)
-                .args(["-c", "import pytest"])
-                .output()
-                .is_ok_and(|o| o.status.success())
-        });
+        let pytest = policy::pytest_python();
         // No -x: a failure that predates the change mustn't hide the tests after
         // it. -rfE names every failure (older pytest doesn't by default), which
         // is how failures are matched against the baseline.
@@ -483,20 +479,31 @@ pub async fn run_check_env(
     env.push(("PYTHONDONTWRITEBYTECODE".into(), "1".into()));
     // A background run's checks run where its commands do: in its container.
     let container = crate::runs::container::for_path(cwd);
+    // Outside one, it runs as a Bash command does: sandboxed, without secrets.
+    let mut lease = None;
     let (mut c, token) = match &container {
         Some(ct) => {
             let (c, t) = ct.command(cmd, cwd, &env);
             (c, Some(t))
         }
-        None => {
-            let mut c = crate::shell::command(cmd);
-            c.current_dir(cwd).stdin(std::process::Stdio::null());
-            c.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-            (c, None)
-        }
+        None => match policy::check_command(cmd, cwd, &env) {
+            Ok((c, l)) => {
+                lease = l;
+                (c, None)
+            }
+            Err(e) => {
+                return CheckResult {
+                    command: cmd.to_string(),
+                    ok: false,
+                    output: format!("could not run: {e:#}"),
+                    secs: t0.elapsed().as_secs_f32(),
+                };
+            }
+        },
     };
     c.kill_on_drop(true);
     let r = run_detached_output(c, timeout).await;
+    drop(lease);
     if let (Err(_), Some(ct), Some(t)) = (&r, &container, &token) {
         ct.kill(t);
     }

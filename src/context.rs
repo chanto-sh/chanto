@@ -1566,19 +1566,11 @@ fn git_info_now(cwd: &Path) -> Option<String> {
     if !may_be_in_git_repo(cwd) {
         return None;
     }
-    let run = |args: &[&str]| -> Option<String> {
-        let o = std::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .ok()?;
-        o.status
-            .success()
-            .then(|| String::from_utf8_lossy(&o.stdout).trim().to_string())
-    };
+    // Before the folder is trusted: git must run nothing the repository names.
+    let run = |args: &[&str]| crate::hostgit::read(cwd, args);
     // Three git processes; run them side by side rather than one after another.
     let (branch, status, log) = std::thread::scope(|sc| {
-        let status = sc.spawn(|| run(&["status", "--short"]));
+        let status = sc.spawn(|| run(&["status", "--short", "--ignore-submodules=all"]));
         let log = sc.spawn(|| run(&["log", "--oneline", "-5"]));
         let branch = run(&["rev-parse", "--abbrev-ref", "HEAD"]);
         (

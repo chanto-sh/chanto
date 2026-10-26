@@ -16,11 +16,11 @@ pub struct Worktree {
 }
 
 fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    let o = Command::new("git")
-        .args(args)
-        .current_dir(dir)
-        .output()
-        .context("running git")?;
+    output(crate::hostgit::command(dir), args)
+}
+
+fn output(mut c: Command, args: &[&str]) -> Result<String> {
+    let o = c.args(args).output().context("running git")?;
     if !o.status.success() {
         bail!(
             "git {}: {}",
@@ -82,14 +82,22 @@ pub fn create(cwd: &Path, id: &str) -> Result<Worktree> {
 }
 
 impl Worktree {
-    /// Uncommitted changes plus commits made on the branch.
+    /// Git in the worktree, with the git directory the repository records for
+    /// it: the agent working there can rewrite the worktree's `.git` file.
+    fn git(&self, args: &[&str]) -> Result<String> {
+        output(crate::hostgit::in_worktree(&self.repo, &self.path)?, args)
+    }
+
+    /// Uncommitted changes plus commits made on the branch. A worktree whose
+    /// state can't be read counts as changed, so it is kept.
     pub fn changes(&self) -> String {
-        let status = git(&self.path, &["status", "--short"]).unwrap_or_default();
-        let commits = git(
-            &self.path,
-            &["log", "--oneline", &format!("{}..HEAD", self.base)],
-        )
-        .unwrap_or_default();
+        let status = match self.git(&["status", "--short", "--ignore-submodules=all"]) {
+            Ok(s) => s,
+            Err(e) => return format!("Couldn't read the worktree's status: {e:#}\n"),
+        };
+        let commits = self
+            .git(&["log", "--oneline", &format!("{}..HEAD", self.base)])
+            .unwrap_or_default();
         let mut s = String::new();
         if !status.is_empty() {
             s.push_str(&format!("Uncommitted changes:\n{status}\n"));

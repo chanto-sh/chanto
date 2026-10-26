@@ -63,13 +63,18 @@ pub fn interrupted_notice(f: &InFlight) -> String {
         f.at
     );
     if !f.running.is_empty() {
-        s.push_str(&format!(" It was running {}.", f.running.join(", ")));
+        s.push_str("\nIt was running:");
+        for call in &f.running {
+            // One per line: a batch of long commands is unreadable run together.
+            s.push_str("\n- ");
+            s.push_str(call);
+        }
     }
     if f.files.is_empty() {
-        s.push_str(" Anything it changed is on disk, so check `git status` before continuing.");
+        s.push_str("\nAnything it changed is on disk, so check `git status` before continuing.");
     } else {
         s.push_str(&format!(
-            " It had already changed {}; their current contents are on disk, so check `git status` (or `/diff`) before continuing.",
+            "\nIt had already changed {}; their current contents are on disk, so check `git status` (or `/diff`) before continuing.",
             f.files.join(", ")
         ));
     }
@@ -1040,6 +1045,28 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn interrupted_notice_lists_the_running_calls_one_per_line() {
+        let f = InFlight {
+            at: "2026-10-25T00:00:00-07:00".into(),
+            running: vec![
+                "Read: Read(src/tui/run.rs)".into(),
+                "Bash: grep -rn x".into(),
+            ],
+            files: vec!["src/lib.rs".into()],
+        };
+        let notice = interrupted_notice(&f);
+        assert!(
+            notice
+                .contains("\nIt was running:\n- Read: Read(src/tui/run.rs)\n- Bash: grep -rn x\n"),
+            "{notice}"
+        );
+        assert!(
+            notice.contains("\nIt had already changed src/lib.rs;"),
+            "{notice}"
+        );
     }
 
     #[test]

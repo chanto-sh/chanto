@@ -308,6 +308,7 @@ impl App {
             turn_tools: 0,
             current_tool: None,
             loop_turn: false,
+            agent_input: false,
         }
     }
 

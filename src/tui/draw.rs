@@ -1423,7 +1423,12 @@ impl App {
         // status line matches what the provider will actually enforce.
         if let Some(l) = &self.limits {
             let (warn_at, crit_at) = (75.0, 90.0);
-            if let Some(w) = &l.primary {
+            if let Some(w) = l
+                .primary
+                .iter()
+                .chain(l.secondary.iter())
+                .max_by(|a, b| a.used_percent.total_cmp(&b.used_percent))
+            {
                 let color = if w.used_percent >= crit_at {
                     pal().error
                 } else if w.used_percent >= warn_at {
@@ -1431,11 +1436,26 @@ impl App {
                 } else {
                     pal().dim
                 };
+                let warning = w.used_percent >= warn_at;
+                let marker = if warning { "⚠ " } else { "" };
+                let label = w.label();
+                let limit = if area.width >= 80 && label != "limit" {
+                    format!("{label} limit:")
+                } else {
+                    label
+                };
                 right.push((
-                    format!("{} {:.0}% left", w.label(), w.left_percent()),
+                    format!("{marker}{limit} {:.0}% left", w.left_percent()),
                     Style::default().fg(color),
-                    6,
+                    if warning { 9 } else { 6 },
                 ));
+                if let Some(reset) = w
+                    .resets_at
+                    .and_then(|at| quota_reset(at, chrono::Utc::now().timestamp()))
+                {
+                    right.push((reset, Style::default().fg(color), 5));
+                }
+                right.push(("/usage".into(), dim, 3));
             }
         }
         right.push((

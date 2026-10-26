@@ -14,7 +14,10 @@ mod hosted_tests;
 pub(crate) mod limits;
 #[cfg(test)]
 pub(crate) mod mock;
+#[cfg(test)]
+mod overhead_tests;
 mod responses;
+mod safety;
 
 use anyhow::{Context, Result, bail};
 use futures::StreamExt;
@@ -323,22 +326,33 @@ pub enum ProviderKind {
 #[derive(Default)]
 pub(crate) struct LineBuf {
     buf: Vec<u8>,
+    /// The start of the next unread line.
+    start: usize,
     /// Bytes already known to hold no newline.
     scanned: usize,
 }
 
 impl LineBuf {
     pub(crate) fn push(&mut self, bytes: &[u8]) {
+        // Compact once per read, rather than shifting the unread chunk for
+        // every line. Retain capacity for the next network read.
+        if self.start > 0 {
+            self.buf.copy_within(self.start.., 0);
+            self.buf.truncate(self.buf.len() - self.start);
+            self.scanned -= self.start;
+            self.start = 0;
+        }
         self.buf.extend_from_slice(bytes);
     }
 
     /// The next complete line, with its `\n`.
-    pub(crate) fn next_line(&mut self) -> Option<Vec<u8>> {
+    pub(crate) fn next_line(&mut self) -> Option<&[u8]> {
         match self.buf[self.scanned..].iter().position(|&b| b == b'\n') {
             Some(off) => {
-                let end = self.scanned + off;
-                self.scanned = 0;
-                Some(self.buf.drain(..=end).collect())
+                let start = self.start;
+                self.scanned += off + 1;
+                self.start = self.scanned;
+                Some(&self.buf[start..self.start])
             }
             None => {
                 self.scanned = self.buf.len();
@@ -349,6 +363,8 @@ impl LineBuf {
 
     /// What's left after the stream ended: a last line without its `\n`.
     pub(crate) fn rest(&mut self) -> Vec<u8> {
+        self.buf.drain(..self.start);
+        self.start = 0;
         self.scanned = 0;
         std::mem::take(&mut self.buf)
     }
@@ -930,6 +946,9 @@ impl Provider {
             }
             ProviderKind::Azure => self.chat_openai(req, on_delta).await,
         };
+        if let Ok(response) = &mut result {
+            response.show_safety_notice(on_delta);
+        }
         if let Some(a) = &self.accounting {
             let provider = self.billing_id();
             // Local models and plan logins (ChatGPT) cost nothing per call.
@@ -959,13 +978,14 @@ impl Provider {
     /// this server or model doesn't report token probabilities (Ollama's and
     /// OpenAI-compatible chat only); a model found not to is remembered, so
     /// it costs one failed request at most.
-    pub async fn label_probs(&self, req: &ChatRequest, labels: &[&str]) -> Option<Vec<f64>> {
+    pub async fn label_probs(&self, req: &ChatRequest, labels: &[&str]) -> Option<LabelProbs> {
         let masked =
             crate::secrets::redact_request_messages(&req.messages).map(|messages| ChatRequest {
                 messages,
                 ..req.clone()
             });
         let req = masked.as_ref().unwrap_or(req);
+
         static UNSUPPORTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
         let key = format!("{}|{}", self.base_url, req.model);
         if !matches!(self.kind, ProviderKind::Ollama | ProviderKind::Openai)
@@ -1311,18 +1331,26 @@ impl Provider {
         body: Vec<u8>,
         headers: &[(String, String)],
     ) -> Result<reqwest::Response> {
+        // Building transfers the serialized Vec into reqwest's shared body.
+        // Cloned requests then share those bytes, including the first send.
+        let mut rb = self
+            .http
+            .post(url)
+            .header("content-type", "application/json")
+            .body(body);
+        for (k, v) in headers {
+            rb = rb.header(k.as_str(), v);
+        }
+        let request = rb.build()?;
         let mut attempt = 0u32;
         loop {
-            let mut rb = self
+            let resp = self
                 .http
-                .post(url)
-                .header("content-type", "application/json")
-                .body(body.clone());
-            for (k, v) in headers {
-                rb = rb.header(k.as_str(), v);
-            }
-            let resp = rb
-                .send()
+                .execute(
+                    request
+                        .try_clone()
+                        .context("cloning a buffered model request")?,
+                )
                 .await
                 .with_context(|| format!("connecting to {}", crate::util::truncate(url, 200)))?;
             let status = resp.status().as_u16();
@@ -1463,7 +1491,7 @@ impl Provider {
         while let Some(chunk) = stream.next().await {
             lines.push(&chunk?);
             while let Some(line) = lines.next_line() {
-                let line = String::from_utf8_lossy(&line);
+                let line = String::from_utf8_lossy(line);
                 let line = line.trim();
                 if line.is_empty() {
                     continue;
@@ -1766,7 +1794,7 @@ impl Provider {
         'outer: while let Some(chunk) = stream.next().await {
             lines.push(&chunk?);
             while let Some(line) = lines.next_line() {
-                let line = String::from_utf8_lossy(&line);
+                let line = String::from_utf8_lossy(line);
                 let line = line.trim();
                 let Some(data) = line.strip_prefix("data:") else {
                     if line.starts_with('{') && ollama_shaped(line) {
@@ -1801,6 +1829,11 @@ impl Provider {
                     continue;
                 };
                 let d = &choice["delta"];
+                if let Some(t) = d["refusal"].as_str().filter(|t| !t.is_empty()) {
+                    out.text.push_str(t);
+                    on_delta(Delta::Text(t.to_string()));
+                    out.finish_reason = Some("refusal".into());
+                }
                 // Some servers send the same text under both names.
                 let reasoning = ["reasoning_content", "reasoning"]
                     .iter()
@@ -1864,7 +1897,9 @@ impl Provider {
                         }
                     }
                 }
-                if let Some(f) = choice["finish_reason"].as_str() {
+                if let Some(f) = choice["finish_reason"].as_str()
+                    && (out.finish_reason.as_deref() != Some("refusal") || f == "content_filter")
+                {
                     out.finish_reason = Some(f.to_string());
                 }
             }
@@ -1995,24 +2030,41 @@ fn top_logprobs(entry: &Value) -> Vec<(String, f64)> {
     out
 }
 
-/// Each label's share of the probability that went to any label, matching
-/// tokens to labels by prefix ignoring case ("AL" and "allow" both count for
-/// ALLOW). `None` when no alternative matched a label.
-fn label_probs_from(top: &[(String, f64)], labels: &[&str]) -> Option<Vec<f64>> {
+/// The first output token's probabilities, read as labels.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LabelProbs {
+    /// Each label's absolute probability: the sum over the alternatives that
+    /// read as it. Mass on anything else (prose, a label split into short
+    /// pieces) counts for no label.
+    pub mass: Vec<f64>,
+    /// The label the single most likely token reads as, if it reads as one.
+    pub top: Option<usize>,
+}
+
+/// The labels' probabilities among the top alternatives. A token counts for
+/// a label only when it is that whole label, ignoring case and surrounding
+/// blanks ("ALLOW", " allow"). A piece of one ("Al", "All", "Allo") could as
+/// well begin prose ("All of this…"), so it counts for none: that keeps a
+/// label's mass from being overstated, never understated in its rival's
+/// favour. `None` when no alternative is a label.
+fn label_probs_from(top: &[(String, f64)], labels: &[&str]) -> Option<LabelProbs> {
+    let label_of = |token: &str| {
+        let t = token.trim();
+        labels.iter().position(|l| l.eq_ignore_ascii_case(t))
+    };
     let mut mass = vec![0.0; labels.len()];
     for (token, lp) in top {
-        let t = token.trim().to_ascii_lowercase();
-        if t.len() < 2 {
-            continue;
-        }
-        if let Some(i) = labels.iter().position(|l| {
-            l.to_ascii_lowercase().starts_with(&t) || t.starts_with(&l.to_ascii_lowercase())
-        }) {
+        if let Some(i) = label_of(token) {
             mass[i] += lp.exp();
         }
     }
-    let total: f64 = mass.iter().sum();
-    (total > 0.0).then(|| mass.iter().map(|m| m / total).collect())
+    let best = top
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+    (mass.iter().sum::<f64>() > 0.0).then(|| LabelProbs {
+        top: best.and_then(|(t, _)| label_of(t)),
+        mass,
+    })
 }
 
 /// Best-effort fix for truncated JSON emitted by small models (unclosed
@@ -2574,19 +2626,41 @@ mod tests {
     }
 
     #[test]
-    fn label_probs_match_tokens_by_prefix() {
+    fn label_probs_count_only_whole_labels() {
         let top = |v: &[(&str, f64)]| -> Vec<(String, f64)> {
             v.iter().map(|(t, p)| (t.to_string(), p.ln())).collect()
         };
         let p = label_probs_from(
-            &top(&[("AL", 0.6), (" block", 0.2), ("I", 0.2)]),
+            &top(&[("allow", 0.6), (" BLOCK", 0.2), ("I", 0.2)]),
             &["ALLOW", "BLOCK"],
         )
         .unwrap();
         assert!(
-            (p[0] - 0.75).abs() < 1e-9 && (p[1] - 0.25).abs() < 1e-9,
+            (p.mass[0] - 0.6).abs() < 1e-9 && (p.mass[1] - 0.2).abs() < 1e-9 && p.top == Some(0),
             "{p:?}"
         );
+        // A prefix of a label could begin prose ("All of this…"): it counts
+        // for no label, however likely.
+        for piece in ["Al", "All", "Allo", "ALLOWED"] {
+            let p = label_probs_from(&top(&[(piece, 0.95), ("ALLOW", 0.04)]), &["ALLOW", "BLOCK"])
+                .unwrap();
+            assert!(
+                p.top.is_none() && (p.mass[0] - 0.04).abs() < 1e-9,
+                "{piece}: {p:?}"
+            );
+        }
+        // Absolute, not a share of the label mass: ALLOW at 0.7% stays 0.7%
+        // when most of the probability went to prose.
+        let p = label_probs_from(
+            &top(&[("Sure", 0.95), ("ALLOW", 0.007)]),
+            &["ALLOW", "BLOCK"],
+        )
+        .unwrap();
+        assert!((p.mass[0] - 0.007).abs() < 1e-9 && p.top.is_none(), "{p:?}");
+        // A label split into one-letter pieces counts for neither label.
+        let p =
+            label_probs_from(&top(&[("ALLOW", 0.5), ("B", 0.45)]), &["ALLOW", "BLOCK"]).unwrap();
+        assert!((p.mass[0] - 0.5).abs() < 1e-9 && p.mass[1] == 0.0, "{p:?}");
         // Nothing that reads as a label: no answer, not a guess.
         assert!(
             label_probs_from(&top(&[("Sure", 0.9), ("I", 0.1)]), &["ALLOW", "BLOCK"]).is_none()
@@ -2756,11 +2830,11 @@ mod tests {
     fn line_buf_splits_across_reads_and_scans_long_lines_once() {
         let mut l = LineBuf::default();
         l.push(b"data: a\ndata: b");
-        assert_eq!(l.next_line().as_deref(), Some(&b"data: a\n"[..]));
+        assert_eq!(l.next_line(), Some(&b"data: a\n"[..]));
         assert_eq!(l.next_line(), None);
         l.push(b"c\n\nx");
-        assert_eq!(l.next_line().as_deref(), Some(&b"data: bc\n"[..]));
-        assert_eq!(l.next_line().as_deref(), Some(&b"\n"[..]));
+        assert_eq!(l.next_line(), Some(&b"data: bc\n"[..]));
+        assert_eq!(l.next_line(), Some(&b"\n"[..]));
         assert_eq!(l.next_line(), None);
         // A 20 MB line in 16 KB reads: linear, so this is instant.
         let mut l = LineBuf::default();
