@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Clickable links.** In full-screen mode, a click on a visible web link opens it in your browser even when the terminal does not support OSC 8. Wrapped URLs keep their full destination, and links in provider notices, user messages and subagent transcripts work too. Dragging still selects text; non-web schemes and control characters are rejected.
+- **Quieter status area.** Background jobs use short descriptions and bounded command previews. The footer avoids repeating the provider and branch, hides healthy MCP connections, and shows `awake` only when idle.
 - **Security: an apostrophe inside double quotes could hide command substitutions.** Prefix allow rules such as `Bash(echo:*)` could miss substitutions after quoted text containing an apostrophe. The permission check now keeps single and double quote state separate. Found by fuzzing.
 - **UI regression tests.** Deterministic text and style snapshots cover 72 terminal frames across common UI states, widths and themes. CI publishes a PNG/GIF preview gallery for review.
 

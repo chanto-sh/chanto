@@ -438,7 +438,6 @@ async fn the_footer_shows_mode_hints_and_session_facts() {
     let footer = t.render(200, 20).pop().unwrap();
     for part in [
         "custom status",
-        "⎇ feature/x",
         "PR #3 checks failing",
         "$1.25",
         "33 tok/s",
@@ -447,6 +446,14 @@ async fn the_footer_shows_mode_hints_and_session_facts() {
     ] {
         assert!(footer.contains(part), "{part}: {footer}");
     }
+    assert!(!footer.contains("feature/x"), "{footer}");
+    *t.pr_status.lock().unwrap() = None;
+    assert!(t.render(200, 20).pop().unwrap().contains("⎇ feature/x"));
+    t.env.set_model("deepseek/deepseek-flash");
+    let footer = t.render(200, 20).pop().unwrap();
+    assert!(footer.contains("deepseek-flash"), "{footer}");
+    assert!(!footer.contains("deepseek/deepseek-flash"), "{footer}");
+    t.env.set_model("mock");
     // A fresh hint wins over the status text.
     t.hint = Some(("Copied".into(), Instant::now()));
     assert!(t.render(200, 20).pop().unwrap().contains("Copied"));

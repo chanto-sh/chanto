@@ -393,6 +393,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn capacity_errors_keep_the_provider_explanation() {
+        let message = "Selected model is at capacity. Please try a different model.";
+        let error = json!({"code": "model_capacity", "message": message});
+        let body = json!({"error": error}).to_string();
+        let (base, _) = serve(vec![(503, body); 5]).await;
+        let err = provider(&base)
+            .post_retrying(&base, &json!({}), &[])
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains(message), "{err:#}");
+        assert!(err.downcast_ref::<QuotaExhausted>().is_none());
+        for event in [
+            json!({"type": "error", "error": error}),
+            json!({"type": "response.failed", "response": {"error": error}}),
+        ] {
+            let (base, _) = serve(vec![(200, sse(&[("error", event)]))]).await;
+            let err = provider(&base)
+                .chat(&request(), &mut |_| {})
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains(message), "{err:#}");
+            assert!(err.downcast_ref::<QuotaExhausted>().is_none());
+        }
+    }
+
+    #[tokio::test]
     async fn nested_stream_errors_keep_the_provider_message() {
         // Providers nest the details under `error`; the text must survive even
         // when the code is one we don't have special handling for.
