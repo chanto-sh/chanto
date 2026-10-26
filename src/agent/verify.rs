@@ -201,7 +201,7 @@ impl Agent {
             key: "limit".into(),
             lines: vec![],
         });
-        self.emit(Event::Busy(Some("Thinking…".into())));
+        self.emit(Event::Busy(Some("Working…".into())));
         let note = "Usage limit reset; continuing the turn.";
         self.emit(Event::Info(note.into()));
         crate::hooks::notify(

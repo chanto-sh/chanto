@@ -780,7 +780,8 @@ impl App {
         let mut lines = Vec::new();
         if self.busy {
             let el = view_time::elapsed(self.busy_since);
-            let frame = busy_frame(crate::a11y::reduce_motion(), el.as_millis());
+            let reduce_motion = crate::a11y::reduce_motion();
+            let frame = busy_frame(reduce_motion, el.as_millis());
             // While reasoning is streaming, use progressive wording so a slow
             // model reads as still working rather than frozen.
             let thinking = self.open_think.and_then(|i| match &self.blocks[i].kind {
@@ -825,11 +826,20 @@ impl App {
                 ));
             }
             detail.push_str(" · esc to interrupt)");
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {frame} "), Style::default().fg(pal().accent)),
-                Span::styled(format!("{verb}…"), Style::default().fg(pal().accent)),
-                Span::styled(detail, Style::default().fg(pal().dim)),
-            ]));
+            lines.push(Line::from({
+                let mut spans = vec![Span::styled(
+                    format!(" {frame} "),
+                    Style::default().fg(pal().accent),
+                )];
+                spans.extend(shimmer_spans(
+                    &format!("{verb}…"),
+                    pal().accent,
+                    reduce_motion,
+                    el.as_millis(),
+                ));
+                spans.push(Span::styled(detail, Style::default().fg(pal().dim)));
+                spans
+            }));
         }
         for (i, q) in self.queue.iter().take(3).enumerate() {
             let hint = if i == 0 {
