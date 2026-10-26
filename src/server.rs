@@ -41,6 +41,7 @@ impl ServerFrontend {
         let id = format!("req-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let (tx, rx) = oneshot::channel();
         ev["request_id"] = json!(id);
+        crate::secrets::redact_json(&mut ev);
         self.pending
             .lock()
             .unwrap()
@@ -566,7 +567,9 @@ async fn get_session(State(st): State<AppState>, Path(id): Path<String>) -> Resp
         .skip(1)
         .map(|(i, m)| json!({"role": m.role, "content": m.content, "checkpoint": starts.get(&i), "images": image_data_urls(&m.images), "tool_calls": m.tool_calls.iter().map(|c| json!({"id": c.id, "name": c.name, "arguments": c.arguments})).collect::<Vec<_>>()}))
         .collect();
-    Json(json!({"id": id, "model": s.env.model(), "mode": s.env.mode(), "messages": msgs, "todos": *s.env.todos.lock().unwrap()})).into_response()
+    let mut out = json!({"id": id, "model": s.env.model(), "mode": s.env.mode(), "messages": msgs, "todos": *s.env.todos.lock().unwrap()});
+    crate::secrets::redact_json(&mut out);
+    Json(out).into_response()
 }
 
 /// A session's checkpoints (one per prompt, oldest first), whether each can
@@ -583,7 +586,10 @@ fn checkpoint_list(agent: &Agent) -> Value {
         .map(|(i, c)| json!({"index": i, "prompt": c.prompt, "timestamp": c.timestamp,
             "code": c.tree.is_some() || !c.files.is_empty(), "conversation": c.msg_index > 0 && c.msg_index < len}))
         .collect();
-    json!({"checkpoints": list, "undo": agent.env.rewind_undo.lock().unwrap().is_some()})
+    let mut out =
+        json!({"checkpoints": list, "undo": agent.env.rewind_undo.lock().unwrap().is_some()});
+    crate::secrets::redact_json(&mut out);
+    out
 }
 
 /// The live session's agent, unless a turn is running.
@@ -822,7 +828,9 @@ fn queued_json(env: &Env) -> Value {
         .iter()
         .map(|q| json!({"id": q.id, "text": q.text}))
         .collect();
-    json!({"queued": queued})
+    let mut out = json!({"queued": queued});
+    crate::secrets::redact_json(&mut out);
+    out
 }
 
 async fn get_queue(State(st): State<AppState>, Path(id): Path<String>) -> Response {
@@ -1495,6 +1503,32 @@ mod tests {
     use crate::llm::{Provider, ProviderKind};
     use crate::tools::{Ctx, Registry, Tool};
 
+    #[tokio::test]
+    async fn request_events_and_replay_mask_secrets() {
+        let (tx, mut rx) = broadcast::channel(8);
+        let frontend = ServerFrontend {
+            tx,
+            pending: Default::default(),
+        };
+        // Token-shaped, assembled at runtime so the source holds no such literal.
+        let secret = &format!("{}_{}", "ghp", "abcdefghijklmnopqrstuvwxyz0123456789");
+        let secret = secret.as_str();
+        for kind in ["permission_request", "question"] {
+            let ask = frontend.ask(json!({"type": kind, "detail": secret}));
+            tokio::pin!(ask);
+            tokio::select! {
+                _ = &mut ask => panic!("request should wait for an answer"),
+                ev = rx.recv() => {
+                    let ev = ev.unwrap();
+                    assert!(!ev.to_string().contains(secret));
+                    assert!(ev.to_string().contains("REDACTED"));
+                    let pending = frontend.pending.lock().unwrap();
+                    assert!(!pending.values().next().unwrap().1.to_string().contains(secret));
+                }
+            }
+        }
+    }
+
     #[test]
     fn bearer_scheme_is_case_insensitive() {
         for h in [
@@ -1581,6 +1615,97 @@ mod tests {
         let last = a.insert("last".into());
         assert_eq!(a.pages.len(), Artifacts::CAPACITY);
         assert_eq!(a.pages[&last], "last");
+    }
+
+    /// The transcript, checkpoint and queue endpoints show what the web UI
+    /// shows, so secrets in the history are masked there too.
+    #[tokio::test]
+    async fn transcript_checkpoint_and_queue_endpoints_mask_secrets() {
+        use crate::llm::{Message, ToolCall};
+        let _g = crate::secrets::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = crate::util::canonical(crate::agent::tests::tmpdir("server-mask")).unwrap();
+        crate::secrets::init(&crate::config::Config::default(), &dir);
+        // Token-shaped, assembled at runtime so the source holds no such literal.
+        let secret = &format!("{}_{}", "ghp", "abcdefghijklmnopqrstuvwxyz0123456789");
+        let secret = secret.as_str();
+        let (tx, _) = broadcast::channel(8);
+        let pending: Pending = Default::default();
+        let env = Env::new(EnvInit {
+            config: crate::config::Config::default(),
+            provider: Provider::new(ProviderKind::Openai, "http://127.0.0.1:9", None, 32768),
+            model: "mock".into(),
+            mode: crate::permissions::Mode::Bypass,
+            vision: false,
+            cwd: dir,
+            tools: Registry::builtin(),
+            mcp: vec![],
+            frontend: Arc::new(ServerFrontend {
+                tx: tx.clone(),
+                pending: pending.clone(),
+            }),
+            interactive: false,
+        });
+        let mut agent = Agent::new(env.clone());
+        let mut call = Message::assistant("");
+        call.tool_calls.push(ToolCall {
+            id: "c1".into(),
+            name: "Bash".into(),
+            arguments: json!({"command": format!("gh auth login --with-token {secret}")}),
+        });
+        agent.messages = vec![
+            Message::system("sys"),
+            Message::user(format!("use {secret}")),
+            call,
+        ];
+        *env.checkpoints.lock().unwrap() = vec![crate::agent::Checkpoint {
+            id: "a".into(),
+            timestamp: "t1".into(),
+            tree: None,
+            msg_index: 1,
+            prompt: format!("use {secret}"),
+            files: Default::default(),
+        }];
+        env.inbox
+            .lock()
+            .unwrap()
+            .push(Queued::new(format!("later {secret}")));
+        let s = Arc::new(Session {
+            options: json!({}),
+            agent: Arc::new(AsyncMutex::new(agent)),
+            env: env.clone(),
+            tx,
+            pending,
+            cancel: Mutex::new(None),
+        });
+        let st = AppState {
+            cli: Arc::new(<Cli as clap::Parser>::parse_from(["chanto"])),
+            token: Arc::new("test".into()),
+            sessions: Arc::new(Mutex::new(HashMap::from([("test".into(), s)]))),
+            artifacts: Arc::new(Mutex::new(Artifacts::default())),
+        };
+        let id = || Path("test".to_string());
+        for (what, body) in [
+            (
+                "transcript",
+                body_json(get_session(State(st.clone()), id()).await).await,
+            ),
+            (
+                "checkpoints",
+                body_json(checkpoints(State(st.clone()), id()).await).await,
+            ),
+            (
+                "queue",
+                body_json(get_queue(State(st.clone()), id()).await).await,
+            ),
+        ] {
+            let text = body.to_string();
+            assert!(
+                !text.contains(secret) && text.contains("[REDACTED:GITHUB_TOKEN]"),
+                "{what}: {text}"
+            );
+        }
     }
 
     #[tokio::test]

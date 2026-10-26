@@ -98,7 +98,11 @@ fn messages_json(a: &Agent) -> Vec<Value> {
     a.messages
         .iter()
         .skip(1)
-        .map(|m| json!({"role": m.role, "content": m.content, "tool_calls": m.tool_calls.iter().map(|c| json!({"id": c.id, "name": c.name, "arguments": c.arguments})).collect::<Vec<_>>()}))
+        .map(|m| {
+            let mut out = json!({"role": m.role, "content": m.content, "tool_calls": m.tool_calls.iter().map(|c| json!({"id": c.id, "name": c.name, "arguments": c.arguments})).collect::<Vec<_>>()});
+            crate::secrets::redact_json(&mut out);
+            out
+        })
         .collect()
 }
 
@@ -151,7 +155,8 @@ impl Hub {
 
     /// Send an event to connected phones and keep it for later ones. Streamed
     /// text is merged into one entry per run, so a long answer is one event.
-    fn record(&self, ev: Value) {
+    fn record(&self, mut ev: Value) {
+        crate::secrets::redact_json(&mut ev);
         let mut st = self.state.lock().unwrap();
         let merged = match (st.log.back_mut(), ev["type"].as_str()) {
             (Some(last), Some(kind @ ("text" | "reasoning"))) if last["type"] == kind => {
@@ -218,6 +223,7 @@ impl Hub {
         out["id"] = json!(self.id);
         out["busy"] = json!(st.busy);
         out["messages"] = json!(st.messages);
+        crate::secrets::redact_json(&mut out);
         out
     }
 
@@ -242,6 +248,7 @@ impl Hub {
         let id = format!("req-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let (tx, rx) = oneshot::channel();
         ev["request_id"] = json!(id);
+        crate::secrets::redact_json(&mut ev);
         self.pending
             .lock()
             .unwrap()
@@ -1511,6 +1518,24 @@ mod tests {
         let slot: Slot = Arc::new(RwLock::new(Some(hub.clone())));
         let mirror = Mirror::new(term.clone(), slot);
         (host, hub, term, mirror)
+    }
+
+    #[test]
+    fn phone_prompts_user_events_and_snapshots_mask_secrets() {
+        let (host, hub, _, _) = setup();
+        // Token-shaped, assembled at runtime so the source holds no such literal.
+        let secret = &format!("{}_{}", "ghp", "abcdefghijklmnopqrstuvwxyz0123456789");
+        let secret = secret.as_str();
+        *host.messages.lock().unwrap() = Some(vec![json!({"content": secret})]);
+        assert!(!hub.snapshot().to_string().contains(secret));
+        hub.user(secret, false);
+        let (_id, _answer) = hub.open(json!({"type": "permission_request", "detail": secret}));
+        let (replay, _) = hub.subscribe();
+        assert_eq!(replay.len(), 2);
+        for event in replay {
+            assert!(!event.to_string().contains(secret));
+            assert!(event.to_string().contains("REDACTED"));
+        }
     }
 
     async fn next_of(rx: &mut broadcast::Receiver<Value>, kind: &str) -> Value {
