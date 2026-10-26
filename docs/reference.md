@@ -1791,6 +1791,7 @@ python3 reproduce.py --agents chanto --no-install --chanto ../chanto/target/rele
 ```
 
 The default workload is 40 tool turns reading 40 KB files, repeated 10 times. It reports median process-tree CPU time per model request and median peak process-tree resident memory sampled every 60 ms; the final answer is also a model request. Results record versions, machine details and every run. Component microbenchmarks are separate measurements and do not establish a whole-agent CPU or memory improvement.
+
 Benchmark variants turn on the experimental optimizations below: `chanto+concise`, `chanto+quiet`, `chanto+provenance`, `chanto+all`, or any combination joined with `+`. They run the same command as `chanto` with `CHANTO_OPTIMIZE` set, and each result and the run's metadata record which switches were on. `--chanto-effort LEVEL` passes `--effort LEVEL` to every Chanto agent in the run.
 
 ## Optimizations (experimental)
