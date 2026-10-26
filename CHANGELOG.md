@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Startup.** The secret patterns compile on the background warm-up thread while the rest of startup runs, instead of on the first prompt. A one-shot `-p` run against a local model drops from about 24 ms to about 19 ms of CPU, with no change to what is masked.
+
 ## v0.1.6 (October 26, 2026)
 
 - **Clickable links.** In full-screen mode, a click on a visible web link opens it in your browser even when the terminal does not support OSC 8. Wrapped URLs keep their full destination, and links in provider notices, user messages and subagent transcripts work too. Dragging still selects text; non-web schemes and control characters are rejected.
