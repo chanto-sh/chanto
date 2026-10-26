@@ -19,7 +19,9 @@ use std::path::{Path, PathBuf};
 
 /// `-c` overrides for every host git call. They also reach the git processes
 /// git starts itself.
-const BASE: [&str; 20] = [
+const BASE: [&str; 22] = [
+    "-c",
+    "core.longpaths=true",
     "-c",
     "core.fsmonitor=false",
     "-c",
@@ -61,8 +63,8 @@ fn with_git_dir(dir: &Path, explicit: Option<(&Path, &Path)>) -> std::process::C
     let explicit: Vec<String> = explicit
         .map(|(gd, wt)| {
             vec![
-                format!("--git-dir={}", gd.display()),
-                format!("--work-tree={}", wt.display()),
+                format!("--git-dir={}", relative_to(gd, dir).display()),
+                format!("--work-tree={}", relative_to(wt, dir).display()),
             ]
         })
         .unwrap_or_default();
@@ -73,6 +75,36 @@ fn with_git_dir(dir: &Path, explicit: Option<(&Path, &Path)>) -> std::process::C
         .current_dir(dir)
         .stdin(std::process::Stdio::null());
     c
+}
+
+/// Git checks the length of an explicit git directory before reading
+/// `core.longpaths`. Keep paths relative to its working directory so a
+/// deeply nested Chanto home also works with Git for Windows.
+fn relative_to(path: &Path, dir: &Path) -> PathBuf {
+    if !path.is_absolute() || !dir.is_absolute() {
+        return path.to_path_buf();
+    }
+    // Resolve symlinks before introducing `..` components.
+    let target_path = canonical(path);
+    let base_path = canonical(dir);
+    let mut target = target_path.components().peekable();
+    let mut base = base_path.components().peekable();
+    if target.peek() != base.peek() {
+        return path.to_path_buf();
+    }
+    while target.peek().is_some() && target.peek() == base.peek() {
+        target.next();
+        base.next();
+    }
+    let mut out = PathBuf::new();
+    for _ in base {
+        out.push("..");
+    }
+    out.extend(target);
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
 }
 
 /// Stdout of `git args` from [`command`], trimmed; None when git fails.
@@ -237,7 +269,7 @@ pub fn with_dirs(git_dir: &Path, work_tree: &Path) -> std::process::Command {
 /// [`command`] on the bare repository `repo` (one Chanto keeps), named
 /// explicitly since bare repositories aren't discovered.
 pub fn bare(repo: &Path) -> std::process::Command {
-    let gd = format!("--git-dir={}", repo.display());
+    let gd = "--git-dir=.".to_string();
     let mut c = std::process::Command::new("git");
     c.args(BASE)
         .arg(&gd)

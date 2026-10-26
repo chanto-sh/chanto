@@ -6,6 +6,35 @@ fn scratch() -> PathBuf {
     crate::util::canonical(&d).unwrap()
 }
 
+#[test]
+fn explicit_git_directories_work_under_a_deep_home() {
+    let d = scratch();
+    let mut home = d.clone();
+    while home.as_os_str().len() < 225 {
+        home.push("nested-home");
+    }
+    let repo = home.join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    sh(&repo, &["-c", "core.longpaths=true", "init", "-q"]);
+    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
+    let mut c = with_dirs(&repo.join(".git"), &repo);
+    let o = c.args(["add", "-A", "."]).output().unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(c.get_args().any(|a| a == "--git-dir=.git"));
+    let bare_repo = home.join("bare.git");
+    std::fs::create_dir_all(&bare_repo).unwrap();
+    sh(
+        &bare_repo,
+        &["-c", "core.longpaths=true", "init", "-q", "--bare"],
+    );
+    let o = bare(&bare_repo)
+        .args(["rev-parse", "--is-bare-repository"])
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    let _ = std::fs::remove_dir_all(d);
+}
+
 fn sh(dir: &Path, args: &[&str]) {
     let o = std::process::Command::new("git")
         .args(["-c", "user.email=t@t", "-c", "user.name=t"])
