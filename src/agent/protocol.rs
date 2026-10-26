@@ -352,7 +352,7 @@ pub(super) async fn run_tool_with(
     };
     env.emit(Event::ToolStart {
         id: call.id.clone(),
-        label: tool.label(&call.arguments),
+        label: tool.label_in(&call.arguments, env),
         parent: parent.clone(),
     });
     let sub_ctx = Ctx {

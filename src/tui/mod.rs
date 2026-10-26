@@ -2636,3 +2636,6 @@ mod draw_tests;
 
 #[cfg(test)]
 mod run_tests;
+
+#[cfg(test)]
+mod quota_tests;

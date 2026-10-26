@@ -101,6 +101,7 @@ ends when the command exits or at timeout_ms (default 300000, max 1800000); you 
             &ctx.cwd(),
             false,
             Some(description.clone()),
+            None,
         )?;
         LIVE.lock().unwrap().push((key(&ctx.env), id.clone()));
         tokio::spawn(watch(ctx.env.clone(), shell, description.clone(), timeout));

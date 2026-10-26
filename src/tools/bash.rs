@@ -32,6 +32,8 @@ fn append_bounded(buf: &mut Vec<u8>, data: &[u8]) {
 pub struct BgShell {
     pub id: String,
     pub command: String,
+    /// The originating Bash call's short description, for human-facing status.
+    pub description: Option<String>,
     /// Set for a Monitor watch: its description.
     pub monitor: Option<String>,
     pub output: Mutex<String>,
@@ -42,6 +44,18 @@ pub struct BgShell {
     pub exit: Mutex<Option<i32>>,
     pub pid: Option<u32>,
     network: Mutex<Option<crate::network::Lease>>,
+}
+
+impl BgShell {
+    fn title(&self) -> String {
+        crate::util::one_line(
+            self.description
+                .as_deref()
+                .or(self.monitor.as_deref())
+                .unwrap_or(&self.command),
+            80,
+        )
+    }
 }
 
 /// Where a foreground command's output goes. It starts writing into the
@@ -588,6 +602,11 @@ independent calls in parallel."
     }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput> {
         let command = arg_str(&args, "command")?.to_string();
+        let description = args["description"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| crate::util::one_line(s, 100));
         let cwd = ctx.cwd();
         let unsandboxed = arg_bool(&args, "dangerouslyDisableSandbox");
         if let Some(n) = nested_sandbox_notice() {
@@ -595,7 +614,7 @@ independent calls in parallel."
         }
         crate::shell::snapshot::ensure(&ctx.env).await;
         if arg_bool(&args, "run_in_background") {
-            return start_background(ctx, &command, &cwd, unsandboxed).await;
+            return start_background(ctx, &command, &cwd, unsandboxed, description).await;
         }
         if let Some(secs) = leading_sleep(&command).filter(|s| *s >= 10.0) {
             return Ok(ToolOutput::err(format!(
@@ -703,6 +722,7 @@ independent calls in parallel."
             let shell = Arc::new(BgShell {
                 id: id.clone(),
                 command: command.clone(),
+                description,
                 monitor: None,
                 output: Mutex::new(text.clone()),
                 read_pos: Mutex::new(text.len()),
@@ -719,6 +739,7 @@ independent calls in parallel."
                 .unwrap()
                 .insert(id.clone(), shell.clone());
             let cf = cwd_file.clone();
+            let title = shell.title();
             tokio::spawn(async move {
                 let code = child.wait().await.ok().and_then(|s| s.code());
                 if exec.is_some() {
@@ -739,7 +760,7 @@ independent calls in parallel."
             return Ok(ToolOutput {
                 content: out,
                 is_error: true,
-                display: Some(format!("Still running in background ({id})")),
+                display: Some(format!("Moved to background · {id}\n{title}")),
                 images: vec![],
             });
         }
@@ -872,6 +893,10 @@ independent calls in parallel."
     }
 }
 
+#[cfg(test)]
+#[path = "bash/output_tests.rs"]
+mod output_tests;
+
 /// Prints the shell's directory as a path Chanto can open: Git Bash's
 /// `pwd -P` says `/c/Users/…`, which Windows can't resolve, so ask for `C:/Users/…`.
 #[cfg(windows)]
@@ -953,6 +978,7 @@ async fn start_background(
     command: &str,
     cwd: &std::path::Path,
     unsandboxed: bool,
+    description: Option<String>,
 ) -> Result<ToolOutput> {
     if let Err(e) =
         crate::resources::wait_for_memory("this background command", Duration::from_secs(30)).await
@@ -960,11 +986,11 @@ async fn start_background(
         return Ok(ToolOutput::err(e));
     }
     let id = format!("bash_{}", ctx.env.next_shell_id());
-    spawn_background(ctx, &id, command, cwd, unsandboxed, None)?;
+    let shell = spawn_background(ctx, &id, command, cwd, unsandboxed, None, description)?;
     Ok(ToolOutput::ok(format!(
         "Started background shell {id}. Use BashOutput with bash_id=\"{id}\" to read its output, KillShell to stop it."
     ))
-    .display(format!("Running in background ({id})")))
+    .display(format!("Started in background · {id}\n{}", shell.title())))
 }
 
 /// Start `command` as background shell `id` (registered in `env.shells`, so
@@ -977,6 +1003,7 @@ pub(crate) fn spawn_background(
     cwd: &std::path::Path,
     unsandboxed: bool,
     monitor: Option<String>,
+    description: Option<String>,
 ) -> Result<Arc<BgShell>> {
     let id = id.to_string();
     let script = format!("{}{command}", env_prelude(ctx, cwd));
@@ -995,6 +1022,7 @@ pub(crate) fn spawn_background(
     let shell = Arc::new(BgShell {
         id: id.clone(),
         command: command.to_string(),
+        description,
         monitor,
         output: Mutex::new(String::new()),
         read_pos: Mutex::new(0),
@@ -1101,6 +1129,14 @@ impl Tool for BashOutput {
     fn label(&self, args: &Value) -> String {
         format!("BashOutput({})", args["bash_id"].as_str().unwrap_or(""))
     }
+    fn label_in(&self, args: &Value, env: &crate::agent::Env) -> String {
+        let id = args["bash_id"].as_str().unwrap_or("");
+        let shell = env.shells.lock().unwrap().get(id).cloned();
+        shell.map_or_else(
+            || self.label(args),
+            |sh| format!("BashOutput({} · {id})", sh.title()),
+        )
+    }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput> {
         let id = arg_str(&args, "bash_id")?;
         let Some(sh) = ctx.env.shells.lock().unwrap().get(id).cloned() else {
@@ -1110,6 +1146,12 @@ impl Tool for BashOutput {
             .as_str()
             .and_then(|f| regex::Regex::new(f).ok());
         if let Some(secs) = arg_u64(&args, "wait_secs").filter(|s| *s > 0) {
+            let waiting = if filter.is_some() {
+                "Waiting for matching output"
+            } else {
+                "Waiting for new output"
+            };
+            ctx.progress(format!("{waiting} (up to {}s)", secs.min(600)));
             let deadline = std::time::Instant::now() + Duration::from_secs(secs.min(600));
             loop {
                 if sh.exit.lock().unwrap().is_some()
@@ -1163,8 +1205,10 @@ impl Tool for BashOutput {
                 .collect::<Vec<_>>()
                 .join("\n");
         }
+        let new_lines = new.lines().count();
         new.push_str(&network_report);
-        let status = match *sh.exit.lock().unwrap() {
+        let exit = *sh.exit.lock().unwrap();
+        let status = match exit {
             Some(c) => format!("exited with code {c}"),
             None => "running".into(),
         };
@@ -1173,14 +1217,37 @@ impl Tool for BashOutput {
         } else {
             crate::util::truncate_middle(&new, MAX_OUTPUT)
         };
+        let human_status = match exit {
+            Some(0) => "Completed · exit 0".to_string(),
+            Some(-1) => "Stopped".to_string(),
+            Some(code) => format!("Failed · exit {code}"),
+            None => "Still running".to_string(),
+        };
+        let activity = if new_lines == 0 {
+            if filter.is_some() {
+                "no new matching output".to_string()
+            } else {
+                "no new output".to_string()
+            }
+        } else {
+            crate::util::plural(new_lines, "new line")
+        };
+        let mut display = format!("{human_status} · {activity}");
+        if new_lines > 0 || network_error {
+            let tail: Vec<_> = new
+                .lines()
+                .rev()
+                .take(3)
+                .map(|line| crate::util::one_line(line, 120))
+                .collect();
+            display.push('\n');
+            display.push_str(&tail.into_iter().rev().collect::<Vec<_>>().join("\n"));
+        }
         let mut result = ToolOutput::ok(format!(
             "<status>{status}</status>\n<output>\n{body}\n</output>"
         ))
-        .display(format!(
-            "{status}, {} new",
-            crate::util::plural(new.lines().count(), "line")
-        ));
-        result.is_error = network_error;
+        .display(display);
+        result.is_error = network_error || exit.is_some_and(|code| code != 0);
         Ok(result)
     }
 }
@@ -1975,6 +2042,7 @@ mod sink_tests {
         Arc::new(BgShell {
             id: "bash_1".into(),
             command: "true".into(),
+            description: None,
             monitor: None,
             output: Mutex::new(String::new()),
             read_pos: Mutex::new(0),
