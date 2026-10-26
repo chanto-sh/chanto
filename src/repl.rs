@@ -82,6 +82,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         } else {
             None
         };
+        let was_scheduled = pending.is_none() && scheduled.is_some();
         // `literal`: text the user didn't type (reports, the model's
         // scheduled prompts) goes straight to the model, never run as a
         // `/command`, `!shell` or `#note`.
@@ -130,6 +131,15 @@ pub async fn run(cli: Cli) -> Result<()> {
                 Next::Turn(p) => p,
             }
         };
+        // Only frontend input counts as the user's request, not scheduled
+        // tasks or a slash command's generated expansion.
+        if !literal && !was_scheduled {
+            if line.trim().starts_with('/') && prompt != line.trim() {
+                env.record_user_request(line.trim());
+            } else {
+                agent.typed_input = true;
+            }
+        }
         let (text, images) = if literal {
             (prompt, Vec::new())
         } else {

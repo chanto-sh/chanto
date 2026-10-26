@@ -1510,10 +1510,14 @@ async fn run_structured(
     schema: Option<&serde_json::Value>,
     cancel: tokio_util::sync::CancellationToken,
 ) -> (String, bool, Option<serde_json::Value>) {
+    // The `-p` prompt is the user's; the schema instruction and the repair
+    // prompt are Chanto's.
     let Some(schema) = schema else {
+        agent.typed_input = true;
         let (text, ok) = turn_text(agent.run_turn(prompt, vec![], cancel).await);
         return (text, ok, None);
     };
+    agent.env.record_user_request(prompt);
     let first = format!("{prompt}\n\n{}", structured::instruction(schema));
     let (text, ok) = turn_text(agent.run_turn(&first, vec![], cancel.clone()).await);
     if !ok {
@@ -1633,6 +1637,8 @@ async fn run_stream_input(
             }
         };
         let t0 = std::time::Instant::now();
+        // A user message on stdin, from whoever runs `-p`.
+        agent.typed_input = true;
         let (text, ok) = turn_text(agent.run_turn(&prompt, images, cancel.clone()).await);
         all_ok &= ok;
         println!("{}", result_json(agent, &text, ok, t0.elapsed()));
@@ -2542,7 +2548,10 @@ pub async fn run() {
         let d = permissions::classify(
             &p,
             &m,
-            &[llm::Message::user(c[2].clone())],
+            &permissions::Intent {
+                requests: vec![c[2].clone()],
+                task: None,
+            },
             &c[0],
             &args,
             &env.config.permissions.auto_mode_rules,

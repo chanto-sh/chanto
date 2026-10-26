@@ -51,7 +51,7 @@ impl Agent {
             }
             let tool_cwd = self.cwd_override.clone().filter(|_| {
                 self.lookup_tool(&call.name)
-                    .is_some_and(|t| t.kind() != ToolKind::External)
+                    .is_some_and(|t| t.kind() != ToolKind::External || t.read_only_hint())
             });
             if let Some(dir) = &tool_cwd {
                 // Isolated agents: make paths absolute so permission checks,
