@@ -162,3 +162,21 @@ async fn waiting_poll_reports_what_it_is_waiting_for_then_shows_arriving_output(
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[tokio::test]
+async fn completion_waits_for_both_output_readers() {
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let output = Arc::new(Mutex::new(String::new()));
+    let buffered = output.clone();
+    let stdout = tokio::spawn(async {});
+    let stderr = tokio::spawn(async move {
+        rx.await.unwrap();
+        buffered.lock().unwrap().push_str("final failure line");
+    });
+    let drain = tokio::spawn(drain_output(stdout, stderr));
+    tokio::task::yield_now().await;
+    assert!(!drain.is_finished());
+    tx.send(()).unwrap();
+    drain.await.unwrap();
+    assert_eq!(*output.lock().unwrap(), "final failure line");
+}
