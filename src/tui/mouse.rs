@@ -53,7 +53,7 @@ impl App {
                 // The whole frame is selectable — the transcript, the prompt, the
                 // panels under it, the footer and dialog text (including
                 // questions) — except while the help overlay owns the screen. A
-                // plain click still only toggles a transcript block (decided on
+                // plain click opens a link or toggles a transcript block (on
                 // Up); a second or third click picks the word or the whole row
                 // instead, copying it on release unless `copy_on_select` is off.
                 if !self.help {
@@ -103,6 +103,11 @@ impl App {
                 // anchor cell is still a selection.
                 if !moved {
                     self.selection = None;
+                    if let Some(url) = self.web_link_at(m.row, m.column) {
+                        self.open_link = Some(url.to_string());
+                        self.click_toggle = None;
+                        return;
+                    }
                     let a = self.transcript_area;
                     if m.row >= a.y && m.row < a.y + a.height {
                         let r = (m.row - a.y) as usize;

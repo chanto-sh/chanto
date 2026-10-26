@@ -3,6 +3,50 @@
 
 use super::*;
 
+/// Only explicit web navigation is opened from untrusted transcript text.
+fn web_target(url: &str) -> Option<&str> {
+    if url.chars().any(|c| c.is_control() || c.is_whitespace()) {
+        return None;
+    }
+    let parsed = reqwest::Url::parse(url).ok()?;
+    (matches!(parsed.scheme(), "http" | "https") && parsed.host_str().is_some()).then_some(url)
+}
+
+impl App {
+    pub(super) fn paint_screen_links(
+        &mut self,
+        buf: &mut ratatui::buffer::Buffer,
+        area: Rect,
+        regions: &[(u16, u16, u16, String)],
+    ) {
+        if self.help {
+            return;
+        }
+        for (row, start, end, url) in regions {
+            if *row < area.height && *start < area.width && web_target(url).is_some() {
+                self.screen_links.push((
+                    area.y + *row,
+                    area.x + *start,
+                    area.x + (*end).min(area.width),
+                    url.clone(),
+                ));
+            }
+        }
+        paint_links(buf, area, regions);
+    }
+
+    pub(super) fn web_link_at(&self, row: u16, col: u16) -> Option<&str> {
+        if self.help || self.popup.is_some() {
+            return None;
+        }
+        self.screen_links
+            .iter()
+            .rev()
+            .find(|(y, start, end, _)| row == *y && (*start..*end).contains(&col))
+            .map(|(_, _, _, url)| url.as_str())
+    }
+}
+
 /// Cells covered by one link: `(row, first column, one past the last)`.
 type LinkCells = Vec<(u16, u16, u16)>;
 
@@ -99,7 +143,9 @@ pub(super) fn paint_links(
     for (row, start, end, url) in regions {
         // The URL comes from model output: control characters must not reach
         // the terminal, where they would end the escape early.
-        let url: String = url.chars().filter(|c| !c.is_control()).collect();
+        let Some(url) = web_target(url) else {
+            continue;
+        };
         for x in *start..*end {
             let Some(cell) = buf.cell_mut((area.x + x, area.y + row)) else {
                 continue;

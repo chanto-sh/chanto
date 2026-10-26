@@ -963,6 +963,10 @@ struct App {
     /// reads whole rows and the selection highlight can be painted over every
     /// widget at once.
     row_text: Vec<Option<(u16, String)>>,
+    /// Visible web-link cells in the last frame, for terminals without OSC 8.
+    screen_links: Vec<(u16, u16, u16, String)>,
+    /// A deliberate link click, opened by the event loop after mouse handling.
+    open_link: Option<String>,
     /// Set by ctrl+g: the main loop suspends the TUI and opens $EDITOR.
     open_editor: bool,
     /// `e` on an edit's permission prompt: edit the proposed content in $EDITOR.

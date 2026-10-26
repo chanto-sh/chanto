@@ -246,7 +246,7 @@ pub struct Logical {
 /// URLs as plain text at least as often as they write `[text](url)`, and those
 /// deserve to read as links too. Sentence punctuation that trails the URL
 /// stays outside the link, as does a `)` the URL itself did not open.
-fn link_spans(text: &str, style: Style) -> Vec<Span<'static>> {
+pub(super) fn link_spans(text: &str, style: Style) -> Vec<Span<'static>> {
     let link = style.fg(pal().link).add_modifier(Modifier::UNDERLINED);
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut at = 0;
