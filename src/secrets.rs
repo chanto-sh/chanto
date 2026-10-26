@@ -311,8 +311,14 @@ type Walk = (
 );
 static LAST_WALK: std::sync::Mutex<Option<Walk>> = std::sync::Mutex::new(None);
 
-/// Do the first prompt's refresh ahead of time, in the background.
+/// Do the first prompt's refresh ahead of time, in the background: its env
+/// files, and the pattern set compiled, which otherwise costs the first
+/// redaction a couple of milliseconds on the turn's own thread.
 pub fn warm(root: &Path) {
+    for (_, re, _) in patterns() {
+        let _ = re.is_match("");
+    }
+    let _ = assignment().is_match("");
     refresh(root);
 }
 
@@ -1147,6 +1153,18 @@ mod tests {
         for value in ["registration-base-value", "registration-new-value"] {
             assert_eq!(st.base.iter().filter(|(_, v)| v == value).count(), 1);
         }
+    }
+
+    /// Warming compiles the pattern set ahead of the first prompt; what that
+    /// prompt masks must be the same either way.
+    #[test]
+    fn warming_the_patterns_still_masks_secrets() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        with_values(&[]);
+        warm(&std::env::temp_dir().join("chanto-warm-no-such-project"));
+        let (out, labels) = redact_with_labels("export KEY_ID=AKIAIOSFODNN7EXAMPLE");
+        assert!(out.contains("[REDACTED:AWS_ACCESS_KEY]"), "{out}");
+        assert_eq!(labels, vec!["AWS_ACCESS_KEY".to_string()]);
     }
 
     fn with_values(vals: &[(&str, &str)]) {
