@@ -319,12 +319,18 @@ impl Store {
         self.run_dir(id).join("events.jsonl")
     }
 
+    /// Create the store's directory, readable only by the owner: it holds
+    /// run logs, worktrees and repositories.
+    pub fn ensure_dir(&self) -> Result<()> {
+        crate::util::create_private_dir(&self.dir)?;
+        Ok(())
+    }
+
     pub fn save(&self, run: &Run) -> Result<()> {
+        self.ensure_dir()?;
         let dir = self.run_dir(&run.id);
-        std::fs::create_dir_all(&dir)?;
-        let tmp = dir.join("run.json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(run)?)?;
-        std::fs::rename(&tmp, dir.join("run.json"))?;
+        crate::util::create_private_dir(&dir)?;
+        crate::util::write_private(&dir.join("run.json"), &serde_json::to_vec_pretty(run)?)?;
         Ok(())
     }
 
@@ -347,11 +353,7 @@ impl Store {
 
     pub fn append_event(&self, id: &str, ev: &Value) {
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(self.events_path(id))
-        {
+        if let Ok(mut f) = crate::util::append_private(&self.events_path(id)) {
             let _ = writeln!(f, "{ev}");
         }
     }

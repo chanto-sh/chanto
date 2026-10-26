@@ -37,10 +37,7 @@ impl Launcher {
         let kill = CancellationToken::new();
         match self {
             Launcher::Process(exe) => {
-                let log = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(store.run_dir(&run.id).join("worker.log"))?;
+                let log = crate::util::append_private(&store.run_dir(&run.id).join("worker.log"))?;
                 let mut child = tokio::process::Command::new(exe)
                     .arg("__run-worker")
                     .arg(&run.id)
@@ -347,6 +344,9 @@ impl Manager {
 
     /// Stamp, log and broadcast an event.
     fn publish(&self, h: &Handle, mut ev: Value) {
+        // The worker masks what it sends; this catches what it couldn't
+        // know, before the event is logged or reaches a subscriber.
+        crate::secrets::redact_json(&mut ev);
         let id = h.run.lock().unwrap().id.clone();
         ev["seq"] = json!(h.seq.fetch_add(1, Ordering::SeqCst) + 1);
         ev["run_id"] = json!(id);
@@ -399,6 +399,8 @@ impl Manager {
         if req.start.is_some() && kind != "local" {
             bail!("`start` only applies to runs of a local checkout");
         }
+        // Before the worktree is made under it.
+        self.store.ensure_dir()?;
         let id = loop {
             let id = super::new_id();
             if !self.store.run_dir(&id).exists() {
@@ -846,6 +848,7 @@ impl Manager {
         if !bytes.starts_with(b"# v2 git bundle") && !bytes.starts_with(b"# v3 git bundle") {
             bail!("not a git bundle");
         }
+        self.store.ensure_dir()?;
         let dir = self.store.dir.join("bundles");
         std::fs::create_dir_all(&dir)?;
         let id = uuid::Uuid::new_v4().simple().to_string();

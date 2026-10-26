@@ -83,11 +83,15 @@ impl std::fmt::Debug for Secret {
 }
 
 /// Names of variables (and `.env` keys) that hold secrets.
-pub fn is_secret_name(name: &str) -> bool {
+fn strong_secret_name(name: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
         Regex::new(r"(?i)(secret|token|passw(or)?d|passwd|pwd|api_?key|access_?key|private_?key|credential|auth|cookie|session_?key|signing_?key|client_?secret|webhook|dsn|database_url|conn(ection)?_?str)").unwrap()
     });
+    re.is_match(name)
+}
+
+pub fn is_secret_name(name: &str) -> bool {
     // Common non-secrets that match the pattern.
     const NOT: &[&str] = &[
         "SSH_AUTH_SOCK",
@@ -97,16 +101,34 @@ pub fn is_secret_name(name: &str) -> bool {
         "GIT_AUTHOR_NAME",
         "GIT_AUTHOR_EMAIL",
         "CHANTO_SERVER_TOKEN_FILE",
+        // Names of keys, not keys: database, cache and sort keys.
+        "CACHE_KEY",
+        "SORT_KEY",
+        "PRIMARY_KEY",
+        "PARTITION_KEY",
+        "FOREIGN_KEY",
+        "HASH_KEY",
+        "RANGE_KEY",
+        "TURBO_KEY",
     ];
-    re.is_match(name)
-        && !NOT.contains(&name)
-        && !name.ends_with("_PATH")
-        && !name.ends_with("_FILE")
-        && !name.ends_with("_DIR")
-        && !name.ends_with("_URL_PATH")
+    // A plain `*_KEY` (`STRIPE_KEY`, `ENCRYPTION_KEY`) is a key too; the
+    // underscore keeps words that merely end in "key" (`MONKEY`) out.
+    let upper = name.to_ascii_uppercase();
+    (strong_secret_name(name) || upper.ends_with("_KEY") || upper == "KEY")
+        && !NOT.contains(&upper.as_str())
+        && !upper.ends_with("PUBLIC_KEY")
+        && !upper.ends_with("PUBKEY")
+        && !upper.ends_with("_PATH")
+        && !upper.ends_with("_FILE")
+        && !upper.ends_with("_DIR")
+        && !upper.ends_with("_URL_PATH")
 }
 
 /// Looks random enough to be a credential rather than a word or config value.
+fn secret_value(name: &str, value: &str) -> bool {
+    is_secret_name(name) && (strong_secret_name(name) || high_entropy(value))
+}
+
 fn high_entropy(v: &str) -> bool {
     if v.len() < 16
         || !v.chars().any(|c| c.is_ascii_digit())
@@ -152,6 +174,8 @@ fn maskable(v: &str) -> bool {
 struct Redactor {
     /// (label, value) from the environment and config, kept across refreshes.
     base: Vec<(String, String)>,
+    /// (label, value) from the project's env files, replaced by each refresh.
+    extra: Vec<(String, String)>,
     /// (value, label) pairs including encodings, longest first.
     values: Vec<(String, String)>,
     ac: Option<AhoCorasick>,
@@ -164,6 +188,7 @@ fn state() -> &'static RwLock<Arc<Redactor>> {
     S.get_or_init(|| {
         RwLock::new(Arc::new(Redactor {
             base: vec![],
+            extra: vec![],
             values: vec![],
             ac: None,
             files: BTreeMap::new(),
@@ -172,6 +197,66 @@ fn state() -> &'static RwLock<Arc<Redactor>> {
 }
 
 static ENABLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Values Chanto learns while running (sign-in and MCP OAuth tokens, a
+/// source checkout's env files), kept when `init` runs again.
+static LEARNED: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Mask `value` from now on, like a secret from the environment. For
+/// credentials obtained at run time: an OAuth access token, a refreshed one.
+pub fn register(label: &str, value: &str) {
+    register_all(vec![(label.to_string(), value.to_string())]);
+}
+
+fn register_all(pairs: Vec<(String, String)>) {
+    let pairs: Vec<(String, String)> = pairs.into_iter().filter(|(_, v)| maskable(v)).collect();
+    let mut learned = LEARNED.lock().unwrap_or_else(|e| e.into_inner());
+    // Called on every request made with a sign-in token: nothing new is the
+    // common case, and costs no copy of the known values.
+    let known = |v: &str| {
+        learned.iter().any(|(_, l)| l == v)
+            && state()
+                .read()
+                .unwrap_or_else(|e| e.into_inner())
+                .base
+                .iter()
+                .any(|(_, b)| b == v)
+    };
+    if pairs.iter().all(|(_, v)| known(v)) {
+        return;
+    }
+    let mut st = state().write().unwrap_or_else(|e| e.into_inner());
+    let mut base = st.base.clone();
+    for (label, value) in pairs {
+        if !maskable(&value) {
+            continue;
+        }
+        if !learned.iter().any(|(_, v)| v == &value) {
+            learned.push((label.clone(), value.clone()));
+        }
+        if !base.iter().any(|(_, v)| v == &value) {
+            base.push((label, value));
+        }
+    }
+    if base.len() != st.base.len() {
+        *st = Arc::new(build(base, st.extra.clone(), st.files.clone()));
+    }
+}
+
+/// Also mask the env files of `root`, a checkout other than the one being
+/// worked in: a background run works in a worktree, which has none of the
+/// source checkout's gitignored `.env` files, though its commands and the
+/// model can still come across their values.
+pub fn add_project(root: &Path) {
+    let mut pairs = Vec::new();
+    // Not through the walk cache, which belongs to the worked-in checkout.
+    for p in walk_env_files(root).1 {
+        if let Ok(text) = std::fs::read_to_string(&p) {
+            pairs.extend(env_file_values(&text));
+        }
+    }
+    register_all(pairs);
+}
 
 fn variants(v: &str) -> Vec<String> {
     let mut out = vec![v.to_string()];
@@ -208,6 +293,7 @@ fn build(
         .flatten();
     Redactor {
         base,
+        extra,
         values: pairs,
         ac,
         files,
@@ -238,6 +324,17 @@ fn project_env_files(root: &Path) -> Vec<PathBuf> {
     {
         return files.clone();
     }
+    let (seen, out) = walk_env_files(root);
+    *LAST_WALK.lock().unwrap() = Some((root.to_path_buf(), seen, out.clone()));
+    out
+}
+
+/// Directories read, with their modification times.
+type DirTimes = Vec<(PathBuf, Option<std::time::SystemTime>)>;
+
+/// The env files under `root`, uncached.
+fn walk_env_files(root: &Path) -> (DirTimes, Vec<PathBuf>) {
+    let mtime = |d: &Path| std::fs::metadata(d).and_then(|m| m.modified()).ok();
     let mut out = Vec::new();
     let mut seen = Vec::new();
     let mut stack = vec![(root.to_path_buf(), 0)];
@@ -273,8 +370,7 @@ fn project_env_files(root: &Path) -> Vec<PathBuf> {
             }
         }
     }
-    *LAST_WALK.lock().unwrap() = Some((root.to_path_buf(), seen, out.clone()));
-    out
+    (seen, out)
 }
 
 fn is_env_file(name: &str) -> bool {
@@ -312,7 +408,7 @@ fn env_file_values(text: &str) -> Vec<(String, String)> {
         let k = k.trim();
         let v = v.trim().trim_matches(|c| c == '"' || c == '\'');
         let v = v.split(" #").next().unwrap_or(v).trim();
-        if maskable(v) && (is_secret_name(k) || high_entropy(v)) {
+        if maskable(v) && (secret_value(k, v) || high_entropy(v)) {
             out.push((k.to_string(), v.to_string()));
         }
     }
@@ -325,7 +421,7 @@ pub fn init(cfg: &crate::config::Config, root: &Path) {
     *SESSION_CONFIG.write().unwrap_or_else(|e| e.into_inner()) = Some(cfg.secrets.clone());
     let mut values: BTreeMap<String, String> = BTreeMap::new();
     for (k, v) in std::env::vars() {
-        if is_secret_name(&k) && maskable(&v) {
+        if secret_value(&k, &v) && maskable(&v) {
             values.insert(k, v);
         }
     }
@@ -366,20 +462,35 @@ pub fn init(cfg: &crate::config::Config, root: &Path) {
             }
         }
     }
-    *state().write().unwrap() =
-        Arc::new(build(values.into_iter().collect(), vec![], BTreeMap::new()));
+    let mut base: Vec<(String, String)> = values.into_iter().collect();
+    let learned = LEARNED.lock().unwrap_or_else(|e| e.into_inner());
+    let mut st = state().write().unwrap_or_else(|e| e.into_inner());
+    for (k, v) in learned.iter() {
+        if !base.iter().any(|(_, b)| b == v) {
+            base.push((k.clone(), v.clone()));
+        }
+    }
+    *st = Arc::new(build(base, vec![], BTreeMap::new()));
+    drop(st);
+    drop(learned);
     refresh(root);
 }
 
 /// Pick up new or changed env files in the project (cheap when nothing changed).
 pub fn refresh(root: &Path) {
     let files = project_env_files(root);
-    let cur = state().read().unwrap().clone();
     let stamps: BTreeMap<PathBuf, std::time::SystemTime> = files
         .iter()
         .filter_map(|p| Some((p.clone(), std::fs::metadata(p).ok()?.modified().ok()?)))
         .collect();
-    if stamps.iter().all(|(p, t)| cur.files.get(p) == Some(t)) {
+    // Unchanged (most turns): no write lock, so redaction never waits on it.
+    if stamps == state().read().unwrap_or_else(|e| e.into_inner()).files {
+        return;
+    }
+    // Held to the end, so a value `register` adds meanwhile isn't lost.
+    let mut st = state().write().unwrap_or_else(|e| e.into_inner());
+    let cur = st.clone();
+    if stamps == cur.files {
         return;
     }
     let mut extra = Vec::new();
@@ -388,7 +499,7 @@ pub fn refresh(root: &Path) {
             extra.extend(env_file_values(&text));
         }
     }
-    *state().write().unwrap() = Arc::new(build(cur.base.clone(), extra, stamps));
+    *st = Arc::new(build(cur.base.clone(), extra, stamps));
 }
 
 /// Token formats worth masking wherever they appear: (label, regex, group to mask).
@@ -527,16 +638,87 @@ pub fn redact(s: &str) -> Cow<'_, str> {
 }
 
 fn redact_value(v: &mut serde_json::Value) {
+    redact_value_with(v, &redact);
+}
+
+fn redact_value_with(v: &mut serde_json::Value, f: &dyn Fn(&str) -> Cow<'_, str>) {
     match v {
         serde_json::Value::String(s) => {
-            if let Cow::Owned(r) = redact(s) {
+            if let Cow::Owned(r) = f(s) {
                 *s = r;
             }
         }
-        serde_json::Value::Array(a) => a.iter_mut().for_each(redact_value),
-        serde_json::Value::Object(o) => o.values_mut().for_each(redact_value),
+        serde_json::Value::Array(a) => a.iter_mut().for_each(|v| redact_value_with(v, f)),
+        serde_json::Value::Object(o) => o.values_mut().for_each(|v| redact_value_with(v, f)),
         _ => {}
     }
+}
+
+/// Mask secrets in every string of `v`, except top-level `"images"` (base64
+/// data, where a pattern match would only corrupt the picture). For events
+/// that leave the session: run logs, the web UI, a runner's server.
+pub fn redact_json(v: &mut serde_json::Value) {
+    if ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        redact_json_with(v, &redact);
+    }
+}
+
+/// [`redact_json`] whatever the `redact` setting: for what's sent to a
+/// cloud server, like a share.
+pub fn redact_json_always(v: &mut serde_json::Value) {
+    redact_json_with(v, &redact_always);
+}
+
+fn redact_json_with(v: &mut serde_json::Value, f: &dyn Fn(&str) -> Cow<'_, str>) {
+    match v {
+        serde_json::Value::Object(o) => {
+            for (k, v) in o.iter_mut() {
+                if k != "images" {
+                    redact_value_with(v, f);
+                }
+            }
+        }
+        serde_json::Value::Array(a) => a.iter_mut().for_each(|v| redact_json_with(v, f)),
+        v => redact_value_with(v, f),
+    }
+}
+
+/// The messages of a request with secrets masked, or `None` when nothing
+/// in them needs masking (or masking is off). Deterministic for the same
+/// known secrets, so a masked prefix stays the same from call to call.
+pub fn redact_request_messages(msgs: &[crate::llm::Message]) -> Option<Vec<crate::llm::Message>> {
+    if !ENABLED.load(std::sync::atomic::Ordering::Relaxed) {
+        return None;
+    }
+    let mut out: Option<Vec<crate::llm::Message>> = None;
+    for (i, m) in msgs.iter().enumerate() {
+        let content = match redact(&m.content) {
+            Cow::Owned(r) => Some(r),
+            Cow::Borrowed(_) => None,
+        };
+        let args: Vec<Option<serde_json::Value>> = m
+            .tool_calls
+            .iter()
+            .map(|c| {
+                let mut a = c.arguments.clone();
+                redact_value(&mut a);
+                (a != c.arguments).then_some(a)
+            })
+            .collect();
+        if content.is_none() && args.iter().all(Option::is_none) {
+            continue;
+        }
+        let out = out.get_or_insert_with(|| msgs.to_vec());
+        if let Some(c) = content {
+            out[i].content = c;
+        }
+        for (j, a) in args.into_iter().enumerate() {
+            if let Some(a) = a {
+                out[i].tool_calls[j].arguments = a;
+            }
+        }
+    }
+    out
 }
 
 /// Mask secrets in messages (content and tool-call arguments) in place.
@@ -730,11 +912,9 @@ pub fn is_secret_path(p: &Path) -> bool {
     // Lower-cased (macOS and Windows match names ignoring case), and with a
     // trailing `/` so a directory itself (`~/.aws`) counts like its contents.
     let s = format!("{}/", p.to_string_lossy().replace('\\', "/").to_lowercase());
-    // Our own credentials wherever the Chanto home lives (XDG, CHANTO_HOME).
-    if s.trim_end_matches('/').ends_with("/auth.json")
-        && p.parent()
-            .is_some_and(|d| same_dir(d, &crate::config::home_dir()))
-    {
+    // Our own credentials wherever the Chanto home lives (XDG, CHANTO_HOME):
+    // provider logins, the server token, MCP OAuth tokens, runner tokens.
+    if is_own_credential(p) {
         return true;
     }
     [
@@ -757,6 +937,21 @@ pub fn is_secret_path(p: &Path) -> bool {
     ]
     .iter()
     .any(|d| s.contains(&d.to_lowercase()))
+}
+
+fn is_own_credential(p: &Path) -> bool {
+    let home = crate::config::home_dir();
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    let parent = p.parent();
+    let in_dir = |d: &Path| parent.is_some_and(|x| same_dir(x, d));
+    (matches!(name.as_str(), "auth.json" | "server.json") && in_dir(&home))
+        || (matches!(name.as_str(), "tokens.json" | "connections.json")
+            && in_dir(&home.join("runner")))
+        || name == "mcp-auth" && in_dir(&home)
+        || in_dir(&home.join("mcp-auth"))
 }
 
 fn same_dir(a: &Path, b: &Path) -> bool {
@@ -901,6 +1096,58 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plain_key_values_need_entropy_and_public_keys_are_not_secret() {
+        // Withheld from commands either way, but only a random-looking value
+        // is masked: `APP_KEY=my-app` is a name.
+        for name in ["APP_KEY", "ENCRYPTION_KEY"] {
+            assert!(is_secret_name(name));
+            assert!(!secret_value(name, "ordinary-config-value"));
+            assert!(secret_value(name, "aB2cD3eF4gH5iJ6kL7mN8"));
+        }
+        // Names of keys, not keys.
+        for name in [
+            "MONKEY",
+            "SSH_PUBLIC_KEY",
+            "service_pubkey",
+            "CACHE_KEY",
+            "SORT_KEY",
+            "PRIMARY_KEY",
+            "TURBO_KEY",
+        ] {
+            assert!(!is_secret_name(name));
+        }
+        assert!(secret_value("API_KEY", "opaque-credential"));
+    }
+
+    #[test]
+    fn json_images_exclusion_does_not_hide_nested_arguments() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        with_values(&[("TEST_TOKEN", "nested-secret-value")]);
+        let mut value = serde_json::json!({
+            "images": ["nested-secret-value"],
+            "arguments": {"images": "nested-secret-value"}
+        });
+        redact_json(&mut value);
+        assert_eq!(value["images"][0], "nested-secret-value");
+        assert_eq!(value["arguments"]["images"], "[REDACTED:TEST_TOKEN]");
+    }
+
+    #[test]
+    fn registration_deduplicates_batch_and_preserves_existing_base() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        with_values(&[("BASE_TOKEN", "registration-base-value")]);
+        register_all(vec![
+            ("BASE_TOKEN".into(), "registration-base-value".into()),
+            ("NEW_TOKEN".into(), "registration-new-value".into()),
+            ("OTHER_TOKEN".into(), "registration-new-value".into()),
+        ]);
+        let st = state().read().unwrap();
+        for value in ["registration-base-value", "registration-new-value"] {
+            assert_eq!(st.base.iter().filter(|(_, v)| v == value).count(), 1);
+        }
+    }
 
     fn with_values(vals: &[(&str, &str)]) {
         let m: Vec<(String, String)> = vals
@@ -1129,6 +1376,94 @@ mod tests {
     }
 
     #[test]
+    fn learned_values_survive_init_and_refresh() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = |n: &str| {
+            let d = std::env::temp_dir().join(format!(
+                "chanto-learned-{n}-{}",
+                uuid::Uuid::new_v4().simple()
+            ));
+            std::fs::create_dir_all(&d).unwrap();
+            d
+        };
+        let (worktree, source) = (tmp("worktree"), tmp("source"));
+        std::fs::write(
+            source.join(".env"),
+            "DB_PASSWORD=source-only-pw-7c6b5a
+",
+        )
+        .unwrap();
+        let cfg = crate::config::Config::default();
+        init(&cfg, &worktree);
+        register("SIGNIN_TOKEN", "learned-token-5f4e3d2c1b");
+        register("SHORT", "abc");
+        add_project(&source);
+        // Starting over (a worker's setup) and rescanning the worktree keep them.
+        init(&cfg, &worktree);
+        refresh(&worktree);
+        let out = redact("learned-token-5f4e3d2c1b source-only-pw-7c6b5a abc");
+        assert_eq!(
+            out, "[REDACTED:SIGNIN_TOKEN] [REDACTED:DB_PASSWORD] abc",
+            "too short to mask safely: abc"
+        );
+        with_values(&[]);
+        let _ = std::fs::remove_dir_all(&worktree);
+        let _ = std::fs::remove_dir_all(&source);
+    }
+
+    #[test]
+    fn plain_key_names_are_secret() {
+        for name in ["STRIPE_KEY", "ENCRYPTION_KEY", "master_key", "KEY"] {
+            assert!(is_secret_name(name), "{name}");
+        }
+        for name in [
+            "MONKEY",
+            "KEYBOARD",
+            "TURKEY_COUNT",
+            "SSH_KEY_PATH",
+            "KEYCHAIN",
+            "CACHE_KEY",
+            "SORT_KEY",
+            "PRIMARY_KEY",
+            "SSH_PUBLIC_KEY",
+            "GPG_PUBKEY",
+        ] {
+            assert!(!is_secret_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn requests_and_events_are_masked_but_images_kept() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        with_values(&[("DEPLOY_TOKEN", "event-secret-9a8b7c6d")]);
+        let clean = vec![crate::llm::Message::user("nothing here")];
+        assert!(redact_request_messages(&clean).is_none());
+        let mut call = crate::llm::Message::assistant("");
+        call.tool_calls.push(crate::llm::ToolCall {
+            id: "1".into(),
+            name: "Bash".into(),
+            arguments: serde_json::json!({"command": "echo event-secret-9a8b7c6d"}),
+        });
+        let msgs = vec![clean[0].clone(), call];
+        let masked = redact_request_messages(&msgs).unwrap();
+        assert_eq!(masked[0].content, "nothing here");
+        assert_eq!(
+            masked[1].tool_calls[0].arguments["command"],
+            "echo [REDACTED:DEPLOY_TOKEN]"
+        );
+        // Masking what's already masked changes nothing (a stable prefix).
+        assert!(redact_request_messages(&masked).is_none());
+
+        let mut ev = serde_json::json!({"type": "tool_end", "output": "event-secret-9a8b7c6d",
+            "nested": [{"label": "x event-secret-9a8b7c6d"}], "images": ["event-secret-9a8b7c6d"]});
+        redact_json(&mut ev);
+        assert_eq!(ev["output"], "[REDACTED:DEPLOY_TOKEN]");
+        assert_eq!(ev["nested"][0]["label"], "x [REDACTED:DEPLOY_TOKEN]");
+        assert_eq!(ev["images"][0], "event-secret-9a8b7c6d");
+        with_values(&[]);
+    }
+
+    #[test]
     fn masks_token_formats_but_not_ordinary_code() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         with_values(&[]);
@@ -1279,5 +1614,19 @@ mod tests {
         // A cloud run's commands get its run-tools token, never its model key.
         let cfg = SecretsConfig::default();
         assert!(!withhold_env("CHANTO_RUN_TOKEN", &cfg) && withhold_env("CHANTO_API_KEY", &cfg));
+        // Chanto's own token files, wherever its home is.
+        let home = crate::config::home_dir();
+        for f in [
+            "auth.json",
+            "server.json",
+            "mcp-auth",
+            "mcp-auth/github-0123456789abcdef.json",
+            "runner/tokens.json",
+            "runner/connections.json",
+        ] {
+            assert!(is_secret_path(&home.join(f)), "{f}");
+        }
+        assert!(!is_secret_path(&home.join("config.toml")));
+        assert!(!is_secret_path(&home.join("runs/abc/run.json")));
     }
 }
