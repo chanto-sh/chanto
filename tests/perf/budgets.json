@@ -12,7 +12,11 @@
     "The comparison with the base, measured on the same runner, is what holds",
     "the CPU numbers to a small change.",
     "reps: startup runs are cheap and noisy, so there are more of them; the",
-    "turn workload is a whole session each. warmup runs are discarded.",
+    "turn workload is a whole session each but still costs a second, next to",
+    "two eight-minute builds. With 20 and 15 samples the U test reaches",
+    "alpha=0.01 when about 75% of one set sits above the other, so a 10% shift",
+    "against ~1% run-to-run noise is caught with room to spare. warmup runs",
+    "are discarded.",
     "tolerance: below this change a metric is never called a regression.",
     "alpha: the one-sided Mann-Whitney U test on the two sample sets.",
     "large_change: fails even without a significant p-value."
@@ -20,8 +24,8 @@
   "alpha": 0.01,
   "warmup": 2,
   "reps": {
-    "startup": 15,
-    "turns": 10
+    "startup": 20,
+    "turns": 15
   },
   "workload": {
     "turns": 40,
