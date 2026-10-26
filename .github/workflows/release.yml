@@ -439,6 +439,16 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: python3 packaging/check-published.py "$TAG" dist/SHA256SUMS --wait-seconds 600
+      - name: Verify the npm installation matches the signed binary
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm install --prefix "$RUNNER_TEMP/npm" --ignore-scripts --no-audit --no-fund "@chanto/cli@${TAG#v}"
+          name="chanto-$TAG-x86_64-unknown-linux-musl"
+          cmp "$RUNNER_TEMP/$name/chanto" "$RUNNER_TEMP/npm/node_modules/@chanto/cli-linux-x64/bin/chanto"
+          test "$("$RUNNER_TEMP/npm/node_modules/.bin/chanto" --version)" = "chanto ${TAG#v}"
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
       - name: Verify published container signature and provenance
         env:
