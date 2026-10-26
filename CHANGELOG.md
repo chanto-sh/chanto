@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **UI regression tests.** Deterministic text and style snapshots cover 72 terminal frames across common UI states, widths and themes. CI publishes a PNG/GIF preview gallery for review.
+
 - **Usage limits.** The footer shows the most-used reported quota window, its local reset time and `/usage`, dropping extra details on narrow terminals. A heads-up appears once at 25% and 10% remaining and re-arms after a window resets. Missing quota data is never estimated.
 
 - **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
