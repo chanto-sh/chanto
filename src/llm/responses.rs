@@ -238,11 +238,7 @@ impl Provider {
                     ) {
                         return Err(error.into());
                     }
-                    bail!(
-                        "API error {}: {}",
-                        e["code"].as_str().unwrap_or("failed"),
-                        e["message"].as_str().unwrap_or("")
-                    );
+                    bail!("{}", stream_error(&v, e));
                 }
                 "error" => {
                     let e = v.get("error").unwrap_or(&v);
@@ -253,11 +249,7 @@ impl Provider {
                     ) {
                         return Err(error.into());
                     }
-                    bail!(
-                        "API error {}: {}",
-                        v["code"].as_str().unwrap_or("error"),
-                        v["message"].as_str().unwrap_or("")
-                    );
+                    bail!("{}", stream_error(&v, e));
                 }
                 // Account limits can also arrive as an event rather than headers.
                 t if t.contains("rate_limits") || t.contains("usage") => {
@@ -354,6 +346,28 @@ impl Provider {
             out.finish_reason = Some("refusal".into());
         }
         Ok(out)
+    }
+}
+
+/// Describe a streamed error event. The details sit under `error` for some
+/// events and at the top level for others, and the payload can be a bare
+/// string; read every shape so the provider's own words reach the user instead
+/// of an empty "API error error:".
+fn stream_error(event: &Value, nested: &Value) -> String {
+    fn field<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
+        v[k].as_str().filter(|s| !s.is_empty())
+    }
+    let code = field(nested, "code")
+        .or_else(|| field(nested, "type"))
+        .or_else(|| field(event, "code"));
+    let message = field(nested, "message")
+        .or_else(|| field(event, "message"))
+        .or_else(|| nested.as_str().filter(|s| !s.is_empty()))
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::util::truncate(&nested.to_string(), 2000));
+    match code {
+        Some(code) => format!("API error {code}: {message}"),
+        None => format!("API error: {message}"),
     }
 }
 
