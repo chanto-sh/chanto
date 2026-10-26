@@ -1,8 +1,12 @@
 """Public-channel checks must distinguish accepted publishes from readable packages."""
 
+import base64
+import hashlib
+import io
 import json
 from pathlib import Path
 import runpy
+import tarfile
 import unittest
 import urllib.error
 
@@ -10,6 +14,7 @@ import urllib.error
 module = runpy.run_path(str(Path(__file__).with_name("check-published.py")))
 check = module["check"]
 PLATFORMS = module["PLATFORMS"]
+verify_payload = module["verify_payload"]
 
 
 class PublishedReleaseTests(unittest.TestCase):
@@ -67,6 +72,20 @@ class PublishedReleaseTests(unittest.TestCase):
         url = "https://ghcr.io/token?service=ghcr.io&scope=repository:chanto-sh/chanto:pull"
         del self.records[url]
         self.assertEqual(self.failures(), [f"{url}: HTTP Error 404: still processing"])
+
+    def test_npm_payload_must_match_integrity_and_signed_binary(self):
+        output = io.BytesIO()
+        with tarfile.open(fileobj=output, mode="w:gz") as package:
+            member = tarfile.TarInfo("package/bin/chanto")
+            member.size = 6
+            package.addfile(member, io.BytesIO(b"binary"))
+        archive = output.getvalue()
+        integrity = "sha512-" + base64.b64encode(hashlib.sha512(archive).digest()).decode()
+        verify_payload(archive, integrity, b"binary")
+        with self.assertRaisesRegex(ValueError, "integrity mismatch"):
+            verify_payload(archive + b"changed", integrity, b"binary")
+        with self.assertRaisesRegex(ValueError, "differs from the signed release"):
+            verify_payload(archive, integrity, b"other binary")
 
 
 if __name__ == "__main__":
