@@ -429,6 +429,19 @@ Messages you type while the model is working are delivered at its next step, as 
 - **Pull request status**: with the GitHub CLI (`gh`) signed in, the status line shows the current branch's pull request and what it's waiting on (`PR #12 checks failing`, `approved`, `changes requested`), checked once a minute.
 - **Prompt suggestions** (`prompt_suggestions = true`, off by default since each one is an extra model call): after a turn, a likely next prompt appears greyed out in the empty prompt; `tab` takes it.
 
+### Background command output
+
+A `Bash` call with `run_in_background: true`, or a foreground command that outlives its timeout, keeps a shell id such as `bash_6`. The model uses `BashOutput` to read only new output and `KillShell` to stop the job. `/bashes` lists the jobs.
+
+Output polls show the originating command’s short description when supplied, falling back to the command itself:
+
+```text
+BashOutput(Build release binary · bash_6)
+  ↳ Waiting for new output (up to 30s)
+```
+
+`wait_secs` waits for new output or exit instead of repeatedly polling; its maximum is 600 seconds. A `filter` regex waits for matching lines. Results distinguish **Still running**, **Completed · exit 0**, **Failed · exit N** and **Stopped**, and preview up to three recent lines. Long lines are shortened in the preview; expand the result to inspect more output. A quiet running job says **no new output** (or **no new matching output** with a filter). Nonzero exits are marked as errors. For an ongoing stream of notifications instead of explicit polls, use `Monitor`.
+
 ### Background work panel
 
 While subagents run (foreground `Task` calls, including parallel ones, and background agents), the agents panel under the prompt lists a `main` row and one row per agent: its type, what it's doing now (its latest tool call or line of text), how long it has run and its tokens so far (input plus output). Background shells follow.
@@ -1598,9 +1611,18 @@ A `[providers.<name>]` section without `kind` is `ollama`, unless its `base_url`
 
 Built-in providers need no `[providers]` section: `chanto providers` lists them (Anthropic, OpenAI, your ChatGPT plan, OpenRouter, Gemini, DeepSeek, xAI, Mistral, Groq, Cerebras, Together, Fireworks, Moonshot, Z.ai, MiniMax, DashScope, Hugging Face, NVIDIA, Vercel AI Gateway, OpenCode Zen, Baseten, Perplexity, Cohere, DeepInfra, Nebius, SambaNova, SiliconFlow, Upstage, AI21, Inception, Requesty, Venice, Chutes, Nano-GPT, Scaleway, DigitalOcean, Weights & Biases, OVHcloud, Crusoe, Morph, Poe, StepFun, Volcengine (Doubao), Xiaomi MiMo, Ollama Cloud, the coding plans, the cloud platforms and [Chanto cloud](#models-through-chanto-cloud)) and whether you're logged in. Each works with its key variable (`GEMINI_API_KEY`, `GROQ_API_KEY`, …) or `chanto login <provider>`. With `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` set, the provider names `anthropic` and `openai` work without any config. For example, `chanto -m anthropic/claude-opus-5-5`, `subagent_model = "anthropic/claude-haiku-5-5"` or `/model openai/gpt-6.1-sol`. To use one as the default provider, set `provider = "anthropic"` and `model = "claude-opus-5-5"`.
 
-For a ChatGPT plan, run `chanto login chatgpt` (or `/login chatgpt`), then `/models` to discover your account's available model names. Select an exact name with `/model chatgpt/<model>` or `chanto -m chatgpt/<model>`. Logging in does not select a model, and Chanto stores its credentials separately from Codex. Model access depends on your account; a model-access rejection is different from an expired or rejected login. OpenAI API-key access remains separate as `openai/<model>`.
+For a ChatGPT plan, run `chanto login chatgpt` (or `/login chatgpt`), then `/models` to discover your account's available model names. Select an exact name with `/model chatgpt/<model>` or `chanto -m chatgpt/<model>`. Logging in does not select a model, and Chanto stores its credentials separately from Codex. Model access depends on your account; a model-access rejection is different from an expired or rejected login. OpenAI API-key access remains separate as `openai/<model>`. The `chatgpt` login uses Sign in with ChatGPT and draws from your existing Codex/ChatGPT Work allowance; a separate login to the same account does not add quota. Review connected-app usage and limits in ChatGPT **Settings → Usage**. See [OpenAI’s explanation](https://learn.chatgpt.com/docs/sign-in-with-chatgpt).
 
-**Coding plans.** Subscription coding plans whose vendors allow them in third-party coding tools are built in. Each takes the plan's own key, which is not the vendor's pay-as-you-go API key, through `chanto login <provider>` (or `--as <name>` for a second account) or its variable. Most speak the vendor's OpenAI-compatible endpoint (MiniMax's M Plan is Anthropic-compatible; see below), and their usage shows no per-token price. Anthropic's Claude Code subscription (Pro/Max) is intentionally absent: its terms don't permit use from other tools, so use the `anthropic` provider with an API key or [Chanto cloud](#models-through-chanto-cloud) instead.
+### Subscription coding plans
+
+Subscription coding plans whose vendors allow them in third-party coding tools are built in. Each takes the plan's own key, which is not the vendor's pay-as-you-go API key, through `chanto login <provider>` (or `--as <name>` for a second account) or its variable. Most speak the vendor's OpenAI-compatible endpoint (MiniMax's M Plan is Anthropic-compatible; see below), and their usage shows no per-token price. Anthropic's Claude Code subscription (Pro/Max) is intentionally absent: its terms don't permit use from other tools, so use the `anthropic` provider with an API key or [Chanto cloud](#models-through-chanto-cloud) instead.
+
+```sh
+chanto login kimi-coding   # paste a Kimi Code membership key
+chanto login zai           # paste a Z.ai GLM Coding Plan key
+```
+
+Inside a session, the equivalents are `/login kimi-coding` and `/login zai`. Login saves credentials; select a model separately with `/model kimi-coding/kimi-for-coding`, or use `/models` after choosing the provider to discover its models. These logins use plan keys rather than a browser sign-in.
 
 | Provider | Plan | Endpoint | Key | Models |
 |---|---|---|---|---|
@@ -1618,9 +1640,17 @@ For a ChatGPT plan, run `chanto login chatgpt` (or `/login chatgpt`), then `/mod
 
 For example, `chanto login kimi-coding`, then `chanto -m kimi-coding/kimi-for-coding`. `/models` lists what the plan's API reports, or the vendor-documented models above if it has no list. Kimi's `k3` reaches a 1M window only on higher membership tiers, so Chanto budgets 256K for it. The `-cn` providers use the mainland-China endpoint with the same key, so pick whichever matches where your account was created. MiniMax's M Plan is Anthropic-compatible, so point `[providers.minimax-coding]` at `https://api.minimax.cn/anthropic/v1` (China) or `https://api.minimax.io/anthropic/v1` with `kind = "anthropic"` if your key only works there.
 
-`/usage` (alias `/cost`) and the status bar report this session's token usage. When the provider reports account rate limits, they are shown too: the status bar gets the rolling window (`5h 82% left`), and `/usage` lists every window with its reset time. The values come from the `x-codex-*` headers on the model responses Chanto already receives, so nothing extra is polled and there is no invented number: if the provider reports nothing, Chanto says so rather than showing a stale or zero quota. Limits are enforced by the provider, and reset times depend on your plan.
+`/usage` (alias `/cost`) reports session tokens, spend and any account limits reported by the provider. The footer shows the most-used reported window, its remaining percentage, a local reset time when available, and `/usage` when space permits:
 
-Older Chanto versions reported session tokens only; running an older binary is why `/usage` may show no account lines.
+```text
+5h limit: 27% left · resets at 10:09 PM · /usage
+```
+
+On a narrow terminal, reset details and the hint drop before the percentage. At **25% remaining**, the quota turns amber and a one-time heads-up appears; at **10% remaining**, it turns red and warns once more. Warnings re-arm after a reset. Weekly limits can take precedence when they are more exhausted than the 5-hour window. `/usage` lists all reported windows.
+
+These are the provider’s last reported values, read from response headers or stream events; Chanto does not poll a separate quota endpoint or estimate missing percentages. If no limits have been reported, `/usage` says so. An elapsed reset timestamp displays **reset due** until a fresh report arrives; it does not imply that the allowance has already replenished. The separate `ctx` percentage is conversation-context usage, not your plan’s remaining allowance. Quota banners are for the user and are not automatically added to the model prompt. Limits and resets are enforced by the provider and depend on your plan.
+
+**Provider safety notices.** Refusal text and links appear in the streamed reply and transcript when the provider supplies them. A safety-filter stop without an explanation shows a clear fallback notice. Filtered turns end without automatic retries, tool execution or continuation through verification/stop hooks. Provider-specific access-program wording is shown only when supplied; Chanto does not invent it.
 
 **Waiting out a usage limit.** When a plan's 5-hour or weekly window runs out mid-turn (`usage_limit_reached`, with a reset time from the error, `Retry-After`, or the last reported limits), Chanto can keep the session and continue the same turn when the window resets instead of failing it. With `resume_after_limit = true` it always waits; when unset, the TUI asks "Wait and continue at 14:05?" (a reset on another day shows the day), and `-p` runs fail as before. While waiting, the status line shows `⏸ usage limit · resuming at 14:05` and the spinner counts down; `esc` stops waiting and ends the turn. When it resumes, Chanto sends a desktop notification (the `notifications` setting) and fires a `Notification` hook with `notification_type: "limit_resumed"`. Billing quotas (`insufficient_quota`) don't reset on a clock, so they still fail right away, and a reset more than eight days off isn't waited for.
 
@@ -1752,7 +1782,8 @@ The benchmark suite lives in its own repository, [chanto-sh/benchmarks](https://
 
 ```sh
 cargo build --release                    # in this repository
-cd ../chanto-benchmarks
+git clone https://github.com/chanto-sh/benchmarks.git ../benchmarks
+cd ../benchmarks
 python3 run.py --agents chanto,opencode,claude --model qwen3.8-bench
 ./proxy.sh deepseek/deepseek-flash       # in another terminal
 python3 run.py --api http://localhost:4000 --agents chanto,opencode,claude,codex --tier hard
@@ -1761,6 +1792,14 @@ python3 run.py --api http://localhost:4000 --agents chanto,opencode,claude,codex
 `--tier` picks tiers (default all), `--tasks` narrows by name, and `--estimate` prints the projected cost and time without running anything.
 
 See [RESULTS.md](https://github.com/chanto-sh/benchmarks/blob/main/RESULTS.md) for the latest results, per-task numbers, methodology and caveats.
+
+To measure the agent’s own CPU and memory overhead with an instant mock model, run the published harness from the benchmark repository:
+
+```sh
+python3 reproduce.py --agents chanto --no-install --chanto ../chanto/target/release/chanto
+```
+
+The default workload is 40 tool turns reading 40 KB files, repeated 10 times. It reports median process-tree CPU time per model request and median peak process-tree resident memory sampled every 60 ms; the final answer is also a model request. Results record versions, machine details and every run. Component microbenchmarks are separate measurements and do not establish a whole-agent CPU or memory improvement.
 
 Benchmark variants turn on the experimental optimizations below: `chanto+concise`, `chanto+quiet`, `chanto+provenance`, `chanto+all`, or any combination joined with `+`. They run the same command as `chanto` with `CHANTO_OPTIMIZE` set, and each result and the run's metadata record which switches were on. `--chanto-effort LEVEL` passes `--effort LEVEL` to every Chanto agent in the run.
 
@@ -1805,6 +1844,16 @@ src/
   tui/            ratatui frontend (markdown renderer, input editor)
   plain.rs, repl.rs  line-based frontends
 ```
+
+### Visual UI tests
+
+The `visual` workflow checks 72 deterministic terminal frames: 12 UI states at three widths in dark and light themes. Baselines include cell colors and modifiers as well as text. Covered states include a successful exchange, streaming, background jobs, quota warnings, dialogs, completion and scrolling.
+
+```sh
+cargo test --locked --lib visual_snapshots -- --ignored --test-threads=1
+```
+
+The separate invocation keeps process-global theme changes isolated from normal unit tests. CI uploads `chanto-ui-previews`, a gallery of PNGs/GIFs plus captured text, styles and pending snapshot diffs. Download the artifact and open `index.html`. Snapshots are the regression check; the previews show those captured frames and do not replace live-terminal or behavior tests. [Visual-test instructions](https://github.com/chanto-sh/chanto/blob/main/tests/visual/README.md) explain local previews and intentional baseline updates.
 
 ## License
 
