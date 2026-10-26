@@ -323,6 +323,9 @@ pub(super) fn render_block(
                             // command output must keep its literal characters.
                             markdown::code_ticks_lines(shown.trim_end())
                         };
+                        for line in &mut v {
+                            markdown::linkify_urls(line);
+                        }
                         while v.last().map(|l| l.width() == 0).unwrap_or(false) {
                             v.pop();
                         }

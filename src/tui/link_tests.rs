@@ -52,6 +52,23 @@ fn two_urls_on_consecutive_lines_stay_separate() {
 }
 
 #[test]
+fn colored_output_links_across_style_boundaries_without_changing_text() {
+    let mut lines = markdown::ansi_lines(
+        "\x1b[31merror:\x1b[0m `literal` https://exa\x1b[32mmple.com/report\x1b[0m now",
+    );
+    let original_style = lines[0].spans[0].style;
+    for line in &mut lines {
+        markdown::linkify_urls(line);
+    }
+    let text: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, "error: `literal` https://example.com/report now");
+    assert_eq!(lines[0].spans[0].style, original_style);
+    let targets = link_regions(&lines, 80);
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].3, "https://example.com/report");
+}
+
+#[test]
 fn painting_a_link_wraps_each_cell_in_osc8() {
     let mut buf = ratatui::buffer::Buffer::empty(Rect::new(0, 0, 20, 1));
     buf.set_string(0, 0, "hello", Style::default());

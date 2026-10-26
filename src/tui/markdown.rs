@@ -289,6 +289,57 @@ pub(super) fn link_spans(text: &str, style: Style) -> Vec<Span<'static>> {
     out
 }
 
+/// Add web-link styling without changing literal text or surrounding ANSI
+/// styles. Find URLs across span boundaries, since colors can split a URL.
+pub(super) fn linkify_urls(line: &mut Line<'static>) {
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    if !text.contains("http") {
+        return;
+    }
+    let mut offset = 0;
+    let ranges: Vec<_> = link_spans(&text, Style::default())
+        .into_iter()
+        .filter_map(|s| {
+            let start = offset;
+            offset += s.content.len();
+            is_link_style(s.style).then_some(start..offset)
+        })
+        .collect();
+    if ranges.is_empty() {
+        return;
+    }
+    let mut out = Vec::new();
+    offset = 0;
+    for span in std::mem::take(&mut line.spans) {
+        let end = offset + span.content.len();
+        let mut at = 0;
+        for range in &ranges {
+            let start = range.start.max(offset);
+            let stop = range.end.min(end);
+            if start >= stop {
+                continue;
+            }
+            let (start, stop) = (start - offset, stop - offset);
+            if at < start {
+                out.push(Span::styled(
+                    span.content[at..start].to_string(),
+                    span.style,
+                ));
+            }
+            out.push(Span::styled(
+                span.content[start..stop].to_string(),
+                span.style.fg(pal().link).add_modifier(Modifier::UNDERLINED),
+            ));
+            at = stop;
+        }
+        if at < span.content.len() {
+            out.push(Span::styled(span.content[at..].to_string(), span.style));
+        }
+        offset = end;
+    }
+    line.spans = out;
+}
+
 /// A run of link-styled text on a rendered line, by screen column.
 pub struct LinkRun {
     pub start: usize,
