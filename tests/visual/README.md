@@ -43,7 +43,7 @@ python3 tests/visual/previews.py
 ```
 
 The second command needs VHS **v0.12.1**, its ttyd/FFmpeg/browser dependencies,
-and the **JetBrains Mono** font (the pinned official VHS action supplies
+and a system monospace font (the pinned official VHS action supplies
 these in CI). It waits for a unique fixture caption before capturing each
 PNG. Generated media stays under `target/visual`; do not commit it.
 

@@ -1613,7 +1613,16 @@ Built-in providers need no `[providers]` section: `chanto providers` lists them 
 
 For a ChatGPT plan, run `chanto login chatgpt` (or `/login chatgpt`), then `/models` to discover your account's available model names. Select an exact name with `/model chatgpt/<model>` or `chanto -m chatgpt/<model>`. Logging in does not select a model, and Chanto stores its credentials separately from Codex. Model access depends on your account; a model-access rejection is different from an expired or rejected login. OpenAI API-key access remains separate as `openai/<model>`. The `chatgpt` login uses Sign in with ChatGPT and draws from your existing Codex/ChatGPT Work allowance; a separate login to the same account does not add quota. Review connected-app usage and limits in ChatGPT **Settings → Usage**. See [OpenAI’s explanation](https://learn.chatgpt.com/docs/sign-in-with-chatgpt).
 
-**Coding plans.** Subscription coding plans whose vendors allow them in third-party coding tools are built in. Each takes the plan's own key, which is not the vendor's pay-as-you-go API key, through `chanto login <provider>` (or `--as <name>` for a second account) or its variable. Most speak the vendor's OpenAI-compatible endpoint (MiniMax's M Plan is Anthropic-compatible; see below), and their usage shows no per-token price. Anthropic's Claude Code subscription (Pro/Max) is intentionally absent: its terms don't permit use from other tools, so use the `anthropic` provider with an API key or [Chanto cloud](#models-through-chanto-cloud) instead.
+### Subscription coding plans
+
+Subscription coding plans whose vendors allow them in third-party coding tools are built in. Each takes the plan's own key, which is not the vendor's pay-as-you-go API key, through `chanto login <provider>` (or `--as <name>` for a second account) or its variable. Most speak the vendor's OpenAI-compatible endpoint (MiniMax's M Plan is Anthropic-compatible; see below), and their usage shows no per-token price. Anthropic's Claude Code subscription (Pro/Max) is intentionally absent: its terms don't permit use from other tools, so use the `anthropic` provider with an API key or [Chanto cloud](#models-through-chanto-cloud) instead.
+
+```sh
+chanto login kimi-coding   # paste a Kimi Code membership key
+chanto login zai           # paste a Z.ai GLM Coding Plan key
+```
+
+Inside a session, the equivalents are `/login kimi-coding` and `/login zai`. Login saves credentials; select a model separately with `/model kimi-coding/kimi-for-coding`, or use `/models` after choosing the provider to discover its models. These logins use plan keys rather than a browser sign-in.
 
 | Provider | Plan | Endpoint | Key | Models |
 |---|---|---|---|---|

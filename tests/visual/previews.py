@@ -32,7 +32,7 @@ def main():
         cols, rows = size.split("x")
         # Defaults are explicit: application RGB styles come from the captured cells.
         colors = {"name": "fixture", "background": "#111111" if theme == "dark" else "#ffffff", "foreground": "#eeeeee" if theme == "dark" else "#111111", "cursor": "#888888", "black": "#000000", "red": "#800000", "green": "#008000", "yellow": "#808000", "blue": "#000080", "magenta": "#800080", "cyan": "#008080", "white": "#c0c0c0", "brightBlack": "#808080", "brightRed": "#ff0000", "brightGreen": "#00ff00", "brightYellow": "#ffff00", "brightBlue": "#0000ff", "brightMagenta": "#ff00ff", "brightCyan": "#00ffff", "brightWhite": "#ffffff", "selection": "#666666"}
-        tape = [f'Output {json.dumps(str(root / f"{theme}_{size}.gif"))}', 'Require python3', 'Set Shell "bash"', 'Set FontFamily "JetBrains Mono"', 'Set FontSize 16', f'Set Columns {cols}', f'Set Rows {int(rows) + 1}', 'Set Padding 12', 'Set Framerate 5', 'Set TypingSpeed 0', 'Set Theme ' + json.dumps(colors), 'Env PS1 ""']
+        tape = [f'Output {json.dumps(str(root / f"{theme}_{size}.gif"))}', 'Require python3', 'Set Shell "bash"', 'Set FontFamily "monospace"', 'Set FontSize 16', f'Set Columns {cols}', f'Set Rows {int(rows) + 1}', 'Set Padding 12', 'Set Framerate 5', 'Set TypingSpeed 0', 'Set Theme ' + json.dumps(colors), 'Env PS1 ""']
         for capture in frames:
             ready = caption(capture)
             command = shlex.join(["python3", "tests/visual/show.py", str(capture)])
