@@ -33,7 +33,7 @@ else
     # hostile host could serve an older signed release as "latest". "latest"
     # must be at least min_version; raise it with each security release (see
     # the release workflow). An older --version is still allowed, with a note.
-    min_version=v0.1.5
+    min_version=v0.1.6
     first_signed=v0.1.2 # the first release with SHA256SUMS.sig
     first_sshsig=v0.1.5 # the first release with SHA256SUMS.sshsig
     if [ "$version" != latest ]; then

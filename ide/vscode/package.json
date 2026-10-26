@@ -2,7 +2,7 @@
   "name": "chanto-vscode",
   "displayName": "Chanto",
   "description": "Connects the chanto coding agent to VS Code: shares your selection and diagnostics, and shows proposed edits as diffs you can accept, edit or reject.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "publisher": "chanto",
   "icon": "icon.png",
   "license": "Apache-2.0",
