@@ -2672,3 +2672,7 @@ mod run_tests;
 
 #[cfg(test)]
 mod quota_tests;
+
+mod view_time;
+#[cfg(test)]
+mod visual_tests;
