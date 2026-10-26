@@ -1242,7 +1242,7 @@ Behind the bearer token, `GET /runs/jobs` lists the jobs with their next and las
 
 ## Chanto cloud
 
-> Chanto cloud is an optional hosted service in early development, and access may be limited. Nothing else in this guide needs it.
+> Chanto cloud integration is in development. The commands below describe the client interface and do not imply that a public hosted service is available. Nothing else in this guide needs it.
 
 Chanto cloud runs agents for you on hosted runners or your own, and offers models through its gateway. Sign in once and the CLI uses it for [cloud runs](#cloud-runs-from-the-cli), models and agents:
 
@@ -1640,6 +1640,8 @@ Inside a session, the equivalents are `/login kimi-coding` and `/login zai`. Log
 
 For example, `chanto login kimi-coding`, then `chanto -m kimi-coding/kimi-for-coding`. `/models` lists what the plan's API reports, or the vendor-documented models above if it has no list. Kimi's `k3` reaches a 1M window only on higher membership tiers, so Chanto budgets 256K for it. The `-cn` providers use the mainland-China endpoint with the same key, so pick whichever matches where your account was created. MiniMax's M Plan is Anthropic-compatible, so point `[providers.minimax-coding]` at `https://api.minimax.cn/anthropic/v1` (China) or `https://api.minimax.io/anthropic/v1` with `kind = "anthropic"` if your key only works there.
 
+### Usage and provider errors
+
 `/usage` (alias `/cost`) reports session tokens, spend and any account limits reported by the provider. The footer shows the most-used reported window, its remaining percentage, a local reset time when available, and `/usage` when space permits:
 
 ```text
@@ -1659,6 +1661,8 @@ resume_after_limit = true   # false: never wait; unset: ask in the TUI
 ```
 
 **Several accounts per provider.** `chanto login <provider> --as <name>` saves another login for the same provider (a work and a personal ChatGPT plan, two API keys) beside the default one; `--with-api-key` and the browser logins take `--as` too, and `chanto logout <provider> --as <name>` removes one. `account = "<name>"` in the config (or a profile) uses that login for every provider that has one by that name, and the default login for the rest. In a session, `/login` lists saved logins with the one in use marked, `/login <provider> <name>` switches for the rest of the session (`default` goes back to the unnamed one), `/login chatgpt --as <name>` signs in as a new account and switches to it, and `/status` shows the account in use. Named logins are stored in `~/.chanto/auth.json` as `<provider>@<name>` entries, so older Chanto versions keep reading the default ones. Listings never show keys or tokens. A project config can set `account` only once the folder is trusted.
+
+### Hosted provider behavior
 
 How the hosted providers behave:
 - **Anthropic:**

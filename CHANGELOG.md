@@ -3,12 +3,15 @@
 ## Unreleased
 
 - **Clickable links.** In full-screen mode, a click on a visible web link opens it in your browser even when the terminal does not support OSC 8. Wrapped URLs keep their full destination, and links in provider notices, user messages and subagent transcripts work too. Dragging still selects text; non-web schemes and control characters are rejected.
+- **Security: an apostrophe inside double quotes could hide command substitutions.** Prefix allow rules such as `Bash(echo:*)` could miss substitutions after quoted text containing an apostrophe. The permission check now keeps single and double quote state separate. Found by fuzzing.
 - **UI regression tests.** Deterministic text and style snapshots cover 72 terminal frames across common UI states, widths and themes. CI publishes a PNG/GIF preview gallery for review.
 
 - **Usage limits.** The footer shows the most-used reported quota window, its local reset time and `/usage`, dropping extra details on narrow terminals. A heads-up appears once at 25% and 10% remaining and re-arms after a window resets. Missing quota data is never estimated.
 
 - **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
 
+- **Tool messages.** A blocked call or other summary Chanto wrote shows its inline code styled, the way replies do, instead of literal backticks. Output that carries colour and diffs is still rendered as ANSI.
+- **Working.** The status line says "Working…" instead of "Thinking…", and a highlight sweeps across the verb every 1.4s so a slow model call reads as moving before anything streams. Reduced motion and themes without RGB colours keep the flat accent.
 - **Todo panel.** A long todo is cut at a word with an ellipsis instead of being clipped mid-word by the frame, the panel says `… N more` when more than eight are hidden, its height reserves every row it draws, a blank row separates the list from a running turn's status line, and the header lines up with the transcript.
 - **Provider errors.** An error streamed by the provider now shows its own explanation and code instead of a bare `API error error:`. Providers nest the detail under `error`; a bare string, or an event with no detail, is shown as it arrives.
 - **Interrupted sessions.** The notice shown when a session resumes after an interrupted turn lists the calls it was running one per line, instead of joining a batch of long commands into one run-on sentence.

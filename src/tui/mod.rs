@@ -1142,6 +1142,39 @@ fn busy_frame(reduce_motion: bool, ms: u128) -> &'static str {
     }
 }
 
+/// A highlight that sweeps across the busy verb once every 1.4s, so a slow call
+/// reads as moving even before anything has streamed. Plain named colors
+/// (themes parsed without RGB) and reduced motion keep the flat accent.
+fn shimmer_spans(text: &str, base: Color, reduce_motion: bool, ms: u128) -> Vec<Span<'static>> {
+    let flat = || vec![Span::styled(text.to_string(), Style::default().fg(base))];
+    let Color::Rgb(r, g, b) = base else {
+        return flat();
+    };
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() || reduce_motion {
+        return flat();
+    }
+    // The band travels a little past both ends so the sweep wraps cleanly.
+    let span = chars.len() as f64 + 8.0;
+    let head = (ms % SHIMMER_PERIOD_MS) as f64 / SHIMMER_PERIOD_MS as f64 * span - 4.0;
+    let width = 4.0;
+    chars
+        .into_iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let t = (1.0 - (i as f64 - head).abs() / width).max(0.0);
+            let t = t * t * 0.8;
+            let mix = |a: u8, b: u8| (a as f64 + (b as f64 - a as f64) * t).round() as u8;
+            Span::styled(
+                c.to_string(),
+                Style::default().fg(Color::Rgb(mix(r, 255), mix(g, 255), mix(b, 255))),
+            )
+        })
+        .collect()
+}
+
+const SHIMMER_PERIOD_MS: u128 = 1400;
+
 /// The one-line summary shown for a reasoning block.
 fn thinking_label(elapsed: Option<std::time::Duration>) -> String {
     match elapsed {

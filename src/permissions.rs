@@ -1086,11 +1086,14 @@ pub fn has_dynamic_parts(s: &str) -> bool {
 /// (where `$(...)` and backticks still expand).
 fn strip_quoted_keep_double(s: &str) -> String {
     let mut out = String::new();
-    let mut sq = false;
+    let (mut sq, mut dq) = (false, false);
     for c in s.chars() {
-        if c == '\'' {
+        if c == '\'' && !dq {
             sq = !sq;
             continue;
+        }
+        if c == '"' && !sq {
+            dq = !dq;
         }
         if !sq {
             out.push(c);
@@ -2498,6 +2501,35 @@ mod tests {
         assert!(is_safe_command("cat <<'EOF'\nit's fine\nEOF"));
         // `#` inside a word or after `$` is not a comment.
         assert_eq!(split_shell("echo $# a#b; ls"), vec!["echo $# a#b", "ls"]);
+    }
+
+    #[test]
+    fn an_apostrophe_inside_double_quotes_does_not_hide_substitutions() {
+        let rules = Rules::new(&["Bash(echo:*)".into()], &[], &[]);
+        for cmd in [
+            r#"echo "'"$(printf marker)"#,
+            r#"echo "'"`printf marker`"#,
+            r#"echo "'"`"''`"#,
+        ] {
+            assert!(has_dynamic_parts(cmd), "{cmd:?}");
+            for suffix in ["", "\n touch MARKER", "; touch MARKER"] {
+                let cmd = format!("{cmd}{suffix}");
+                assert_ne!(
+                    rules.check_in("Bash", &split_shell(&cmd), true),
+                    Some(Decision::Allow),
+                    "{cmd:?}"
+                );
+                assert!(!is_safe_command(&cmd), "{cmd:?}");
+                assert!(!auto_safe_command(&cmd), "{cmd:?}");
+            }
+        }
+        for cmd in [r#"echo "'""#, "echo '$(printf marker) `printf marker`'"] {
+            assert!(!has_dynamic_parts(cmd), "{cmd:?}");
+            assert_eq!(
+                rules.check_in("Bash", &split_shell(cmd), true),
+                Some(Decision::Allow)
+            );
+        }
     }
 
     #[test]
