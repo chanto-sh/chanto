@@ -114,6 +114,7 @@ impl Agent {
             )));
             images.clear();
         }
+        self.note_input(input);
         let mut content = input.to_string();
         if self.depth == 0 {
             crate::util::timing("before secrets refresh");
@@ -1265,6 +1266,7 @@ impl Agent {
                 }
                 let pending: Vec<Queued> = self.env.inbox.lock().unwrap().drain(..).collect();
                 for msg in pending {
+                    self.env.record_user_request(&msg.text);
                     let (text, images) = crate::commands::expand_mentions(self, &msg.text).await;
                     let mut m = Message::user(format!(
                         "<system-reminder>The user sent this message while you were working. Take it into account:</system-reminder>\n{text}"

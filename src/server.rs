@@ -744,7 +744,14 @@ async fn send_message(
         let mut a = s2.agent.lock().await;
         let mut prompt = text.clone();
         let mut result = json!({"type": "turn_done"});
-        if text.trim_start().starts_with('/') {
+        // Typed in the web UI; a command's expansion and the jobs it runs are
+        // Chanto's prompts, so only the command itself is the user's.
+        let command = text.trim_start().starts_with('/');
+        if command {
+            a.env.record_user_request(text.trim());
+        }
+        let mut typed = !command;
+        if command {
             match commands::handle(&mut a, text.trim()).await {
                 commands::Outcome::Prompt(p) => prompt = p,
                 commands::Outcome::Run(job) => {
@@ -769,6 +776,7 @@ async fn send_message(
             let (t, images) = commands::expand_mentions(&a, &prompt).await;
             let mut next = Some((t, images));
             while let Some((t, images)) = next.take() {
+                a.typed_input = std::mem::take(&mut typed);
                 match a.run_turn(&t, images, cancel.clone()).await {
                     Ok(TurnEnd::Done(r)) => result["result"] = json!(r),
                     Ok(TurnEnd::Interrupted) => result["interrupted"] = json!(true),
@@ -784,6 +792,10 @@ async fn send_message(
                     .drain(..)
                     .map(|q| q.text)
                     .collect();
+                // The user typed these; the reports joined to them aren't.
+                for t in &left {
+                    s2.env.record_user_request(t);
+                }
                 left.extend(s2.env.notifications.lock().unwrap().drain(..));
                 if !left.is_empty() && !cancel.is_cancelled() {
                     next = Some((left.join("\n\n"), vec![]));

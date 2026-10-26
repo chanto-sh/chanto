@@ -624,6 +624,9 @@ impl Server {
                 }
                 let cancel = CancellationToken::new();
                 *s.cancel.lock().unwrap() = Some(cancel.clone());
+                // The client's prompt is the user's; the attachments in it
+                // are cut before it is recorded.
+                a.typed_input = true;
                 let end = a.run_turn(&text, images, cancel).await;
                 *s.cancel.lock().unwrap() = None;
                 a.save_session();

@@ -396,6 +396,10 @@ impl App {
                     .drain(..)
                     .map(|q| q.text)
                     .collect();
+                // The user typed these; the notifications joined to them aren't.
+                for t in &leftover {
+                    self.env.record_user_request(t);
+                }
                 leftover.extend(self.env.notifications.lock().unwrap().drain(..));
                 if !leftover.is_empty() {
                     // The turn ended before these were delivered: send them now.

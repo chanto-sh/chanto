@@ -4,6 +4,28 @@
 use super::*;
 
 impl Agent {
+    /// What the auto-mode classifier knows of the user's intent: what the
+    /// human typed this session (shared with subagents), and this agent's
+    /// task when someone else wrote it.
+    pub(super) fn intent(&self) -> permissions::Intent {
+        permissions::Intent {
+            requests: self.env.user_requests(),
+            task: self.task_prompt.clone(),
+        }
+    }
+
+    /// Note who wrote a prompt this agent is about to work on: what a
+    /// frontend marked typed becomes the session's requests, anything else
+    /// is the agent's task.
+    pub(super) fn note_input(&mut self, input: &str) {
+        if std::mem::take(&mut self.typed_input) && self.depth == 0 {
+            self.env.record_user_request(input);
+            self.task_prompt = None;
+        } else {
+            self.task_prompt = Some(input.to_string());
+        }
+    }
+
     pub(super) async fn authorize(&mut self, tool: &dyn Tool, call: &mut ToolCall) -> Auth {
         let env = self.env.clone();
         let name = tool.name();
@@ -70,10 +92,15 @@ impl Agent {
             {
                 Decision::Ask
             }
-            Some(Decision::Allow) if mode != Mode::Plan || kind == ToolKind::ReadOnly => {
+            Some(Decision::Allow)
+                if mode != Mode::Plan || kind == ToolKind::ReadOnly || tool.read_only_hint() =>
+            {
                 Decision::Allow
             }
             Some(Decision::Ask) if mode != Mode::Bypass => Decision::Ask,
+            // A tool that says it only reads may help a plan, but it's the
+            // tool's word: the user decides.
+            _ if mode == Mode::Plan && tool.read_only_hint() => Decision::Ask,
             _ => match permissions::static_decision(mode, kind, &name, args, &env.cwd()) {
                 Some(d) => d,
                 // Auto mode, fast path (opt-in): routine shell commands skip the
@@ -104,7 +131,7 @@ impl Agent {
                     let d = permissions::classify(
                         &cp,
                         &cm,
-                        &self.messages,
+                        &self.intent(),
                         &name,
                         args,
                         &rules,

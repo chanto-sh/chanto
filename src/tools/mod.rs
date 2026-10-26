@@ -125,6 +125,14 @@ pub trait Tool: Send + Sync {
     fn kind_for(&self, _args: &Value) -> ToolKind {
         self.kind()
     }
+    /// The tool says of itself that it only reads (an MCP `readOnlyHint` from
+    /// a local server). Advisory: it doesn't make the tool [`ToolKind::ReadOnly`],
+    /// since a read-only fetch or search can still carry data out. A user's
+    /// allow rule for the tool covers it in plan mode, and the explicit
+    /// read-only sandbox policy lets it run.
+    fn read_only_hint(&self) -> bool {
+        false
+    }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput>;
 }
 
