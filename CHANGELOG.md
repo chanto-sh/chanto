@@ -8,6 +8,7 @@
 
 - **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
 
+- **Working.** The status line says "Working…" instead of "Thinking…", and a highlight sweeps across the verb every 1.4s so a slow model call reads as moving before anything streams. Reduced motion and themes without RGB colours keep the flat accent.
 - **Tool messages.** A blocked call or other summary Chanto wrote shows its inline code styled, the way replies do, instead of literal backticks. Output that carries colour and diffs is still rendered as ANSI.
 - **Todo panel.** A long todo is cut at a word with an ellipsis instead of being clipped mid-word by the frame, the panel says `… N more` when more than eight are hidden, its height reserves every row it draws, a blank row separates the list from a running turn's status line, and the header lines up with the transcript.
 - **Provider errors.** An error streamed by the provider now shows its own explanation and code instead of a bare `API error error:`. Providers nest the detail under `error`; a bare string, or an event with no detail, is shown as it arrives.
