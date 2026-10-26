@@ -761,7 +761,8 @@ impl App {
         let mut lines = Vec::new();
         if self.busy {
             let el = self.busy_since.elapsed();
-            let frame = busy_frame(crate::a11y::reduce_motion(), el.as_millis());
+            let reduce_motion = crate::a11y::reduce_motion();
+            let frame = busy_frame(reduce_motion, el.as_millis());
             // While reasoning is streaming, use progressive wording so a slow
             // model reads as still working rather than frozen.
             let thinking = self.open_think.and_then(|i| match &self.blocks[i].kind {
@@ -810,6 +811,7 @@ impl App {
                 spans.extend(shimmer_spans(
                     &format!("{verb}…"),
                     pal().accent,
+                    reduce_motion,
                     el.as_millis(),
                 ));
                 spans.push(Span::styled(detail, Style::default().fg(pal().dim)));

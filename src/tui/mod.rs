@@ -1141,13 +1141,13 @@ fn busy_frame(reduce_motion: bool, ms: u128) -> &'static str {
 /// A highlight that sweeps across the busy verb once every 1.4s, so a slow call
 /// reads as moving even before anything has streamed. Plain named colors
 /// (themes parsed without RGB) and reduced motion keep the flat accent.
-fn shimmer_spans(text: &str, base: Color, ms: u128) -> Vec<Span<'static>> {
+fn shimmer_spans(text: &str, base: Color, reduce_motion: bool, ms: u128) -> Vec<Span<'static>> {
     let flat = || vec![Span::styled(text.to_string(), Style::default().fg(base))];
     let Color::Rgb(r, g, b) = base else {
         return flat();
     };
     let chars: Vec<char> = text.chars().collect();
-    if chars.is_empty() || crate::a11y::reduce_motion() {
+    if chars.is_empty() || reduce_motion {
         return flat();
     }
     // The band travels a little past both ends so the sweep wraps cleanly.
