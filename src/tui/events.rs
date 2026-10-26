@@ -226,7 +226,7 @@ impl App {
             Event::Limits(s) => {
                 // Say so once as a window passes 75% and 90%;
                 // the status line alone is easy to miss.
-                let now = chrono::Utc::now().timestamp();
+                let now = view_time::timestamp();
                 for w in [&s.primary, &s.secondary].into_iter().flatten() {
                     let warned = self.limit_warned.entry(w.label()).or_insert(0);
                     let new_window = self.limits.as_ref().into_iter()

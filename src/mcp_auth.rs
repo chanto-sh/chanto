@@ -82,10 +82,22 @@ pub fn store_path(name: &str, url: &str) -> PathBuf {
 }
 
 pub fn load(name: &str, url: &str) -> Option<Tokens> {
-    serde_json::from_slice(&std::fs::read(store_path(name, url)).ok()?).ok()
+    let t: Tokens = serde_json::from_slice(&std::fs::read(store_path(name, url)).ok()?).ok()?;
+    mask_tokens(name, &t);
+    Some(t)
+}
+
+/// Mask the server's tokens like any other secret.
+fn mask_tokens(name: &str, t: &Tokens) {
+    let label = format!("{}_MCP_TOKEN", name.to_uppercase());
+    crate::secrets::register(&label, &t.access_token);
+    if let Some(r) = &t.refresh_token {
+        crate::secrets::register(&label, r);
+    }
 }
 
 pub fn save(name: &str, url: &str, t: &Tokens) -> Result<()> {
+    mask_tokens(name, t);
     let p = store_path(name, url);
     std::fs::create_dir_all(p.parent().unwrap())?;
     let data = serde_json::to_vec_pretty(t)?;

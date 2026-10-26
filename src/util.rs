@@ -226,6 +226,27 @@ pub fn write_private(path: &Path, data: &[u8]) -> std::io::Result<()> {
     res
 }
 
+/// Create `dir` (and its parents) and make it readable only by the owner
+/// (0700), tightening one that already exists.
+pub fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    let mut builder = std::fs::DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    builder.create(dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if std::fs::metadata(dir)?.permissions().mode() & 0o077 != 0 {
+            std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
+}
+
 /// Open a file to append to, creating it mode 0600 and tightening an existing
 /// one. Used for the prompt history and learned signals, which would otherwise
 /// be world-readable.

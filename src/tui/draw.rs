@@ -5,6 +5,10 @@ use super::render::*;
 use super::stream::*;
 use super::*;
 
+/// How many todos the panel lists before it counts the rest. `heights` and
+/// `draw_todos` both read it, so the panel is always as tall as what it draws.
+const TODOS_SHOWN: usize = 8;
+
 impl App {
     // ------------------------------------------------------------- render
 
@@ -54,7 +58,12 @@ impl App {
             && !self.todos.is_empty()
             && !self.todos.iter().all(|t| t.status == "completed")
         {
-            (self.todos.len().min(8) as u16) + 1
+            // One row for the header, one blank row between the list and the
+            // status line (so a running turn isn't read as a todo), and one for
+            // the "more" line when not every todo fits.
+            (self.todos.len().min(TODOS_SHOWN) as u16)
+                + 2
+                + u16::from(self.todos.len() > TODOS_SHOWN)
         } else {
             0
         };
@@ -451,10 +460,10 @@ impl App {
 
     pub(super) fn draw_todos(&mut self, f: &mut Frame, area: Rect) {
         let mut lines = vec![Line::from(Span::styled(
-            " Todos (ctrl+t to hide)",
+            "Todos (ctrl+t to hide)",
             Style::default().fg(pal().dim),
         ))];
-        for t in self.todos.iter().take(8) {
+        for t in self.todos.iter().take(TODOS_SHOWN) {
             let (mark, st) = match t.status.as_str() {
                 "completed" => (
                     "☒",
@@ -475,10 +484,20 @@ impl App {
             } else {
                 &t.content
             };
+            // "   ", the mark and a space; cut the rest at a word so a long
+            // title ends in "…" rather than being clipped by the frame.
+            let text = fit_words(text, (area.width as usize).saturating_sub(5));
             lines.push(Line::from(vec![
                 Span::raw("   "),
                 Span::styled(format!("{mark} {text}"), st),
             ]));
+        }
+        let hidden = self.todos.len().saturating_sub(TODOS_SHOWN);
+        if hidden > 0 {
+            lines.push(Line::from(Span::styled(
+                format!("   … {hidden} more"),
+                Style::default().fg(pal().dim),
+            )));
         }
         for (i, l) in lines.iter().enumerate() {
             let text: String = l.spans.iter().map(|sp| sp.content.as_ref()).collect();
@@ -758,18 +777,23 @@ impl App {
     pub(super) fn draw_status(&mut self, f: &mut Frame, area: Rect) {
         let mut lines = Vec::new();
         if self.busy {
-            let el = self.busy_since.elapsed();
-            let frame = busy_frame(crate::a11y::reduce_motion(), el.as_millis());
+            let el = view_time::elapsed(self.busy_since);
+            let reduce_motion = crate::a11y::reduce_motion();
+            let frame = busy_frame(reduce_motion, el.as_millis());
             // While reasoning is streaming, use progressive wording so a slow
             // model reads as still working rather than frozen.
             let thinking = self.open_think.and_then(|i| match &self.blocks[i].kind {
-                Kind::Thinking { started, .. } => Some(started.elapsed().as_secs()),
+                Kind::Thinking { started, .. } => Some(view_time::elapsed(*started).as_secs()),
                 _ => None,
             });
             // A prompt waiting on the user isn't the model thinking, and the
             // time spent deciding isn't counted (see `sync_wait`).
             let waiting = self.waiting_on_user();
-            let el = el.saturating_sub(self.wait_started.map(|t| t.elapsed()).unwrap_or_default());
+            let el = el.saturating_sub(
+                self.wait_started
+                    .map(view_time::elapsed)
+                    .unwrap_or_default(),
+            );
             let verb = match thinking {
                 _ if waiting => "Waiting for you".to_string(),
                 Some(s) => crate::util::capitalize(thinking_verb(s)),
@@ -800,11 +824,20 @@ impl App {
                 ));
             }
             detail.push_str(" · esc to interrupt)");
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {frame} "), Style::default().fg(pal().accent)),
-                Span::styled(format!("{verb}…"), Style::default().fg(pal().accent)),
-                Span::styled(detail, Style::default().fg(pal().dim)),
-            ]));
+            lines.push(Line::from({
+                let mut spans = vec![Span::styled(
+                    format!(" {frame} "),
+                    Style::default().fg(pal().accent),
+                )];
+                spans.extend(shimmer_spans(
+                    &format!("{verb}…"),
+                    pal().accent,
+                    reduce_motion,
+                    el.as_millis(),
+                ));
+                spans.push(Span::styled(detail, Style::default().fg(pal().dim)));
+                spans
+            }));
         }
         for (i, q) in self.queue.iter().take(3).enumerate() {
             let hint = if i == 0 {
@@ -1456,7 +1489,7 @@ impl App {
                 ));
                 if let Some(reset) = w
                     .resets_at
-                    .and_then(|at| quota_reset(at, chrono::Utc::now().timestamp()))
+                    .and_then(|at| quota_reset(at, view_time::timestamp()))
                 {
                     right.push((reset, Style::default().fg(color), 5));
                 }

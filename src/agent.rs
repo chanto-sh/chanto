@@ -265,7 +265,16 @@ fn frees_space(call: &ToolCall) -> bool {
         .any(|p| cmd.contains(p))
 }
 
+/// An event as JSON for a frontend outside the terminal (print mode's
+/// stream, the web UI, run logs), with secrets masked: tool output reaches
+/// the model masked, and these copies leave the session too.
 pub fn event_json(ev: &Event) -> Option<Value> {
+    let mut v = event_json_raw(ev)?;
+    crate::secrets::redact_json(&mut v);
+    Some(v)
+}
+
+fn event_json_raw(ev: &Event) -> Option<Value> {
     Some(match ev {
         Event::AssistantStart => json!({"type": "assistant_start"}),
         Event::AssistantEnd => json!({"type": "assistant_end"}),
@@ -282,7 +291,7 @@ pub fn event_json(ev: &Event) -> Option<Value> {
             images,
             parent,
         } => {
-            json!({"type": "tool_end", "id": id, "is_error": is_error, "output": crate::util::truncate(content, 2000), "display": display, "images": image_data_urls(images), "parent": parent})
+            json!({"type": "tool_end", "id": id, "is_error": is_error, "output": crate::util::truncate(&crate::secrets::redact(content), 2000), "display": display, "images": image_data_urls(images), "parent": parent})
         }
         Event::ToolProgress { id, text } => {
             json!({"type": "tool_progress", "id": id, "text": text})
