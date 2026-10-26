@@ -21,7 +21,9 @@ def main():
     actual = os.get_terminal_size()
     if actual.columns != columns or actual.lines != rows + 1:
         raise SystemExit(f"Expected {columns}x{rows + 1} terminal, got {actual.columns}x{actual.lines}")
-    sys.stdout.write(capture.read_text())
+    # VHS's screen matcher reads from the start of xterm's active buffer.
+    # Discard prior shell scrollback so it sees the current frame's caption.
+    sys.stdout.write("\x1b[3J" + capture.read_text())
     sys.stdout.write(f"\x1b[{rows + 1};1H\x1b[0m{caption(capture)}")
     sys.stdout.flush()
     sys.stdin.readline()
