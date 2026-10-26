@@ -7,6 +7,7 @@
 - **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
 
 - **Tool messages.** A blocked call or other summary Chanto wrote shows its inline code styled, the way replies do, instead of literal backticks. Output that carries colour and diffs is still rendered as ANSI.
+- **Provider errors.** An error streamed by the provider now shows its own explanation and code instead of a bare `API error error:`. Providers nest the detail under `error`; a bare string, or an event with no detail, is shown as it arrives.
 - **Interrupted sessions.** The notice shown when a session resumes after an interrupted turn lists the calls it was running one per line, instead of joining a batch of long commands into one run-on sentence.
 - **Provider safety messages.** Refusal explanations and links now appear in streamed replies and transcripts. A provider safety filter that supplies no explanation shows a clear notice, and filtered turns end without retries or tool execution.
 - **Streaming and large requests.** Stream framing borrows complete lines and compacts once per network read, avoiding per-line allocations and repeated buffer shifts. Buffered model request retries share the serialized body instead of copying it. The standard 40-turn overhead benchmark shows no measurable CPU or peak-memory improvement from these changes.

@@ -392,6 +392,29 @@ mod tests {
         assert_eq!(err.to_string(), "API error new_error: specific explanation");
     }
 
+    #[tokio::test]
+    async fn nested_stream_errors_keep_the_provider_message() {
+        // Providers nest the details under `error`; the text must survive even
+        // when the code is one we don't have special handling for.
+        for (event, expected) in [
+            (
+                json!({"type": "error", "error": {"type": "rate_limit_exceeded", "message": "Rate limit reached for gpt-6.1-sol"}}),
+                "rate_limit_exceeded: Rate limit reached for gpt-6.1-sol",
+            ),
+            (
+                json!({"type": "error", "error": "Usage limit reached for this plan"}),
+                "Usage limit reached for this plan",
+            ),
+        ] {
+            let (base, _) = serve(vec![(200, sse(&[("error", event)]))]).await;
+            let err = provider(&base)
+                .chat(&request(), &mut |_| {})
+                .await
+                .unwrap_err();
+            assert!(err.to_string().contains(expected), "{err:#}");
+        }
+    }
+
     #[test]
     fn retry_after_and_chatgpt_context_are_preserved_verbatim() {
         let error = json!({"type": "usage_limit_reached", "resets_in_seconds": 3600});
