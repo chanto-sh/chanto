@@ -6,6 +6,7 @@
 
 - **Background command status.** Output polls show the originating command’s description alongside its id, explain when they are waiting for new output, distinguish quiet/running/completed/failed jobs, and preview the latest three short lines. Failed background exits are marked as errors.
 
+- **Todo panel.** A long todo is cut at a word with an ellipsis instead of being clipped mid-word by the frame, the panel says `… N more` when more than eight are hidden, its height reserves every row it draws, a blank row separates the list from a running turn's status line, and the header lines up with the transcript.
 - **Provider safety messages.** Refusal explanations and links now appear in streamed replies and transcripts. A provider safety filter that supplies no explanation shows a clear notice, and filtered turns end without retries or tool execution.
 - **Streaming and large requests.** Stream framing borrows complete lines and compacts once per network read, avoiding per-line allocations and repeated buffer shifts. Buffered model request retries share the serialized body instead of copying it. The standard 40-turn overhead benchmark shows no measurable CPU or peak-memory improvement from these changes.
 
