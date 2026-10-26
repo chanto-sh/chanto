@@ -548,6 +548,23 @@ fn worker_env(creds: &RunCredentials, own_model: bool) -> (Vec<(String, String)>
     (env, skipped)
 }
 
+/// Make this process mask the run's credentials: its org secrets, model key,
+/// run token and git password.
+fn register_secrets(creds: &RunCredentials, env: &[(String, String)]) {
+    for (k, v) in &creds.env {
+        crate::secrets::register(k, v);
+    }
+    for (k, v) in env {
+        if creds.env.contains_key(k) || matches!(k.as_str(), "CHANTO_API_KEY" | "CHANTO_RUN_TOKEN")
+        {
+            crate::secrets::register(k, v);
+        }
+    }
+    if let Some(g) = &creds.git {
+        crate::secrets::register("GIT_PASSWORD", &g.password);
+    }
+}
+
 /// A git credential this close to expiring is fetched again before use.
 const REFRESH_BEFORE: chrono::Duration = chrono::Duration::minutes(5);
 
@@ -595,6 +612,9 @@ async fn execute(
     }
     .unwrap_or_default();
     let (mut env, skipped) = worker_env(&creds, own_model);
+    // What the script prints and the run's events are masked here too,
+    // before they go to the server.
+    register_secrets(&creds, &env);
     if let Some(checks) = &job.checks {
         env.push((chanto_proto::runs::CHECKS_ENV.into(), checks.join("\n")));
     }
@@ -949,7 +969,10 @@ async fn finish(
         // A GitHub token lasts an hour; runs can take longer.
         if expiring(&creds) {
             match credentials(client, job).await {
-                Ok(c) => creds = c,
+                Ok(c) => {
+                    register_secrets(&c, &[]);
+                    creds = c
+                }
                 Err(e) => eprintln!(
                     "{}",
                     crate::ui::dim(&format!(
@@ -1315,6 +1338,8 @@ async fn run_script(
             .iter()
             .collect()
     };
+    // It goes to the server (events, summary) and to the model's task.
+    let tail = crate::secrets::redact_always(&tail).into_owned();
     let (d, gd) = (dir.clone(), git_dir.clone());
     let changed = tokio::task::spawn_blocking(move || {
         script_git(
@@ -1366,6 +1391,9 @@ async fn keep_lease<T>(
 /// so one bad event can't hold up the rest of the run's.
 async fn send_events(client: &Client, job: &Job, batch: &mut Vec<Value>) -> Result<()> {
     let path = run_path(job, "events");
+    batch
+        .iter_mut()
+        .for_each(crate::secrets::redact_json_always);
     while !batch.is_empty() {
         let n = batch.len().min(MAX_BATCH);
         match client
@@ -1500,6 +1528,26 @@ mod tests {
         (dir, url)
     }
 
+    /// A refreshed credential (fetched again before the push) brings its
+    /// org secrets too, and they're masked like the first ones.
+    #[test]
+    fn refreshed_credentials_are_masked() {
+        let _g = crate::secrets::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut creds = RunCredentials::default();
+        creds.env.insert(
+            "ROTATED_DEPLOY_TOKEN".into(),
+            "rotated-org-secret-8e7d".into(),
+        );
+        // As `finish` calls it: no worker environment.
+        register_secrets(&creds, &[]);
+        assert_eq!(
+            crate::secrets::redact_always("x rotated-org-secret-8e7d"),
+            "x [REDACTED:ROTATED_DEPLOY_TOKEN]"
+        );
+    }
+
     #[tokio::test]
     async fn scripts_run_in_a_checkout_and_say_what_they_did() {
         // Script git directories go under the Chanto home: keep it still.
@@ -1563,6 +1611,34 @@ mod tests {
         assert!(o.output.contains("before") && !o.output.contains("after"));
         assert!(o.report().contains("Script failed (exit 1)"));
         o.cleanup();
+
+        // What it prints of the run's secrets is masked before it's sent.
+        {
+            let _g = crate::secrets::TEST_LOCK
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let mut creds = RunCredentials::default();
+            creds
+                .env
+                .insert("ORG_DEPLOY_TOKEN".into(), "org-deploy-secret-31f2".into());
+            let (env, _) = worker_env(&creds, false);
+            register_secrets(&creds, &env);
+            let o = run_script(
+                &j,
+                &url,
+                &[],
+                &script_env(&env),
+                "echo token=$ORG_DEPLOY_TOKEN",
+            )
+            .await
+            .unwrap();
+            assert!(
+                o.output.contains("token=[REDACTED:ORG_DEPLOY_TOKEN]"),
+                "{}",
+                o.output
+            );
+            o.cleanup();
+        }
 
         // Nothing to change.
         let o = run_script(&j, &url, &[], &[], "echo prices are current")
