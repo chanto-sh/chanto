@@ -117,6 +117,7 @@ impl Agent {
         // Nothing secret leaves the machine (or reaches a local model's logs).
         self.message_redactor.redact(&mut messages);
         let fallbacks = self.fallback_chain();
+        self.settle_effort();
         let req = ChatRequest {
             model: self
                 .turn_fallback

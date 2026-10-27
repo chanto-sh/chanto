@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Adaptive effort keeps the prompt cache.** Adaptive effort now changes the reasoning effort at most once a turn: the turn opens at the provider's default, and from the first reply that only called tools every later call in that turn asks for `low`, even after a reply with text. Switching between `low` and the default on every call made providers such as DeepSeek re-read the whole history uncached, 31% of uncached input in SWE benchmark runs.
 - **Off-task searching.** Chanto works from the code in the working directory and its own dependencies instead of hunting for a ready-made fix on the disk, in package caches, other checkouts or the project's upstream history. A call that searches outside the project (`find /`, `grep -r ~`, `pip download`, `git fsck --lost-found`) still runs, and its result carries a short note steering back to the project. In benchmark sessions such searches were 18% of all calls.
 
 ## v0.1.7 (October 27, 2026)

@@ -1276,6 +1276,9 @@ pub struct Agent {
     /// reasoning: 1 asks for low effort, 2 turns thinking off for the call, so
     /// the model has to write or act. Reset when a real response arrives.
     think_less: u8,
+    /// Adaptive effort has dropped to `low` for the rest of this user turn
+    /// (see `adaptive_effort`). Reset when the next turn starts.
+    turn_low_effort: bool,
     /// `optimize.defer_tools`: deferred built-ins sent upfront anyway, fixed
     /// for the session once its first turn starts (`tool_search::upfront_builtins`).
     upfront_builtins: Option<Vec<String>>,
@@ -1409,6 +1412,7 @@ impl Agent {
             edit_seq: 0,
             output_cap_boost: 0,
             think_less: 0,
+            turn_low_effort: false,
             upfront_builtins: None,
             recorded_builtins: Default::default(),
             check_runs: Vec::new(),
@@ -1666,22 +1670,36 @@ impl Agent {
     }
 
     /// `optimize.adaptive_effort` (on by default): when nothing pins an effort,
-    /// spend less on mechanical follow-ups (turns whose previous assistant
-    /// message only called tools and said nothing). The effort then changes
-    /// between calls, which costs a provider's prompt cache at each change,
-    /// but it solved more benchmark tasks than any fixed effort. Turned off
-    /// by an explicit session/skill effort.
+    /// spend less once the turn is under way. A turn opens at the provider's
+    /// default effort; from the first mechanical follow-up (the previous
+    /// assistant message only called tools and said nothing) every later call
+    /// in that turn uses `low`, even after a reply with text. The effort is
+    /// part of what a provider's prompt cache keys on, so it changes at most
+    /// once a turn, early, while the context is still small, instead of
+    /// flipping between calls and re-sending the whole history uncached.
+    /// Turned off by an explicit session/skill effort.
     fn adaptive_effort(&self) -> Option<String> {
         if !self.env.think() || !self.env.config.optimize.adaptive_effort() {
             return None;
         }
-        let last = self
-            .messages
+        (self.turn_low_effort || self.last_reply_mechanical()).then(|| "low".to_string())
+    }
+
+    /// The last assistant message only called tools and said nothing.
+    fn last_reply_mechanical(&self) -> bool {
+        self.messages
             .iter()
             .rev()
-            .find(|m| m.role == Role::Assistant)?;
-        let mechanical = !last.tool_calls.is_empty() && last.content.trim().is_empty();
-        mechanical.then(|| "low".to_string())
+            .find(|m| m.role == Role::Assistant)
+            .is_some_and(|m| !m.tool_calls.is_empty() && m.content.trim().is_empty())
+    }
+
+    /// Latch adaptive effort's `low` for the rest of the turn once a call
+    /// follows a mechanical reply, so later calls send the same effort.
+    pub(super) fn settle_effort(&mut self) {
+        if !self.turn_low_effort && self.last_reply_mechanical() {
+            self.turn_low_effort = true;
+        }
     }
 
     fn tool_allowed(&self, name: &str) -> bool {

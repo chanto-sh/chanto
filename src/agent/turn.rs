@@ -44,6 +44,9 @@ impl Agent {
             }
             None => self.run_turn_inner(input, images, cancel).await,
         };
+        // Between turns (compaction, side questions) adaptive effort reads the
+        // conversation as before; the next turn starts at the default again.
+        self.turn_low_effort = false;
         // The checkpoint snapshot runs alongside the turn. Anything that changes
         // files waits for it before running, so if the turn changed something
         // it's already done; make sure the saved session records it. A turn
@@ -91,6 +94,8 @@ impl Agent {
         self.turn_evidence.clear();
         // A fallback model serves one turn; each turn tries the session's model first.
         self.turn_fallback = None;
+        // Adaptive effort starts each turn at the provider's default again.
+        self.turn_low_effort = false;
         // `/model` is handled immediately even mid-turn (it only needs the env),
         // so the system prompt it affects is rebuilt here before it is used.
         if self.system_for_model.as_deref() != Some(self.env.model().as_str())
