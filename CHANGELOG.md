@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Startup.** The secret patterns compile on the background warm-up thread while the rest of startup runs, instead of on the first prompt. A one-shot `-p` run against a local model drops from about 24 ms to about 19 ms of CPU, with no change to what is masked.
+- **Browser.** Chanto's Chrome no longer tells pages it is automated: `navigator.webdriver` stays false even though Chanto has Chrome choose the debugging port, and a headless session reports the user agent the same build uses with a window. Sites see an ordinary Chrome.
 
 ## v0.1.6 (October 26, 2026)
 
