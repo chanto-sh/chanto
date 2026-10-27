@@ -88,6 +88,39 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(m["verdict"], "pass")
 
 
+class ClockStepTest(unittest.TestCase):
+    def test_the_step_is_the_smallest_gap_between_values(self):
+        self.assertEqual(gate.clock_step([15.625, 31.25, 46.875]), 15.625)
+        self.assertAlmostEqual(gate.clock_step([10.0, 10.1, 13.0]), 0.1)
+
+    def test_one_value_has_no_step(self):
+        self.assertEqual(gate.clock_step([10.0]), 0.0)
+
+
+class CoarseClockTest(unittest.TestCase):
+    """Windows charges CPU in 15.625 ms ticks, so samples come in steps."""
+
+    # The real Windows samples of a run where both sets overlapped.
+    BASE = [78.125, 93.75, 125.0, 171.875, 93.75, 78.125, 125.0, 93.75,
+            109.375, 125.0, 156.25, 125.0, 78.125, 156.25, 93.75, 78.125,
+            109.375, 93.75, 93.75, 93.75]
+    HEAD = [125.0, 109.375, 93.75, 109.375, 78.125, 109.375, 109.375, 125.0,
+            109.375, 93.75, 109.375, 125.0, 125.0, 78.125, 93.75, 93.75,
+            109.375, 109.375, 125.0, 109.375]
+
+    def test_a_one_tick_median_shift_is_not_a_regression(self):
+        m = gate.judge("startup_cpu_ms", self.BASE, self.HEAD, 160.0, 0.04, 0.01, 0.10)
+        self.assertFalse(m["significant"])
+        self.assertFalse(m["too_big"])
+        self.assertEqual(m["verdict"], "pass")
+
+    def test_a_shift_of_several_ticks_still_fails(self):
+        head = [v + 46.875 for v in self.HEAD]
+        m = gate.judge("startup_cpu_ms", self.BASE, head, 160.0, 0.04, 0.01, 0.10)
+        self.assertTrue(m["too_big"])
+        self.assertEqual(m["verdict"], "fail")
+
+
 class AlternationTest(unittest.TestCase):
     def test_the_order_swaps_on_every_rep(self):
         pairs = [("head", "h"), ("base", "b")]
