@@ -41,9 +41,11 @@ jobs:
   # These measurements only say something about Rust, so a change that touches
   # no Rust (docs, workflows, the site, the IDE plugins) skips them. A skipped
   # job counts as passing; a path filter on the workflow instead would leave
-  # the check waiting forever.
+  # the check waiting forever. A push to main asks the same question about its
+  # own commits, so a documentation merge does not pay for three release
+  # builds.
   changes:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -56,10 +58,16 @@ jobs:
           fetch-depth: 0
       - id: diff
         env:
-          BASE: ${{ github.event.pull_request.base.sha }}
-          HEAD: ${{ github.event.pull_request.head.sha }}
+          # A pull request diffs against its base; a push to main against the
+          # commit it replaced.
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.after }}
         run: |
-          if git diff --name-only "$BASE...$HEAD" | grep -qE '(^|/)(src|proto|tests/(perf|chaos))/|\.rs$|(^|/)Cargo\.(toml|lock)$|^\.github/workflows/perf\.yml$'; then
+          # A rewritten branch leaves no `before` to diff against; warming the
+          # cache is never wrong, so that counts as Rust.
+          if [ -z "$BASE" ] || [ -z "$HEAD" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            echo rust=true >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$BASE...$HEAD" | grep -qE '(^|/)(src|proto|tests/(perf|chaos))/|\.rs$|(^|/)Cargo\.(toml|lock)$|^\.github/workflows/perf\.yml$'; then
             echo rust=true >> "$GITHUB_OUTPUT"
           else
             echo rust=false >> "$GITHUB_OUTPUT"
@@ -67,9 +75,9 @@ jobs:
 
   bench:
     needs: changes
-    # The merge queue and manual runs always measure; a pull request only when
-    # it changes Rust.
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.rust == 'true') }}
+    # The merge queue and manual runs always measure; anything else only when it
+    # changes Rust.
+    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
     # Spelled out rather than left to the default, which also lists the extra
     # matrix values and would change the check's name.
     name: bench (${{ matrix.os }})
