@@ -2,13 +2,13 @@
 
 Full reference for every feature. The [README](../README.md) is the overview.
 
-**Contents:** [Setup](#setup) · [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Outcome mode: review what was built, not the code](#outcome-mode-review-what-was-built-not-the-code) · [Goals: keep going until it's verifiably done](#goals-keep-going-until-its-verifiably-done) · [Verified mode (guardrails)](#verified-mode-guardrails) · [Learning from your corrections](#learning-from-your-corrections) · [Usage insights](#usage-insights) · [Secrets](#secrets) · [Resource limits](#resource-limits) · [Computer use](#computer-use) · [Background agents and worktrees](#background-agents-and-worktrees) · [Background and remote runs](#background-and-remote-runs) · [Teams: parallel agents on one task](#teams-parallel-agents-on-one-task) · [Voice input](#voice-input) · [Server](#server) · [Compatibility with Claude Code and Codex](#compatibility-with-claude-code-and-codex) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [License](#license) · [Driving another agent (ACP client)](#driving-another-agent-acp-client) · [Managing spend](#managing-spend) · [USD costs, budgets, logs and telemetry](#usd-costs-budgets-logs-and-telemetry) · [Durable memory](#durable-memory) · [Permission modes](#permission-modes) · [Tools](#tools) · [Sandbox](#sandbox) · [Sessions and checkpoints](#sessions-and-checkpoints) · [Context management](#context-management)
+**Contents:** [Setup](#setup) · [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Outcome mode](#outcome-mode) · [Goals](#goals) · [Verified mode (guardrails)](#verified-mode-guardrails) · [Learning from your corrections](#learning-from-your-corrections) · [Usage insights](#usage-insights) · [Secrets](#secrets) · [Resource limits](#resource-limits) · [Computer use](#computer-use) · [Background agents and worktrees](#background-agents-and-worktrees) · [Background and remote runs](#background-and-remote-runs) · [Teams](#teams) · [Voice input](#voice-input) · [Server](#server) · [Claude Code and Codex compatibility](#claude-code-and-codex-compatibility) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [License](#license) · [ACP client](#acp-client) · [Managing spend](#managing-spend) · [Costs, budgets and telemetry](#costs-budgets-and-telemetry) · [Durable memory](#durable-memory) · [Permission modes](#permission-modes) · [Tools](#tools) · [Sandbox](#sandbox) · [Sessions and checkpoints](#sessions-and-checkpoints) · [Context management](#context-management)
 
 A fast, local-first agentic coding CLI written in Rust, built around one rule: it has to prove its work before it calls the job done. It runs against **local models** through Ollama's native API or any OpenAI-compatible server (llama.cpp `llama-server`, LM Studio, vLLM, MLX, …), and against hosted models: the native **Anthropic Messages** and **OpenAI Responses** APIs, OpenAI-compatible services (OpenRouter, Gemini, DeepSeek, Groq and others; `chanto providers` lists them), and Amazon Bedrock, Google Vertex AI and Azure.
 
 - **Single binary** (about 17 MB), starts instantly, uses little memory
 - **Full-screen or [inline](#inline-mode) TUI**: streaming markdown, collapsible tool, diff and thinking blocks (click or `ctrl+o`), mouse scrolling, permission dialogs, slash and `@file` completion (gitignored files are offered last, marked, and `.git` never), todo panel, and a status bar with context usage and tokens/s
-- **Reads the setup you already have**: existing Claude Code and Codex settings, permission rules, hooks, MCP servers, instruction files, skills, commands/prompts and subagents carry over, so switching doesn't mean starting from an empty config (see [Compatibility](#compatibility-with-claude-code-and-codex))
+- **Reads the setup you already have**: existing Claude Code and Codex settings, permission rules, hooks, MCP servers, instruction files, skills, commands/prompts and subagents carry over, so switching doesn't mean starting from an empty config (see [Compatibility](#claude-code-and-codex-compatibility))
 - **Multi-model**: named providers (`[providers.lmstudio]`, `[providers.llamacpp]`, …) referenced as `provider/model`, so the main agent, subagents (`subagent_model`) and the auto-mode classifier (`classifier_model`) can each use a different model or server. Switch live with `/model`.
 - **Folder trust**: project settings that could run code or loosen safety (hooks, MCP servers, status line, permission allow rules, mode, endpoints, `classifier_model`, `optimize.token_classifier`) are ignored until you trust the folder (prompt on first run, or `chanto --trust`). "Don't ask again" rules are stored in `~/.chanto`, not in the repo, so a cloned project can't forge them.
 - **Language servers**: after each edit, errors from the project's language server (rust-analyzer, typescript-language-server, pyright/basedpyright/pylsp, gopls, clangd: whichever is installed) are appended to the tool result so the model fixes them in the same turn. An `Lsp` tool (diagnostics, definition, references, hover, document/workspace symbols) is offered when a server is available for the project. See [Language servers](#language-servers).
@@ -799,20 +799,20 @@ To undo source changes, commit or stash your work, switch to the previous branch
   - A deny rule for `ToolSearch` turns tool search off.
 - **Per-server options:** `cwd` (working directory of a stdio server), `startup_timeout_sec` (default 30, 10 for imported servers), `tool_timeout_sec` (how long one tool call may take; default `mcp_tool_timeout` from the top level of the config, else `MCP_TOOL_TIMEOUT` in milliseconds as in Claude Code, else 10 minutes. A call that runs out comes back to the model as an error naming the server and tool; esc stops the wait at any time. Either way the server is sent `notifications/cancelled` for the request, over stdio, streamable HTTP or legacy SSE), `enabled_tools = [...]` (only expose these) and `disabled_tools = [...]` (hide these; applied after `enabled_tools`). Names are the server's own tool names, without the `mcp__server__` prefix.
 
-## Outcome mode: review what was built, not the code
+## Outcome mode
 
-`/outcome <what you want>` (or `chanto -p --outcome "…"`):
+Outcome mode reviews what was built, not the code. `/outcome <what you want>` (or `chanto -p --outcome "…"`):
 1. **Criteria:** the agent explores read-only, then writes executable acceptance criteria to `.chanto/outcome/<id>/criteria.json`, e.g. "signup rejects duplicate emails: `pytest .chanto/outcome/<id>/checks/test_signup.py -k duplicate`". It can only write there in this phase.
 2. **Baseline:** every criterion runs before any change. One that already passes is flagged, because it proves nothing about the work.
 3. **Approval:** you approve the criteria (plain-language titles plus commands), not code.
 4. **Build:** verified mode with the criteria as checks. The criteria files are locked: loosening them fails the gate, and existing tests stay protected.
 5. **Report** (`report.md`): each criterion with its evidence (command output), plus **"Review these by hand"**. Those are changes that passing checks can't vouch for: auth and security code, schema migrations, dependency changes, secrets, CI and infrastructure, public API surface, deleted files, and risky constructs (shell or eval, destructive data operations, concurrency, injection-prone queries).
 
-## Goals: keep going until it's verifiably done
+## Goals
 
-`/goal <objective>` (or `chanto goal "<objective>"`) works toward an objective over as many turns as it takes, not just one:
+A goal keeps going until it's verifiably done. `/goal <objective>` (or `chanto goal "<objective>"`) works toward an objective over as many turns as it takes, not just one:
 
-1. **Criteria:** the same first steps as [outcome mode](#outcome-mode-review-what-was-built-not-the-code). The agent explores read-only and writes executable acceptance criteria, they run once as a baseline, and you approve them. From then on they're **locked**: Chanto runs the copy recorded when you approved them, and if the agent edits the criteria files, Chanto puts them back and tells it so. That iteration doesn't count as progress.
+1. **Criteria:** the same first steps as [outcome mode](#outcome-mode). The agent explores read-only and writes executable acceptance criteria, they run once as a baseline, and you approve them. From then on they're **locked**: Chanto runs the copy recorded when you approved them, and if the agent edits the criteria files, Chanto puts them back and tells it so. That iteration doesn't count as progress.
    - **How criteria run.** Every criterion runs the same way: in the baseline, after every iteration, and in the instructions the agent gets. Its `check` is a shell command run **from the project root** (a background goal's worktree). `CHANTO_GOAL_DIR` (the goal directory) and `CHANTO_PROJECT_ROOT` are set, and the project root is on `PYTHONPATH`, so check scripts are written as `python3 "$CHANTO_GOAL_DIR/checks/test_x.py"` and can `import` project modules. The agent is shown the exact line to reproduce a run (`cd <root> && CHANTO_GOAL_DIR=… <check>`).
    - **Checks that can't run.** The baseline tells "fails because the behavior is missing" apart from "fails because the check can't run". The second covers: a `checks/...` path that names the goal directory relative to the project, a command that isn't installed, an import of a project module that fails, a syntax error in a check script, and a timeout. Those criteria are flagged `⚠ can't run` at approval, and you can let the agent fix them before anything is locked. Unattended, the agent gets two fix rounds, and if the criteria still can't run the goal stops and says why.
 2. **Iterations:** each iteration is one agent turn. The agent plans the next step for the failing criteria, does it and runs the checks. Then Chanto runs every criterion itself and appends the result and the agent's summary to the goal's progress log. The next iteration starts from that log and the latest failure output. Existing tests are protected as in verified mode: weakening one doesn't count either.
@@ -1059,7 +1059,7 @@ A notification has only a title, the run id, its state, the verify verdict and a
 
 A run's `state` is `queued`, `running`, `needs-input`, `done`, `failed`, `cancelled` or `interrupted`; `pending` holds the open permission request or question. Events are the session events (`text`, `tool_start`, `permission_request`, …) with a `seq` and `run_id`, plus `run_state` (with the whole run record) on every state change and `request_done` when a prompt is answered or times out.
 
-**Starting point.** `start` (API) makes a run begin at a given commit of the local checkout instead of HEAD plus your uncommitted changes. [Teams](#teams-parallel-agents-on-one-task) use it to start every sub-task from the same base, and to start a re-delegated one from the merged work. `kind: "goal"` runs a [goal](#goals-keep-going-until-its-verifiably-done), and `team` tags a run as part of a team.
+**Starting point.** `start` (API) makes a run begin at a given commit of the local checkout instead of HEAD plus your uncommitted changes. [Teams](#teams) use it to start every sub-task from the same base, and to start a re-delegated one from the merged work. `kind: "goal"` runs a [goal](#goals), and `team` tags a run as part of a team.
 
 ### Container isolation
 
@@ -1214,7 +1214,7 @@ name = "triage"                     # no schedule: runs only when triggered
 prompt = "Triage the newest failing CI run and propose a fix."
 ```
 
-A job with `kind = "goal"` runs its prompt as a [goal](#goals-keep-going-until-its-verifiably-done): the first run waits as `needs-input` until you approve its criteria, and `chanto runs` and notifications label it as both the job and a goal run.
+A job with `kind = "goal"` runs its prompt as a [goal](#goals): the first run waits as `needs-input` until you approve its criteria, and `chanto runs` and notifications label it as both the job and a goal run.
 
 Jobs in `~/.chanto/runner.toml` need `cwd`, the absolute path of the checkout to run in. A project's jobs are scheduled once you run `chanto runner enable` in it; the project must be trusted, because its jobs run unattended. A project job overrides a global one with the same name. Unknown keys are errors, so a typo never silently drops a setting.
 
@@ -1349,9 +1349,9 @@ release-notes:
 
 The same works in any CI system that can run a shell script.
 
-## Teams: parallel agents on one task
+## Teams
 
-`/team <task>` (or `chanto team "<task>" [--agents N]`) puts a lead agent in charge of several worker agents:
+A team runs parallel agents on one task. `/team <task>` (or `chanto team "<task>" [--agents N]`) puts a lead agent in charge of several worker agents:
 
 1. **Plan:** the lead explores read-only and splits the task into independent sub-tasks (up to twice the agent count, at most 8). Each sub-task owns some files or directories, so the workers don't edit the same files. You see the plan, with any overlapping ownership flagged, and approve it.
 2. **Run in parallel:** each sub-task becomes a [background run](#background-and-remote-runs) in its own worktree and branch, at most `agents` at a time. All of them start from the same base: HEAD plus a snapshot of your uncommitted changes. Each run has its share of the budget, verified mode and needs-input prompts. They show up in `chanto runs`.
@@ -1439,7 +1439,7 @@ The API is bound to `127.0.0.1` by default and every route except `/health` requ
 claude mcp add chanto -- chanto mcp-serve --model qwen3:8b
 ```
 
-## Compatibility with Claude Code and Codex
+## Claude Code and Codex compatibility
 
 Chanto picks up what you've already configured for Claude Code and Codex, so a project set up for either works without changes. This compatibility runs one way: Chanto reads their files and leaves them as they are. Run `/config` to see which files were loaded, and `chanto --dump-config` to print the merged result.
 
@@ -1878,7 +1878,7 @@ The separate invocation keeps process-global theme changes isolated from normal 
 
 Chanto is open source under the [Apache License 2.0](../LICENSE): the CLI, the server and the [benchmark suite](https://github.com/chanto-sh/benchmarks). Anything that runs on one machine for one person stays open source.
 
-## Driving another agent (ACP client)
+## ACP client
 
 `chanto acp-client <command...>` runs an external agent under Chanto's own UI. The command must speak [Agent Client Protocol](https://agentclientprotocol.com) version 1 over stdio, which is what the Claude Agent SDK adapter (`claude-agent-acp`), OpenCode and others do:
 
@@ -1961,7 +1961,10 @@ resent_context_percent = 50
 # month_usd = 200.0
 ```
 
-## USD costs, budgets, logs and telemetry
+## Costs, budgets and telemetry
+
+Chanto prices model calls in USD, enforces budgets, writes local logs and can
+export telemetry.
 
 `/cost` (also `/usage`), the TUI footer, and `chanto insights` show USD totals.
 JSON/stream-json results and server usage and turn events expose
