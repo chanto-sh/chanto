@@ -1,6 +1,7 @@
 """Regression checks for release preflight, using temporary metadata copies."""
 
 from pathlib import Path
+import re
 import runpy
 import shutil
 import tempfile
@@ -60,7 +61,12 @@ class ReleaseMetadataTests(unittest.TestCase):
             check(self.root, self.tag)
 
     def test_rejects_installer_floor_drift(self):
-        self.replace("install.ps1", "$minVersion = '" + self.tag + "'", "$minVersion = 'v99.0.0'")
+        # The floor only moves with a security release, so read it rather than
+        # assuming it names this release.
+        floor = re.search(
+            r"^\$minVersion = '(v[0-9.]+)'$", (self.root / "install.ps1").read_text(), re.MULTILINE
+        )[1]
+        self.replace("install.sh", f"min_version={floor}", "min_version=v99.0.0")
         with self.assertRaisesRegex(ValueError, "floors disagree"):
             check(self.root, self.tag)
 
