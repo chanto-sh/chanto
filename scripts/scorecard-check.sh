@@ -42,6 +42,10 @@ have() {
 
 run_osv() {
     have osv-scanner "brew install osv-scanner" || return 0
+    if ! python3 scripts/check-advisory-exceptions.py; then
+        status=1
+        return 0
+    fi
     echo "osv-scanner: scanning the lockfiles" >&2
     # Recursive, as Scorecard scans; files that git ignores (target/,
     # node_modules/) are skipped.
