@@ -75,9 +75,12 @@ jobs:
 
   bench:
     needs: changes
+    # The job always runs, so each platform reports its own check (they are
+    # required): a skipped matrix job reports one check named after the
+    # unexpanded matrix instead, and a required check would wait forever.
     # The merge queue and manual runs always measure; anything else only when it
-    # changes Rust.
-    if: ${{ !cancelled() && (github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true') }}
+    # changes Rust. Otherwise every step is skipped and the check passes.
+    if: ${{ !cancelled() }}
     # Spelled out rather than left to the default, which also lists the extra
     # matrix values and would change the check's name.
     name: bench (${{ matrix.os }})
@@ -100,6 +103,8 @@ jobs:
     permissions:
       contents: read
     env:
+      # Measures too when the change detection didn't succeed, rather than pass blindly.
+      MEASURE: ${{ github.event_name == 'merge_group' || github.event_name == 'workflow_dispatch' || needs.changes.result != 'success' || needs.changes.outputs.rust == 'true' }}
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
       # The commit the pull request is based on, or the merge queue's target.
       BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
@@ -111,11 +116,14 @@ jobs:
         shell: bash
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: env.MEASURE == 'true'
         with:
           persist-credentials: false
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        if: env.MEASURE == 'true'
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        if: env.MEASURE == 'true'
         with:
           key: perf
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -123,6 +131,7 @@ jobs:
       # $CARGO_TARGET_DIR but its own commands need POSIX ones, and the built
       # binary carries an extension here.
       - name: Paths
+        if: env.MEASURE == 'true'
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
             temp="$(cygpath -u "$RUNNER_TEMP")"
@@ -140,15 +149,17 @@ jobs:
           } >> "$GITHUB_ENV"
       # The gate's own tests are pure Python: run them before the builds.
       - name: Test the gate
+        if: env.MEASURE == 'true'
         run: $PYTHON -m unittest discover -s tests/perf -p 'test_*.py'
       - name: Build the head commit
+        if: env.MEASURE == 'true'
         run: |
           cargo build --release --locked ${{ matrix.cargo_flags }}
           cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-head"
       # Built second, in the same target directory: the dependencies are
       # already compiled, so this is mostly the crate itself.
       - name: Build the base commit
-        if: env.BASE_SHA != ''
+        if: ${{ env.MEASURE == 'true' && (env.BASE_SHA != '') }}
         run: |
           git worktree add --detach "$BENCH_TEMP/base" "$BASE_SHA"
           cargo build --release --locked ${{ matrix.cargo_flags }} \
@@ -157,7 +168,7 @@ jobs:
       # A warm run has nothing to compare: the head measures only against the
       # fixed ceilings, and that is what the pull request's own run does.
       - name: Measure
-        if: github.event_name != 'push'
+        if: ${{ env.MEASURE == 'true' && (github.event_name != 'push') }}
         run: |
           base=()
           if [ -f "$BENCH_TEMP/chanto-base" ]; then
@@ -169,7 +180,7 @@ jobs:
             --json "$BENCH_TEMP/perf.json" \
             --summary-md "$BENCH_TEMP/perf.md"
       - name: Upload the report
-        if: ${{ !cancelled() && github.event_name != 'push' }}
+        if: ${{ env.MEASURE == 'true' && (!cancelled() && github.event_name != 'push') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: chanto-perf-${{ matrix.os }}
