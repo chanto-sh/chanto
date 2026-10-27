@@ -147,6 +147,9 @@ jobs:
     # The desktop app and editor plugins aren't released yet; only the CLI is.
     needs: build
     runs-on: ubuntu-latest
+    # RELEASE_SIGNING_KEY lives in the `publish` environment, which only v*
+    # tags can use, so a workflow pushed on a branch can't read it.
+    environment: publish
     # Creates the GitHub release.
     permissions:
       contents: write
@@ -207,6 +210,8 @@ jobs:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
+    # HOMEBREW_TAP_DEPLOY_KEY lives in the `publish` environment (v* tags only).
+    environment: publish
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
