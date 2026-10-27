@@ -19,8 +19,17 @@
 #
 # The job is expected to be a required check; it needs no secrets and runs
 # read-only, so pull requests from forks are measured the same way.
+#
+# A push to main warms the build cache and measures nothing: those runners
+# build the release profile once, so the pull requests that follow restore
+# every dependency instead of compiling them again. Only main writes a cache.
+# GitHub gives the repository one budget shared by every ref, so a pull
+# request that stored its own copy evicted the one it and the other pull
+# requests restored, and each run started from an empty target directory.
 name: perf
 on:
+  push:
+    branches: [main]
   pull_request:
   merge_group:
   workflow_dispatch:
@@ -101,6 +110,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: perf
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       # Git Bash is handed Windows paths in $RUNNER_TEMP and
       # $CARGO_TARGET_DIR but its own commands need POSIX ones, and the built
       # binary carries an extension here.
@@ -123,7 +133,7 @@ jobs:
       # The gate's own tests are pure Python: run them before the builds.
       - name: Test the gate
         run: $PYTHON -m unittest discover -s tests/perf -p 'test_*.py'
-      - name: Build the pull request
+      - name: Build the head commit
         run: |
           cargo build --release --locked ${{ matrix.cargo_flags }}
           cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-head"
@@ -136,7 +146,10 @@ jobs:
           cargo build --release --locked ${{ matrix.cargo_flags }} \
             --manifest-path "$BENCH_TEMP/base/Cargo.toml"
           cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-base"
+      # A warm run has nothing to compare: the head measures only against the
+      # fixed ceilings, and that is what the pull request's own run does.
       - name: Measure
+        if: github.event_name != 'push'
         run: |
           base=()
           if [ -f "$BENCH_TEMP/chanto-base" ]; then
@@ -148,7 +161,7 @@ jobs:
             --json "$BENCH_TEMP/perf.json" \
             --summary-md "$BENCH_TEMP/perf.md"
       - name: Upload the report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && github.event_name != 'push' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: chanto-perf-${{ matrix.os }}
