@@ -742,6 +742,7 @@ independent calls in parallel."
             let title = shell.title();
             tokio::spawn(async move {
                 let code = child.wait().await.ok().and_then(|s| s.code());
+                drain_output(r1, r2).await;
                 if exec.is_some() {
                     crate::runs::container::untrack(shell.pid);
                 }
@@ -770,11 +771,7 @@ independent calls in parallel."
             }
             let _ = child.kill().await;
         }
-        let _ = tokio::time::timeout(Duration::from_secs(2), async {
-            let _ = r1.await;
-            let _ = r2.await;
-        })
-        .await;
+        drain_output(r1, r2).await;
         crate::runs::container::untrack(pid);
         let raw = buf.lock().unwrap().clone();
         let text = strip_ansi(&String::from_utf8_lossy(&raw));
@@ -1034,7 +1031,7 @@ pub(crate) fn spawn_background(
     let mut so = child.stdout.take().unwrap();
     let mut se = child.stderr.take().unwrap();
     let s1 = shell.clone();
-    tokio::spawn(async move {
+    let r1 = tokio::spawn(async move {
         let mut chunk = [0u8; 8192];
         while let Ok(n) = so.read(&mut chunk).await {
             if n == 0 {
@@ -1044,7 +1041,7 @@ pub(crate) fn spawn_background(
         }
     });
     let s2 = shell.clone();
-    tokio::spawn(async move {
+    let r2 = tokio::spawn(async move {
         let mut chunk = [0u8; 8192];
         while let Ok(n) = se.read(&mut chunk).await {
             if n == 0 {
@@ -1056,6 +1053,7 @@ pub(crate) fn spawn_background(
     let s3 = shell.clone();
     tokio::spawn(async move {
         let status = child.wait().await;
+        drain_output(r1, r2).await;
         if exec.is_some() {
             crate::runs::container::untrack(s3.pid);
         }
@@ -1063,6 +1061,16 @@ pub(crate) fn spawn_background(
     });
     ctx.env.shells.lock().unwrap().insert(id, shell.clone());
     Ok(shell)
+}
+
+// Collect trailing pipe data before publishing completion. Descendants can keep
+// inherited pipes open, so use the same bounded drain as foreground commands.
+async fn drain_output(r1: tokio::task::JoinHandle<()>, r2: tokio::task::JoinHandle<()>) {
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        let _ = r1.await;
+        let _ = r2.await;
+    })
+    .await;
 }
 
 fn push_capped(sh: &BgShell, s: &str) {

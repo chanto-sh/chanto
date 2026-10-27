@@ -1807,7 +1807,7 @@ python3 reproduce.py --agents chanto --no-install --chanto ../chanto/target/rele
 
 The default workload is 40 tool turns reading 40 KB files, repeated 10 times. It reports median process-tree CPU time per model request and median peak process-tree resident memory sampled every 60 ms; the final answer is also a model request. Results record versions, machine details and every run. Component microbenchmarks are separate measurements and do not establish a whole-agent CPU or memory improvement.
 
-Every pull request that changes Rust also passes a performance gate on Linux (`tests/perf/gate.py`, workflow `perf`). It measures the same two things in this repository: process CPU and peak memory of one `-p` request, and CPU per request and peak memory of the 40-turn workload. The pull request and its base commit are both built and run alternately, so the comparison is on one machine. A metric fails when it is over the fixed ceiling in `tests/perf/budgets.json`, when it is significantly slower than the base by a one-sided Mann-Whitney U test (α = 0.01) and outside the tolerance, or when it is more than 10% slower whatever the noise. The ceilings are set from the slowest GitHub runner measured, so they do not fail on hardware variation; the comparison with the base is what holds a small change. The table goes on the run's summary page.
+Every pull request that changes Rust also passes a performance gate on Linux, macOS and Windows (`tests/perf/gate.py`, workflow `perf`). It measures the same two things in this repository: process CPU and peak memory of one `-p` request, and CPU per request and peak memory of the 40-turn workload. The pull request and its base commit are both built and run alternately on the same runner, so the comparison is never between two machines; each platform also has its own ceilings, because process startup and peak memory differ between them. A metric fails when it is over the fixed ceiling in `tests/perf/budgets.json`, when it is significantly slower than the base by a one-sided Mann-Whitney U test (α = 0.01) and outside the tolerance, or when it is more than 10% slower whatever the noise. The ceilings are set from the slowest GitHub runner measured, so they do not fail on hardware variation; the comparison with the base is what holds a small change. The Linux job also re-runs the workload pinned to one core, against its own wall-time and 256 MB memory ceilings: a phone or a cheap laptop has no spare cores and little memory, and nothing else in the gate says whether Chanto still runs there. The table goes on the run's summary page.
 
 To measure a local build against the ceilings, and against another binary you have:
 
@@ -1815,7 +1815,10 @@ To measure a local build against the ceilings, and against another binary you ha
 cargo build --release
 python3 tests/perf/gate.py --head target/release/chanto
 python3 tests/perf/gate.py --head target/release/chanto --base path/to/older/chanto
+python3 tests/perf/gate.py --head target/release/chanto --device
 ```
+
+`--device` adds the small-device run (one core, via `taskset` on Linux).
 
 Benchmark variants turn on the experimental optimizations below: `chanto+concise`, `chanto+quiet`, `chanto+provenance`, `chanto+all`, or any combination joined with `+`. They run the same command as `chanto` with `CHANTO_OPTIMIZE` set, and each result and the run's metadata record which switches were on. `--chanto-effort LEVEL` passes `--effort LEVEL` to every Chanto agent in the run.
 

@@ -2808,7 +2808,9 @@ async fn a_failure_from_a_background_run_still_bounces_the_finish() {
     .unwrap();
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_x", "run_in_background": true}))}),
-        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20}))}),
+        // Output can arrive in several chunks. Wait for the complete failure
+        // line instead of treating the first separator or traceback as final.
+        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20, "filter": r"^FAIL: test_f \([^)]+\)$"}))}),
         json!({"content": "Done."}),
         json!({"content": "The existing test is failing, so the work is not done."}),
     ])
@@ -2819,7 +2821,15 @@ async fn a_failure_from_a_background_run_still_bounces_the_finish() {
         .await
         .unwrap();
     let reqs = seen.lock().unwrap();
-    let nudge = reqs[3]["messages"].to_string();
+    let polled = reqs[2]["messages"].to_string();
+    assert!(
+        polled.contains("FAIL: test_f"),
+        "missing failure evidence: {polled}"
+    );
+    let nudge = reqs
+        .get(3)
+        .expect("the reported background test failure must bounce the finish")["messages"]
+        .to_string();
     assert!(nudge.contains("You are not done"), "{nudge}");
     assert!(
         nudge.contains("python3 -m unittest -q test_x"),

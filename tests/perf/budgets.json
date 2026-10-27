@@ -4,13 +4,14 @@
     "over its platform's ceiling, when it is significantly slower than the base",
     "commit at `alpha`, or when it is slower by more than `large_change`.",
     "The ceilings are a backstop for a run with no base to compare with (a",
-    "main push, a manual run). CPU time per run varies by 2.6x between GitHub's",
-    "runner instances, so the CPU ceilings sit at twice the slowest measured",
-    "one (startup 39 ms CPU, 3.4 ms per request) and the memory ceilings, which",
-    "are stable across instances (22 MB startup, 26 MB over 40 turns), at 1.5x.",
-    "Tighter would fail pull requests on a slow or noisy runner for no reason.",
-    "The comparison with the base, measured on the same runner, is what holds",
-    "the CPU numbers to a small change.",
+    "main push, a manual run). CPU time per run varies by up to 2.6x between",
+    "GitHub's runner instances, so a CPU ceiling sits at about twice the",
+    "slowest measured run (startup / per request: Linux 39 / 3.4 ms, macOS",
+    "37 / 5.1 ms, Windows 78 / 11.4 ms). Peak memory is stable across",
+    "instances (startup / 40 turns: Linux 22 / 26 MB, macOS 20 / 24 MB,",
+    "Windows 16 / 20 MB), so those ceilings sit at 1.5x. Tighter would fail",
+    "pull requests on a slow or noisy runner for no reason; the comparison",
+    "with the base, measured on the same runner, is what holds a change.",
     "reps: startup runs are cheap and noisy, so there are more of them; the",
     "turn workload is a whole session each but still costs a second, next to",
     "two eight-minute builds. With 20 and 15 samples the U test reaches",
@@ -19,7 +20,12 @@
     "are discarded.",
     "tolerance: below this change a metric is never called a regression.",
     "alpha: the one-sided Mann-Whitney U test on the two sample sets.",
-    "large_change: fails even without a significant p-value."
+    "large_change: fails even without a significant p-value.",
+    "device: the same 40-turn workload pinned to `cpus` core against wall-time",
+    "and memory ceilings, for a machine with no spare cores and a phone's",
+    "memory. It has no base to compare with, since wall time on a shared",
+    "runner measures the runner; the ceilings are deliberately loose first-run",
+    "values, to be tightened from what the runners report."
   ],
   "alpha": 0.01,
   "warmup": 2,
@@ -38,6 +44,13 @@
     "turn_rss_mb": 0.08
   },
   "large_change": 0.10,
+  "device": {
+    "cpus": 1,
+    "reps": 5,
+    "startup_wall_ms": 1500,
+    "turn_wall_ms": 250,
+    "rss_mb": 256
+  },
   "budgets": {
     "linux": {
       "startup_cpu_ms": 80,
@@ -46,10 +59,16 @@
       "turn_rss_mb": 40
     },
     "darwin": {
-      "startup_cpu_ms": 55,
+      "startup_cpu_ms": 80,
       "startup_rss_mb": 32,
-      "turn_cpu_ms": 6,
-      "turn_rss_mb": 40
+      "turn_cpu_ms": 12,
+      "turn_rss_mb": 36
+    },
+    "windows": {
+      "startup_cpu_ms": 160,
+      "startup_rss_mb": 24,
+      "turn_cpu_ms": 24,
+      "turn_rss_mb": 30
     }
   }
 }
