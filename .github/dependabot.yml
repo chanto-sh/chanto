@@ -3,6 +3,10 @@
 # workflows/dependabot.yml) and major updates together (left for review).
 # Security updates are grouped the same way. Group names stay short: they go
 # into the pull request title, which must fit the 72-character commit subject.
+#
+# Version updates wait a week after a release (cooldown): most malicious or
+# broken releases are caught and yanked within days, and minor and patch
+# updates merge without review. Security updates are not delayed.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -10,6 +14,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     # Conventional Commits titles: "build(deps): bump ..."
     commit-message:
       prefix: build
@@ -32,6 +38,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: ci
       include: scope
@@ -43,6 +51,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     commit-message:
       prefix: build
       include: scope
@@ -53,6 +63,8 @@ updates:
     schedule:
       interval: weekly
       day: monday
+    cooldown:
+      default-days: 7
     # Conventional Commits titles: "ci(deps): bump ..."
     commit-message:
       prefix: ci
