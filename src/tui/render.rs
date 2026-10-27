@@ -344,16 +344,39 @@ pub(super) fn render_block(
                     } else {
                         Style::default().fg(pal().dim)
                     };
+                    // A summary Chanto wrote opens with a short label
+                    // ("Blocked:"); only the label is the failure, so the advice
+                    // after it takes the body colour instead of a wall of red.
+                    let label = t.is_error.then(|| crate::ui::error_label(shown)).flatten();
+                    let quiet = Style::default().fg(pal().dim);
                     for (i, l) in lines.iter().enumerate().take(limit) {
                         let mut spans = vec![Span::styled(
                             if i == 0 { "  ↳  " } else { "     " },
                             Style::default().fg(pal().dim),
                         )];
-                        spans.extend(
-                            l.spans
-                                .iter()
-                                .map(|s| Span::styled(s.content.to_string(), style.patch(s.style))),
-                        );
+                        let mut at = 0;
+                        for s in &l.spans {
+                            let text = s.content.to_string();
+                            let len = text.len();
+                            match label.filter(|_| i == 0) {
+                                Some(end) if at >= end => {
+                                    spans.push(Span::styled(text, quiet.patch(s.style)))
+                                }
+                                Some(end) if at + len > end => {
+                                    let cut = end - at;
+                                    spans.push(Span::styled(
+                                        text[..cut].to_string(),
+                                        style.patch(s.style),
+                                    ));
+                                    spans.push(Span::styled(
+                                        text[cut..].to_string(),
+                                        quiet.patch(s.style),
+                                    ));
+                                }
+                                _ => spans.push(Span::styled(text, style.patch(s.style))),
+                            }
+                            at += len;
+                        }
                         let from = out.len();
                         push_wrapped(&mut out, Line::from(spans), 5);
                         pad_highlighted(&mut out[from..], w);

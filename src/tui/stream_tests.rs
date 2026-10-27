@@ -318,6 +318,42 @@ fn a_blocked_call_styles_its_code_ticks() {
 }
 
 #[test]
+fn a_blocked_call_colours_only_its_label() {
+    let b = Block::new(Kind::Tool(ToolBlock {
+        id: "x".into(),
+        label: "Bash(sleep 20)".into(),
+        display: Some("Blocked: a foreground `sleep 20` only uses up time.".into()),
+        content: Some(String::new()),
+        is_error: true,
+        children: vec![],
+        started: Instant::now(),
+        elapsed: Some(Duration::from_millis(5)),
+        progress: None,
+    }));
+    let rows = render_block(&b, 60, false, false);
+    let spans: Vec<&Span> = rows.iter().flat_map(|l| l.spans.iter()).collect();
+    assert!(
+        spans
+            .iter()
+            .any(|s| s.content == "Blocked:" && s.style.fg == Some(pal().error)),
+        "{rows:?}"
+    );
+    // The advice after the label is prose, not another error.
+    assert!(
+        spans
+            .iter()
+            .any(|s| s.content.contains("only uses up time") && s.style.fg == Some(pal().dim)),
+        "{rows:?}"
+    );
+    assert!(
+        !spans
+            .iter()
+            .any(|s| s.content.contains("only uses up time") && s.style.fg == Some(pal().error)),
+        "{rows:?}"
+    );
+}
+
+#[test]
 fn command_output_keeps_literal_backticks_when_collapsed_or_expanded() {
     let mut b = bash_block(8);
     let Kind::Tool(t) = &mut b.kind else {
