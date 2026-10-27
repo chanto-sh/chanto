@@ -564,3 +564,55 @@ fn attachments_are_cut_wherever_a_client_puts_them() {
         assert_eq!(without_context(text), want, "{text:?}");
     }
 }
+
+#[test]
+fn auto_classifier_sees_authorization_and_later_restrictions() {
+    let mut requests = vec!["publish version 0.2.0".to_string()];
+    requests.extend((0..10).map(|_| "continue".to_string()));
+    requests.push("do not publish; only prepare the release".into());
+    let input = intent_text(&Intent {
+        requests,
+        task: None,
+    });
+    assert!(input.contains("publish version 0.2.0"));
+    assert!(input.contains("do not publish; only prepare the release"));
+    assert!(input.contains("later corrections override"));
+}
+
+#[test]
+fn static_auto_prompts_explain_the_boundary() {
+    let cwd = scratch();
+    for (tool, kind, args, expected) in [
+        (
+            "Bash",
+            ToolKind::Execute,
+            serde_json::json!({"command":"git apply changes.patch"}),
+            "destination paths",
+        ),
+        (
+            "Write",
+            ToolKind::Edit,
+            serde_json::json!({"file_path":".mcp.json"}),
+            "protected settings",
+        ),
+        (
+            "Memory",
+            ToolKind::Edit,
+            serde_json::json!({"scope":"user"}),
+            "other projects",
+        ),
+        (
+            "Write",
+            ToolKind::Edit,
+            serde_json::json!({"file_path":"/outside-workspace/out.txt"}),
+            "outside the allowed workspace",
+        ),
+    ] {
+        assert!(matches!(
+            static_decision(Mode::Auto, kind, tool, &args, &cwd),
+            Some(Decision::Ask)
+        ));
+        let reason = ask_reason(Mode::Auto, kind, tool, &args, &cwd);
+        assert!(reason.contains(expected), "{tool}: {reason}");
+    }
+}
