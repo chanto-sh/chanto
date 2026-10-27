@@ -6,6 +6,7 @@
 
 - **Startup.** The secret patterns compile on the background warm-up thread while the rest of startup runs, instead of on the first prompt. A one-shot `-p` run against a local model drops from about 24 ms to about 19 ms of CPU, with no change to what is masked.
 - **Browser.** Chanto's Chrome no longer tells pages it is automated: `navigator.webdriver` stays false even though Chanto has Chrome choose the debugging port, and a headless session reports the user agent the same build uses with a window. Sites see an ordinary Chrome.
+- **Dropped responses.** A reply cut off mid-stream — the server or a proxy resetting the connection — now says so and what to do, instead of ending the turn with the HTTP client's `error decoding response body: … connection reset` chain.
 - **Upgrade notices.** A newer release is announced on the startup screen — the cached answer appears immediately, without waiting on the network, and names the command that upgrades this install (`brew upgrade chanto`, `cargo install …`, `chanto upgrade`). A session that outlives a release checks again every half hour and reminds you once when one ships mid-conversation. `--plain` sessions now show the notice at the prompt instead of only once at exit.
 
 ## v0.1.6 (October 26, 2026)
