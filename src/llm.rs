@@ -173,6 +173,25 @@ pub fn failure_hint(
             "Can't reach the model server at {base_url}. Is it running? `chanto doctor` checks the setup"
         ));
     }
+    // The request reached the server but the reply was cut off: a proxy or
+    // the server dropped the connection, or it closed it early.
+    if [
+        "connection reset",
+        "connection aborted",
+        "connection closed before message completed",
+        "error decoding response body",
+        "error reading a body from connection",
+        "incomplete message",
+        "unexpected eof",
+        "stream error",
+    ]
+    .iter()
+    .any(|s| lower.contains(s))
+    {
+        return Some(format!(
+            "Lost the connection to the model server at {base_url} mid-response: retry the turn, or `chanto doctor` checks the setup"
+        ));
+    }
     if kind == ProviderKind::Ollama && lower.contains("not found") && lower.contains("model") {
         // `foo/bar` with an unknown `foo` falls through to Ollama: say so in case a provider was meant.
         let provider_note = model
@@ -2586,6 +2605,23 @@ mod tests {
             .unwrap()
             .contains("chanto doctor")
         );
+    }
+
+    #[test]
+    fn a_dropped_stream_says_what_to_do() {
+        let hint = failure_hint(
+            "error decoding response body: error reading a body from connection: connection reset",
+            ProviderKind::Openai,
+            "http://localhost:4555/v1",
+            "qwen3",
+            Some("deepseek"),
+        )
+        .unwrap();
+        assert!(
+            hint.starts_with("Lost the connection to the model server at http://localhost:4555/v1"),
+            "{hint}"
+        );
+        assert!(hint.contains("retry the turn"), "{hint}");
     }
 
     #[test]
