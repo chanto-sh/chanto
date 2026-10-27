@@ -1,0 +1,86 @@
+# Tags a release once its release pull request lands on main, so merging that
+# pull request is the only step: when Cargo.toml on main names a version that
+# has no vX.Y.Z tag yet, this checks the release metadata and pushes an
+# annotated tag on that exact commit, which starts release.yml.
+#
+# The release tags ruleset lets only org admins and the release GitHub App
+# create v* tags, so the tag is pushed with a short-lived token for that App.
+# Its client ID and private key live in the `release` environment, which only
+# main can deploy to. A tag pushed with the default GITHUB_TOKEN wouldn't
+# start release.yml (and the ruleset refuses it anyway); the App's tag does,
+# so release.yml, its provenance and npm/crates.io trusted publishing see an
+# ordinary tag push. A version that is already tagged is left alone, so
+# dependency bumps that touch Cargo.toml do nothing.
+name: tag release
+on:
+  push:
+    branches: [main]
+    paths: [Cargo.toml]
+# To retry a failed tag push, re-run this run: it keeps the release commit,
+# whereas a fresh run would tag whatever main is by then.
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tag-release
+  cancel-in-progress: false
+
+jobs:
+  tag:
+    if: ${{ github.repository == 'chanto-sh/chanto' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Find an untagged version
+        id: version
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("Cargo.toml", "rb"))["package"]["version"])')
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null; then
+            echo "$tag is already tagged; nothing to release."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Check release metadata
+        if: ${{ steps.version.outputs.new == 'true' }}
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: python3 packaging/check-release.py "$TAG"
+    outputs:
+      new: ${{ steps.version.outputs.new }}
+      tag: ${{ steps.version.outputs.tag }}
+
+  push:
+    needs: tag
+    if: ${{ needs.tag.outputs.new == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    steps:
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Push the annotated tag
+        env:
+          TAG: ${{ needs.tag.outputs.tag }}
+          TOKEN: ${{ steps.app.outputs.token }}
+          APP: ${{ steps.app.outputs.app-slug }}
+        run: |
+          git init -q tagger && cd tagger
+          git remote add origin "https://github.com/$GITHUB_REPOSITORY.git"
+          auth="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)"
+          git -c http.extraheader="$auth" fetch -q --depth=1 origin "$GITHUB_SHA"
+          git -c user.name="${APP}[bot]" -c user.email="${APP}[bot]@users.noreply.github.com" \
+            tag -a "$TAG" "$GITHUB_SHA" -m "$TAG"
+          git -c http.extraheader="$auth" push origin "refs/tags/$TAG"
+          echo "Tagged $GITHUB_SHA as $TAG; release.yml takes it from here."
