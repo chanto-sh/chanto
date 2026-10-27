@@ -25,6 +25,11 @@ not count: rusage (`wait4`) on Unix, `GetProcessTimes` and
 
     python3 tests/perf/gate.py --head target/release/chanto
     python3 tests/perf/gate.py --head target/release/chanto --base /tmp/base/chanto
+    python3 tests/perf/gate.py --head target/release/chanto --device
+
+`--device` adds the same workload pinned to one core, against a small
+device's ceilings: a phone or a cheap laptop has no spare cores and little
+memory, and nothing above says whether Chanto still runs there.
 
 Writes a JSON report with `--json`, a markdown table with `--summary-md`, and
 the same table to `$GITHUB_STEP_SUMMARY` when that is set. Exits 1 when a gate
@@ -47,17 +52,24 @@ REPO = Path(__file__).resolve().parent.parent.parent
 MOCK = REPO / "tests/chaos/fakemodel.py"
 CONFIG = REPO / "tests/perf/budgets.json"
 
-RSS_METRICS = ("startup_rss_mb", "turn_rss_mb")
+RSS_METRICS = ("startup_rss_mb", "turn_rss_mb", "device_turn_rss_mb")
 LABELS = {
     "startup_cpu_ms": "Startup CPU (ms)",
     "startup_rss_mb": "Startup peak RSS (MB)",
     "turn_cpu_ms": "CPU per request (ms)",
     "turn_rss_mb": "Peak RSS, 40 turns (MB)",
 }
+# Measured against a ceiling only, with no base to compare, so they are not
+# part of the per-platform budget every metric above has.
+DEVICE_LABELS = {
+    "device_startup_wall_ms": "Startup (ms)",
+    "device_turn_wall_ms": "Per request (ms)",
+    "device_turn_rss_mb": "Peak RSS (MB)",
+}
 
 # The kernels report CPU and peak memory the same way, but not through the
 # same call; a measurement is one of these.
-Usage = collections.namedtuple("Usage", "cpu_ms rss_mb")
+Usage = collections.namedtuple("Usage", "cpu_ms rss_mb wall_ms")
 
 
 class GateError(Exception):
@@ -110,6 +122,7 @@ def child_env(home, port):
 
 def wait_with_usage(binary, args, env):
     """Run one child to completion and return its usage and exit code."""
+    start = time.monotonic()
     p = subprocess.Popen(
         [binary, *args],
         env=env,
@@ -121,11 +134,15 @@ def wait_with_usage(binary, args, env):
         code = p.wait()
         # Read after the exit, so the numbers are final; the handle stays
         # readable until Popen closes it.
-        return windows_usage(p), code
-    _, status, ru = os.wait4(p.pid, 0)
-    # Reaped above, so tell Popen not to wait again.
-    p.returncode = os.waitstatus_to_exitcode(status)
-    return Usage((ru.ru_utime + ru.ru_stime) * 1000, peak_rss_mb(ru)), p.returncode
+        cpu_ms, rss_mb = windows_usage(p)
+    else:
+        _, status, ru = os.wait4(p.pid, 0)
+        # Reaped above, so tell Popen not to wait again.
+        p.returncode = os.waitstatus_to_exitcode(status)
+        code = p.returncode
+        cpu_ms = (ru.ru_utime + ru.ru_stime) * 1000
+        rss_mb = peak_rss_mb(ru)
+    return Usage(cpu_ms, rss_mb, (time.monotonic() - start) * 1000), code
 
 
 def peak_rss_mb(ru):
@@ -187,6 +204,7 @@ def windows_usage(p):
     return Usage(
         (ticks(kernel) + ticks(user)) / 10_000,
         counters.peak_working_set / (1024 * 1024),
+        0.0,
     )
 
 
@@ -227,6 +245,19 @@ def write_turn_scenario(work, turns, blob_kb):
     return project, scenario
 
 
+def pinned(binary, cpus):
+    """The command and leading arguments that keep `binary` on `cpus` cores.
+
+    `taskset` runs the binary in place, so the child whose rusage is read is
+    still Chanto itself.
+    """
+    taskset = shutil.which("taskset")
+    if not taskset:
+        raise GateError("taskset is needed to simulate a small device")
+    cores = ",".join(str(i) for i in range(cpus))
+    return taskset, ["-c", cores, binary]
+
+
 class StartupBench:
     """One long-lived mock, so a one-shot run pays for nothing but Chanto."""
 
@@ -237,31 +268,33 @@ class StartupBench:
         self.mock, port = mock_start(scenario, work / "hello.log")
         self.env = child_env(home, port)
 
-    def run(self, binary):
-        """CPU ms and peak RSS MB of one `-p` request."""
+    def run(self, binary, pin=None):
+        """CPU, peak RSS and wall time of one `-p` request."""
+        exe, lead = pin or (binary, [])
         usage, code = wait_with_usage(
-            binary, ["-p", "hello", "--cwd", str(self.work)], self.env
+            exe, lead + ["-p", "hello", "--cwd", str(self.work)], self.env
         )
         if code != 0:
             raise GateError(f"{binary} exited {code} on a one-shot run")
-        return usage.cpu_ms, usage.rss_mb
+        return usage
 
     def close(self):
         self.mock.kill()
 
 
-def turn_run(binary, work, home, project, scenario, turns, tag):
-    """CPU per request and peak RSS MB of one session of `turns` requests.
+def turn_run(binary, work, home, project, scenario, turns, tag, pin=None):
+    """CPU, peak RSS and wall time per request of a session of `turns` requests.
 
     Each run gets a fresh mock: the scenario counts requests, and the log says
     how many the run actually made.
     """
+    exe, lead = pin or (binary, [])
     log = work / f"turns-{tag}.log"
     mock, port = mock_start(scenario, log)
     try:
         usage, code = wait_with_usage(
-            binary,
-            ["-p", "read the files as I direct", "--cwd", str(project)],
+            exe,
+            lead + ["-p", "read the files as I direct", "--cwd", str(project)],
             child_env(home, port),
         )
     finally:
@@ -271,7 +304,57 @@ def turn_run(binary, work, home, project, scenario, turns, tag):
     n = chat_requests(log)
     if n != turns + 1:
         raise GateError(f"{binary} made {n} of {turns + 1} requests in the {turns}-turn run")
-    return usage.cpu_ms / n, usage.rss_mb
+    return Usage(usage.cpu_ms / n, usage.rss_mb, usage.wall_ms / n)
+
+
+def device_measure(binary, work, home, project, scenario, cfg):
+    """The same workload the way a small machine sees it: one core, a phone's
+    worth of memory, and a wall-clock budget for each request.
+
+    This is not compared with another binary: wall time on a shared runner
+    says nothing about the change being measured, only about whether the agent
+    stays usable when it cannot lean on spare cores.
+    """
+    device = cfg["device"]
+    pin = pinned(binary, device["cpus"])
+    reps = device["reps"]
+    turns = cfg["workload"]["turns"]
+
+    bench = StartupBench(work, home)
+    try:
+        startup_wall = [bench.run(binary, pin).wall_ms for _ in range(reps)]
+    finally:
+        bench.close()
+    runs = [
+        turn_run(binary, work, home, project, scenario, turns, f"device-{i}", pin)
+        for i in range(reps)
+    ]
+    return {
+        "device_startup_wall_ms": judge(
+            "device_startup_wall_ms",
+            None,
+            startup_wall,
+            device["startup_wall_ms"],
+            0,
+            cfg["alpha"],
+        ),
+        "device_turn_wall_ms": judge(
+            "device_turn_wall_ms",
+            None,
+            [r.wall_ms for r in runs],
+            device["turn_wall_ms"],
+            0,
+            cfg["alpha"],
+        ),
+        "device_turn_rss_mb": judge(
+            "device_turn_rss_mb",
+            None,
+            [r.rss_mb for r in runs],
+            device["rss_mb"],
+            0,
+            cfg["alpha"],
+        ),
+    }
 
 
 def alternating(names, i):
@@ -374,7 +457,7 @@ def load_config(path):
     return cfg
 
 
-def run(head, base, config):
+def run(head, base, config, device=False):
     cfg = load_config(config)
     reps = cfg["reps"]
     warmup = cfg.get("warmup", 1)
@@ -390,29 +473,35 @@ def run(head, base, config):
     names = [name for name, _ in binaries]
     samples = {name: {"startup_cpu_ms": [], "startup_rss_mb": [],
                       "turn_cpu_ms": [], "turn_rss_mb": []} for name in names}
+    device_metrics = None
     try:
         # One-shot runs share a mock, so the first few are warm-up only.
         bench = StartupBench(work, home)
         try:
             for i in range(warmup + reps["startup"]):
                 for name, binary in alternating(binaries, i):
-                    cpu, rss = bench.run(binary)
+                    usage = bench.run(binary)
                     if i >= warmup:
-                        samples[name]["startup_cpu_ms"].append(cpu)
-                        samples[name]["startup_rss_mb"].append(rss)
+                        samples[name]["startup_cpu_ms"].append(usage.cpu_ms)
+                        samples[name]["startup_rss_mb"].append(usage.rss_mb)
         finally:
             bench.close()
 
         project, scenario = write_turn_scenario(work, turns, blob_kb)
         for i in range(warmup + reps["turns"]):
             for name, binary in alternating(binaries, i):
-                cpu, rss = turn_run(
+                usage = turn_run(
                     binary, work, home, project, scenario, turns, f"{name}-{i}"
                 )
                 if i >= warmup:
-                    samples[name]["turn_cpu_ms"].append(cpu)
-                    samples[name]["turn_rss_mb"].append(rss)
+                    samples[name]["turn_cpu_ms"].append(usage.cpu_ms)
+                    samples[name]["turn_rss_mb"].append(usage.rss_mb)
             print(f"turn pair {i + 1}/{warmup + reps['turns']}", flush=True)
+
+        if device:
+            device_metrics = device_measure(
+                head, work, home, project, scenario, cfg
+            )
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -434,8 +523,18 @@ def run(head, base, config):
         "workload": cfg["workload"],
         "reps": reps,
         "metrics": metrics,
-        "ok": all(m["verdict"] == "pass" for m in metrics.values()),
     }
+    if device_metrics is not None:
+        report["device"] = {
+            "cpus": cfg["device"]["cpus"],
+            "reps": cfg["device"]["reps"],
+            "metrics": device_metrics,
+        }
+    report["ok"] = all(
+        m["verdict"] == "pass"
+        for group in (report["metrics"], report.get("device", {}).get("metrics", {}))
+        for m in group.values()
+    )
     return report
 
 
@@ -473,12 +572,20 @@ def markdown(report):
             f"{change} | {number(m['budget'])} | {verdict} |"
         )
     passing = [LABELS[k] for k, m in report["metrics"].items() if m["verdict"] == "pass"]
+    device = report.get("device", {})
     if report["ok"]:
         lines += ["", f"All {len(passing)} metrics are within their ceiling and the base."]
     else:
-        lines += ["", "**A metric regressed:** " + ", ".join(
-            LABELS[k] for k, m in report["metrics"].items() if m["verdict"] != "pass"
-        )]
+        failed = [LABELS[k] for k, m in report["metrics"].items()
+                  if m["verdict"] != "pass"]
+        failed_device = [DEVICE_LABELS[k] for k, m in device.get("metrics", {}).items()
+                         if m["verdict"] != "pass"]
+        lines += [""]
+        if failed:
+            lines += ["**A metric regressed:** " + ", ".join(failed)]
+        if failed_device:
+            lines += ["**The small device could not keep up:** "
+                      + ", ".join(failed_device)]
     near = [
         LABELS[k]
         for k, m in report["metrics"].items()
@@ -487,7 +594,31 @@ def markdown(report):
     if near:
         lines += ["", "> Within budget but over 75% of the ceiling, so consider "
                   f"lowering it: {', '.join(near)}."]
+    if device:
+        lines += device_markdown(device)
     return "\n".join(lines) + "\n"
+
+
+def device_markdown(device):
+    """The small-device measurements, which have no base to compare with."""
+    lines = [
+        "",
+        "### Small device",
+        "",
+        f"{device['cpus']} core: a ceiling rather than a comparison, because "
+        "wall time on a shared runner says nothing about the change. It says "
+        "whether the agent still starts, answers and stays in memory when it "
+        "has neither spare cores nor a desktop's RAM.",
+        "",
+        "| Metric | Value | Ceiling | Verdict |",
+        "| --- | ---: | ---: | --- |",
+    ]
+    for metric, m in device["metrics"].items():
+        lines.append(
+            f"| {DEVICE_LABELS[metric]} | {number(m['head'])} | "
+            f"{number(m['budget'])} | {m['verdict']} |"
+        )
+    return lines
 
 
 def main():
@@ -495,6 +626,12 @@ def main():
     ap.add_argument("--head", required=True, help="binary under test")
     ap.add_argument("--base", help="binary to compare with (the base commit)")
     ap.add_argument("--budgets", default=str(CONFIG), help="ceiling configuration")
+    ap.add_argument(
+        "--device",
+        action="store_true",
+        help="also run the same workload on one core against a small device's "
+        "ceilings (Linux; needs taskset)",
+    )
     ap.add_argument("--json", help="write the JSON report here")
     ap.add_argument("--summary-md", help="write the markdown table here")
     a = ap.parse_args()
@@ -503,7 +640,7 @@ def main():
         if not Path(path).is_file():
             sys.exit(f"no binary at {path}")
     try:
-        report = run(a.head, a.base, a.budgets)
+        report = run(a.head, a.base, a.budgets, device=a.device)
     except GateError as e:
         print(f"perf gate could not measure: {e}", file=sys.stderr)
         return 2

@@ -13,6 +13,10 @@
 # macOS and Windows included; the cost is build time, so the three run in
 # parallel.
 #
+# The Linux job also re-runs the workload pinned to a single core with a
+# small-device ceiling, for the machines with no spare cores and little memory
+# that the rest of the gate cannot speak for.
+#
 # The job is expected to be a required check; it needs no secrets and runs
 # read-only, so pull requests from forks are measured the same way.
 name: perf
@@ -66,6 +70,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-22.04
+            # A small machine has one core and little memory; the Linux
+            # runner is the one that can pretend to be it with `taskset`.
+            extra_args: --device
           - os: macos-latest
           # Two jobs, like the rest of CI: a release build uses every core the
           # runner has and this one is close to its memory limit.
@@ -137,6 +144,7 @@ jobs:
           fi
           $PYTHON tests/perf/gate.py \
             --head "$BENCH_TEMP/chanto-head" "${base[@]}" \
+            ${{ matrix.extra_args }} \
             --json "$BENCH_TEMP/perf.json" \
             --summary-md "$BENCH_TEMP/perf.md"
       - name: Upload the report

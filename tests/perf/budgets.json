@@ -20,7 +20,12 @@
     "are discarded.",
     "tolerance: below this change a metric is never called a regression.",
     "alpha: the one-sided Mann-Whitney U test on the two sample sets.",
-    "large_change: fails even without a significant p-value."
+    "large_change: fails even without a significant p-value.",
+    "device: the same 40-turn workload pinned to `cpus` core against wall-time",
+    "and memory ceilings, for a machine with no spare cores and a phone's",
+    "memory. It has no base to compare with, since wall time on a shared",
+    "runner measures the runner; the ceilings are deliberately loose first-run",
+    "values, to be tightened from what the runners report."
   ],
   "alpha": 0.01,
   "warmup": 2,
@@ -39,6 +44,13 @@
     "turn_rss_mb": 0.08
   },
   "large_change": 0.10,
+  "device": {
+    "cpus": 1,
+    "reps": 5,
+    "startup_wall_ms": 1500,
+    "turn_wall_ms": 250,
+    "rss_mb": 256
+  },
   "budgets": {
     "linux": {
       "startup_cpu_ms": 80,
