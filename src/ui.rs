@@ -541,6 +541,10 @@ pub fn tool_result(summary: &str, is_error: bool, depth: usize) {
 fn tool_result_text(summary: &str, is_error: bool, depth: usize, width: usize) -> String {
     let indent = "  ".repeat(depth);
     let prefix_len = indent.len() + 5;
+    // A summary Chanto wrote can open with a short label ("Blocked:"); only
+    // that label is the failure, so the advice after it doesn't read as a wall
+    // of red.
+    let label = is_error.then(|| error_label(summary)).flatten();
     let mut s = String::new();
     for (i, line) in summary.lines().enumerate() {
         let segs = word_wrap(line.trim_end(), width.saturating_sub(prefix_len).max(20));
@@ -553,15 +557,32 @@ fn tool_result_text(summary: &str, is_error: bool, depth: usize, width: usize) -
             let seg = seg.trim_end();
             // The command above is highlighted; its output recedes behind it, so
             // dim the whole body (not just the first line) and colour errors red.
-            let text = if is_error {
-                format!("{}", linkify(seg).with(Color::Red))
-            } else {
-                dim(&linkify(seg))
+            let text = match label {
+                Some(at) if i == 0 && j == 0 && at < seg.len() => format!(
+                    "{}{}",
+                    linkify(&seg[..at]).with(Color::Red),
+                    dim(&linkify(&seg[at..]))
+                ),
+                Some(_) if i == 0 && j == 0 => format!("{}", linkify(seg).with(Color::Red)),
+                Some(_) => dim(&linkify(seg)),
+                None if is_error => format!("{}", linkify(seg).with(Color::Red)),
+                None => dim(&linkify(seg)),
             };
             s.push_str(&format!("{prefix}{text}\n"));
         }
     }
     s
+}
+
+/// Where a leading "Blocked:"-style label ends in a tool summary Chanto wrote
+/// itself, when the first word looks like one.
+pub fn error_label(summary: &str) -> Option<usize> {
+    let word = summary.lines().next()?.split(' ').next()?;
+    let label = word.strip_suffix(':')?;
+    let looks_like_one = (2..=12).contains(&label.len())
+        && label.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        && label.chars().all(|c| c.is_ascii_alphabetic());
+    looks_like_one.then_some(word.len())
 }
 
 /// Colored unified diff for edits.
@@ -741,6 +762,19 @@ mod tests {
         let sgr = regex::Regex::new("\x1b\\[[0-9;]*m").unwrap();
         let osc8 = regex::Regex::new("\x1b\\]8;;[^\x1b]*\x1b\\\\").unwrap();
         osc8.replace_all(&sgr.replace_all(s, ""), "").to_string()
+    }
+
+    #[test]
+    fn a_summary_label_is_the_first_word_when_it_reads_as_one() {
+        assert_eq!(
+            error_label("Blocked: a foreground `sleep 20` only uses up time."),
+            Some(8)
+        );
+        assert_eq!(error_label("Error: no such file"), Some(6));
+        assert_eq!(error_label("the command exited 1"), None);
+        assert_eq!(error_label("note: lower case is prose"), None);
+        assert_eq!(error_label("A:)"), None);
+        assert_eq!(error_label(""), None);
     }
 
     #[test]
