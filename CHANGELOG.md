@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.7 (October 27, 2026)
+
 - **Auto-mode approvals.** Approving a file edit no longer switches auto mode into accept-edits mode, which caused subsequent commands to ask again. The safety classifier sees up to 16 recent user messages and is instructed to recognize explicitly authorized publishing, merging and deployment while respecting later restrictions. Static permission prompts explain which boundary needs approval.
 
 - **Startup.** The secret patterns compile on the background warm-up thread while the rest of startup runs, instead of on the first prompt. A one-shot `-p` run against a local model drops from about 24 ms to about 19 ms of CPU, with no change to what is masked.
