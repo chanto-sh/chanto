@@ -201,10 +201,9 @@ def windows_usage(p):
         """A FILETIME as the number of 100 ns units it holds."""
         return (ft.high << 32) | ft.low
 
-    return Usage(
+    return (
         (ticks(kernel) + ticks(user)) / 10_000,
         counters.peak_working_set / (1024 * 1024),
-        0.0,
     )
 
 
