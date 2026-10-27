@@ -6126,3 +6126,110 @@ async fn safety_filter_stops_without_retrying_or_running_tools() {
         let _ = std::fs::remove_dir_all(dir);
     }
 }
+
+#[test]
+fn auto_mode_keeps_authorization_through_short_followups() {
+    let dir = tmpdir("auto-intent-history");
+    let env = make_env("http://127.0.0.1:9", &dir, Mode::Auto, 8192);
+    env.record_user_request("merge the reviewed pull request and publish the release");
+    for _ in 0..12 {
+        env.record_user_request("continue");
+    }
+    env.record_user_request("stop: do not publish anything");
+    let agent = Agent::new(env.clone());
+    let intent = agent.intent();
+    assert_eq!(intent.requests.len(), 14);
+    assert!(intent.requests[0].contains("publish the release"));
+    assert_eq!(
+        intent.requests.last().unwrap(),
+        "stop: do not publish anything"
+    );
+    for i in 0..20 {
+        env.record_user_request(&format!("new request {i}"));
+    }
+    let requests = env.user_requests();
+    assert_eq!(requests.len(), 16);
+    assert_eq!(requests[0], "new request 4");
+    assert_eq!(requests.last().unwrap(), "new request 19");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn auto_mode_explains_a_protected_edit_prompt() {
+    let dir = tmpdir("auto-protected-reason");
+    let (base, _) = mock_server(vec![
+        json!({"tool_calls": tc("Write", json!({"file_path": ".mcp.json", "content": "{}"}))}),
+        json!({"content": "done"}),
+    ])
+    .await;
+    let fe = Arc::new(AllowingFrontend {
+        asked: Mutex::new(vec![]),
+    });
+    let env = make_interactive_env(&base, &dir, Mode::Auto, fe.clone());
+    let mut agent = Agent::new(env);
+    agent
+        .run_turn("configure the project", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    let asked = fe.asked.lock().unwrap();
+    assert_eq!(asked.len(), 1);
+    let reason = asked[0].reason.as_deref().unwrap();
+    assert!(
+        reason.contains("protected") && reason.contains(".mcp.json"),
+        "{reason}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn auto_mode_survives_always_allow_on_a_protected_edit() {
+    let dir = tmpdir("auto-always-edit");
+    let (base, seen) = mock_server(vec![
+        json!({"tool_calls": tc("Write", json!({"file_path": ".mcp.json", "content": "{}"}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "echo hi > out.txt"}))}),
+        json!({"content": "{\"decision\":\"allow\",\"reason\":\"requested project work\"}"}),
+        json!({"content": "done"}),
+    ])
+    .await;
+    let env = make_interactive_env(&base, &dir, Mode::Auto, Arc::new(AlwaysFrontend));
+    let mut agent = Agent::new(env.clone());
+    agent.typed_input = true;
+    agent
+        .run_turn(
+            "configure the project and write notes",
+            vec![],
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        env.mode(),
+        Mode::Auto,
+        "approving an edit must not disable auto mode"
+    );
+    assert!(dir.join("out.txt").exists());
+    assert!(
+        seen.lock()
+            .unwrap()
+            .iter()
+            .any(|request| request["messages"][0]["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("safety monitor"))),
+        "the next shell command must still use auto classification"
+    );
+    assert_eq!(env.revoke_accept_edits_grant(), None);
+    assert!(
+        matches!(
+            crate::permissions::static_decision(
+                Mode::Auto,
+                crate::tools::ToolKind::Edit,
+                "Write",
+                &json!({"file_path":".mcp.json"}),
+                &dir
+            ),
+            Some(crate::permissions::Decision::Ask)
+        ),
+        "the approval must not create a blanket protected-file grant"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}

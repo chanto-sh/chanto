@@ -830,7 +830,9 @@ impl Env {
         let mut v = self.user_requests.lock().unwrap();
         v.push(text.to_string());
         let n = v.len();
-        v.drain(..n.saturating_sub(8));
+        // Retain a larger bounded window of user intent, including corrections.
+        // Do not pin an old authorization while dropping newer restrictions.
+        v.drain(..n.saturating_sub(16));
     }
 
     /// What the human typed this session, oldest first (the last few).
@@ -1062,7 +1064,7 @@ impl Env {
     /// (unlike choosing the mode) is a grant for this project only.
     pub fn grant_accept_edits(&self) {
         let before = self.mode();
-        if before == Mode::AcceptEdits {
+        if matches!(before, Mode::AcceptEdits | Mode::Auto | Mode::Bypass) {
             return;
         }
         self.set_mode(Mode::AcceptEdits);

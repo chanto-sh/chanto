@@ -81,6 +81,7 @@ impl Agent {
                 rule = Some(Decision::Allow);
             }
         }
+        let explicit_ask = matches!(rule, Some(Decision::Ask));
         // Set when the auto-mode classifier (rather than a static rule) refused.
         let mut classified_block = false;
         let mut decision = match rule {
@@ -240,12 +241,19 @@ impl Agent {
                     ));
                 }
                 let mut req = self.permission_request(tool, call, kind);
-                if let Some(r) = ask_because
-                    .or_else(|| hook_ask.clone())
-                    .filter(|r| !r.is_empty())
-                {
-                    req.reason = Some(r);
-                }
+                req.reason = Some(
+                    ask_because
+                        .or_else(|| hook_ask.clone())
+                        .filter(|reason| !reason.trim().is_empty())
+                        .unwrap_or_else(|| {
+                            if explicit_ask {
+                                "An explicit permission rule requires approval for this action."
+                                    .into()
+                            } else {
+                                permissions::ask_reason(mode, kind, &name, args, &env.cwd())
+                            }
+                        }),
+                );
                 let msg = format!("chanto needs your permission to use {name}");
                 crate::hooks::notify(
                     &env,
@@ -432,7 +440,9 @@ impl Agent {
             _ => serde_json::to_string_pretty(args).unwrap_or_default(),
         };
         let subjects = tool.rule_subjects(args);
-        let always_label = if kind == ToolKind::Edit {
+        let always_label = if kind == ToolKind::Edit && self.mode() == Mode::Auto {
+            "Allow once (auto mode already allows workspace edits)".to_string()
+        } else if kind == ToolKind::Edit {
             "Allow all edits for this session".to_string()
         } else if name == "Computer" {
             "Allow once (each computer action asks again)".to_string()
