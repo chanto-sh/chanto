@@ -16,7 +16,9 @@ ceiling, when it is both outside `tolerance` and significantly slower than
 the base by a one-sided Mann-Whitney U test at `alpha`, or when it is slower
 by more than `large_change` whatever the p-value. Requiring a tolerance keeps
 a lucky run of a few milliseconds from failing a pull request; the hard cap
-catches a real regression that noise spread over both groups.
+catches a real regression that noise spread over both groups, and it only
+counts a difference larger than the clock's own step, so a single tick of a
+coarse timer is not a regression.
 
 Runs of the two binaries are interleaved, and the binaries are measured
 through the kernel, not the wall clock, so scheduling and an idle machine do
@@ -407,6 +409,20 @@ def mann_whitney_greater(base, head):
     return 0.5 * math.erfc(z / math.sqrt(2))
 
 
+def clock_step(samples):
+    """The smallest positive gap between two measured values.
+
+    Coarse clocks report a fixed amount at a time: Windows charges CPU in
+    15.625 ms ticks, so a one-tick shift of the median is the smallest
+    difference the platform can express. Comparing a percentage against that
+    step would call one tick a large regression while the two sets overlap
+    completely.
+    """
+    values = sorted(set(samples))
+    gaps = [b - a for a, b in zip(values, values[1:]) if b > a]
+    return min(gaps) if gaps else 0.0
+
+
 def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
     """Apply the ceiling and the significance test to one metric."""
     head_value = aggregate(metric, head)
@@ -423,7 +439,12 @@ def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
             significant = p_value < alpha
         # A small-sample test can miss a large regression that noise spreads
         # over both groups; a jump this big fails without asking for a p-value.
-        too_big = large_change is not None and change > large_change
+        # A difference the clock cannot resolve is never such a jump.
+        too_big = (
+            large_change is not None
+            and change > large_change
+            and head_value - base_value > clock_step(base + head)
+        )
     if over_budget or significant or too_big:
         verdict = "fail"
     else:
