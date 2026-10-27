@@ -372,6 +372,12 @@ impl BrowserSession {
                     "--no-first-run",
                     "--no-default-browser-check",
                     "--window-size=1280,900",
+                    // Chrome sets navigator.webdriver (which sites read as a bot
+                    // signal) whenever it picks the debugging port itself, as
+                    // `--remote-debugging-port=0` asks it to. The ephemeral port
+                    // stays; turning off the Blink feature leaves pages seeing an
+                    // ordinary Chrome.
+                    "--disable-blink-features=AutomationControlled",
                 ]);
             if cfg.headless.unwrap_or(false) {
                 cmd.arg("--headless=new");
@@ -436,6 +442,19 @@ impl BrowserSession {
         self.page.call("Runtime.enable", json!({})).await.ok();
         self.page.call("Log.enable", json!({})).await.ok();
         self.page.call("Network.enable", json!({})).await.ok();
+        // A headless build names itself in the UA, which sites read as a bot
+        // signal. Present the UA the same build uses with a window instead.
+        if let Ok(v) = self.page.eval("navigator.userAgent").await
+            && let Some(normal) = normal_user_agent(v.as_str().unwrap_or(""))
+        {
+            let _ = self
+                .page
+                .call(
+                    "Emulation.setUserAgentOverride",
+                    json!({"userAgent": normal}),
+                )
+                .await;
+        }
         let _ = self.page.call("Page.bringToFront", json!({})).await;
         Ok(())
     }
@@ -545,6 +564,14 @@ impl BrowserSession {
         let v = self.page.eval(SNAPSHOT_JS).await?;
         Ok(v.as_str().unwrap_or("").to_string())
     }
+}
+
+/// A headless build's UA, with its `HeadlessChrome` product swapped for the
+/// plain `Chrome` one, so pages see the identity the same build has with a
+/// window. `None` when the UA is already a normal one.
+fn normal_user_agent(ua: &str) -> Option<String> {
+    ua.contains("HeadlessChrome/")
+        .then(|| ua.replace("HeadlessChrome/", "Chrome/"))
 }
 
 fn key_info(key: &str) -> (String, String, u32, String) {
@@ -937,17 +964,18 @@ Never enter passwords or payment details, and never accept cookie/permission pro
                 if !url.contains("://") && !url.starts_with("about:") {
                     url = format!("https://{url}");
                 }
+                // Open the tab blank and navigate once attached, so its first
+                // request already carries the session's UA (see `prepare`).
                 let t: Value = http()
-                    .put(format!(
-                        "http://127.0.0.1:{}/json/new?{}",
-                        s.port,
-                        urlencoding::encode(&url)
-                    ))
+                    .put(format!("http://127.0.0.1:{}/json/new?about:blank", s.port))
                     .send()
                     .await?
                     .json()
                     .await?;
                 s.switch_to(&t).await?;
+                if !url.is_empty() && url != "about:blank" {
+                    s.page.call("Page.navigate", json!({"url": url})).await?;
+                }
                 s.wait_ready(Duration::from_secs(20)).await;
                 Ok(snapshot_out(s.snapshot().await?, "Opened new tab.\n"))
             }
@@ -1053,5 +1081,22 @@ mod tests {
         std::fs::write(dir.join("DevToolsActivePort"), "not-a-port\n").unwrap();
         assert_eq!(devtools_port(&profile), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_headless_user_agent_is_presented_as_a_windowed_one() {
+        let headless = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+                        (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36";
+        assert_eq!(
+            normal_user_agent(headless).as_deref(),
+            Some(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+                 (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36"
+            )
+        );
+        let normal = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 \
+                      (KHTML, like Gecko) Chrome/156.0.0.0 Safari/537.36";
+        assert_eq!(normal_user_agent(normal), None);
+        assert_eq!(normal_user_agent(""), None);
     }
 }
