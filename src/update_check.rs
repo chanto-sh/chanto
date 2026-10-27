@@ -184,9 +184,71 @@ pub fn take_notice() -> Option<String> {
     NOTICE.lock().ok()?.take()
 }
 
+static ANNOUNCED: Mutex<Option<String>> = Mutex::new(None);
+
+/// How often a running session looks again, so a long conversation hears about
+/// a release that shipped after it started.
+const SESSION_INTERVAL: Duration = Duration::from_secs(30 * 60);
+
+/// Whether `tag` earns a notice: newer than this binary, and not the tag the
+/// previous notice already named.
+fn worth_announcing(tag: &str, announced: Option<&str>) -> bool {
+    newer(tag, env!("CARGO_PKG_VERSION")) && announced != Some(tag)
+}
+
+/// The one line the user sees, when `tag` is newer than this binary.
+fn upgrade_notice(tag: &str, method: InstallMethod) -> Option<String> {
+    newer(tag, env!("CARGO_PKG_VERSION")).then(|| {
+        format!(
+            "chanto {tag} is available (you have v{}) — run `{}`",
+            env!("CARGO_PKG_VERSION"),
+            method.command()
+        )
+    })
+}
+
+/// Queue the notice for `tag`, once: a re-check that finds the same release
+/// again stays quiet, so a second reminder means a new release shipped.
+fn announce(tag: &str, exe: &Path) {
+    let Ok(mut announced) = ANNOUNCED.lock() else {
+        return;
+    };
+    if !worth_announcing(tag, announced.as_deref()) {
+        return;
+    }
+    let Some(text) = upgrade_notice(tag, InstallMethod::detect(exe)) else {
+        return;
+    };
+    *announced = Some(tag.to_string());
+    if let Ok(mut notice) = NOTICE.lock() {
+        *notice = Some(text);
+    }
+}
+
+/// The release the last check cached and its notice: the startup line, which
+/// must not wait on the network.
+fn cached_notice(path: &Path) -> Option<(String, String)> {
+    let cache: Cache = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let tag = cache.latest?;
+    let exe = std::env::current_exe().unwrap_or_default();
+    let text = upgrade_notice(&tag, InstallMethod::detect(&exe))?;
+    Some((tag, text))
+}
+
+/// The cached notice, for a startup screen that has no time for a request.
+/// Recorded as announced so the background check doesn't repeat it.
+pub fn known() -> Option<String> {
+    let (tag, text) = cached_notice(&crate::config::home_dir().join("update-check.json"))?;
+    if let Ok(mut announced) = ANNOUNCED.lock() {
+        *announced = Some(tag);
+    }
+    Some(text)
+}
+
 /// `network`: whether this run may ask GitHub. Short print-mode runs pass
 /// false so an exiting process never waits on the request; they only show a
-/// notice an interactive session already cached.
+/// notice an interactive session already cached. A networked run keeps
+/// checking every `SESSION_INTERVAL` while the session lasts.
 pub fn start(config: &UpdatesConfig, network: bool) {
     if !enabled(
         config.check,
@@ -207,10 +269,7 @@ pub fn start(config: &UpdatesConfig, network: bool) {
             .ok()
             .and_then(|b| serde_json::from_slice(&b).ok())
             .unwrap_or_default();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let now = epoch_secs();
         if network && due(cache.checked_at, now) {
             if tokio::fs::create_dir_all(&home).await.is_err() {
                 return;
@@ -254,17 +313,41 @@ pub fn start(config: &UpdatesConfig, network: bool) {
                 let _ = save_cache(&path, &cache).await;
             }
         }
-        if let Some(tag) = cache
-            .latest
-            .filter(|tag| newer(tag, env!("CARGO_PKG_VERSION")))
-            && let Ok(mut notice) = NOTICE.lock()
-        {
-            *notice = Some(format!(
-                "chanto {tag} is available — run `{}`",
-                InstallMethod::detect(&exe).command()
-            ));
+        if let Some(tag) = cache.latest.clone() {
+            announce(&tag, &exe);
+        }
+        // A session outlives releases: keep looking while it runs, so one that
+        // ships after the session started still gets a reminder in the
+        // transcript. Each tag is announced once (see `announce`).
+        if !network {
+            return;
+        }
+        loop {
+            tokio::time::sleep(SESSION_INTERVAL).await;
+            let Ok(tag) = latest_version().await else {
+                continue;
+            };
+            // Keep the cache current, so the next process shows the startup
+            // line at once instead of waiting out the daily throttle.
+            let _ = save_cache(
+                &path,
+                &Cache {
+                    checked_at: epoch_secs(),
+                    latest: Some(tag.clone()),
+                },
+            )
+            .await;
+            announce(&tag, &exe);
         }
     });
+}
+
+/// Seconds since the epoch, for the cache's throttle stamp.
+fn epoch_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -353,6 +436,38 @@ mod tests {
         assert!(!due(100, 86499));
         assert!(due(100, 86500));
         assert!(!due(100, 99));
+    }
+
+    #[test]
+    fn a_release_is_announced_once_with_the_command_that_upgrades_it() {
+        let notice = upgrade_notice("v99.0.0", InstallMethod::Homebrew).unwrap();
+        assert!(notice.contains("v99.0.0"), "{notice}");
+        assert!(
+            notice.contains(&format!("you have v{}", env!("CARGO_PKG_VERSION"))),
+            "{notice}"
+        );
+        assert!(notice.contains("brew upgrade chanto"), "{notice}");
+        assert!(upgrade_notice("v0.0.1", InstallMethod::Homebrew).is_none());
+        // The same release a second time is old news; a newer one is not.
+        assert!(worth_announcing("v99.0.0", None));
+        assert!(!worth_announcing("v99.0.0", Some("v99.0.0")));
+        assert!(worth_announcing("v99.1.0", Some("v99.0.0")));
+        assert!(!worth_announcing("v0.0.1", None));
+    }
+
+    #[test]
+    fn the_cached_release_is_a_startup_notice() {
+        let home = std::env::temp_dir().join(format!("chanto-known-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&home).unwrap();
+        let path = home.join("update-check.json");
+        assert!(cached_notice(&path).is_none(), "no cache, nothing to say");
+        std::fs::write(&path, r#"{"checked_at":1,"latest":"v99.2.0"}"#).unwrap();
+        let (tag, text) = cached_notice(&path).unwrap();
+        assert_eq!(tag, "v99.2.0");
+        assert!(text.contains("v99.2.0"), "{text}");
+        std::fs::write(&path, r#"{"checked_at":1,"latest":"v0.0.1"}"#).unwrap();
+        assert!(cached_notice(&path).is_none(), "an old cache says nothing");
+        let _ = std::fs::remove_dir_all(&home);
     }
     #[test]
     fn suppression() {

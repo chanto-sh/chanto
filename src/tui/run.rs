@@ -370,8 +370,10 @@ impl App {
     /// timers, and `/loop`. True when the screen needs a redraw.
     pub(super) fn on_tick(&mut self) -> bool {
         let mut dirty = false;
+        // A newer release: on the startup screen when the cached check already
+        // knows one, and mid-session when one ships while this runs.
         if let Some(notice) = crate::update_check::take_notice() {
-            self.note(notice, pal().dim);
+            self.note(notice, pal().accent);
             dirty = true;
         }
         // An in-flight `/btw` ask animates its panel's spinner.

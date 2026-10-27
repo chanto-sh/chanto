@@ -30,6 +30,11 @@ pub async fn run(cli: Cli) -> Result<()> {
     for w in warnings {
         ui::warn(&w);
     }
+    // The upgrade notice belongs on the startup screen: the last check's
+    // cached answer is shown here at once, without waiting for the network.
+    if let Some(notice) = crate::update_check::take_notice().or_else(crate::update_check::known) {
+        ui::line(&ui::dim(&notice));
+    }
     let mut kb = default_emacs_keybindings();
     kb.add_binding(
         KeyModifiers::SHIFT,
@@ -72,6 +77,10 @@ pub async fn run(cli: Cli) -> Result<()> {
         });
     }
     loop {
+        // A release that shipped during the last turn.
+        if let Some(notice) = crate::update_check::take_notice() {
+            ui::line(&ui::dim(&notice));
+        }
         if std::mem::take(&mut loop_turn)
             && let Some(n) = env.scheduler.iteration_done()
         {
