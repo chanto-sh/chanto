@@ -14,6 +14,7 @@
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-f59e0b">
   <a href="https://scorecard.dev/viewer/?uri=github.com/chanto-sh/chanto"><img alt="OpenSSF Scorecard" src="https://api.scorecard.dev/projects/github.com/chanto-sh/chanto/badge"></a>
   <a href="https://www.bestpractices.dev/projects/15833"><img alt="OpenSSF Best Practices" src="https://www.bestpractices.dev/projects/15833/badge"></a>
+  <a href="https://codecov.io/gh/chanto-sh/chanto"><img alt="Coverage" src="https://codecov.io/gh/chanto-sh/chanto/graph/badge.svg"></a>
   <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-blue">
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20·%20Linux%20·%20Windows-0078D6">
 </p>
