@@ -344,6 +344,37 @@ async fn tools_with_no_user_to_answer_are_not_advertised() {
 }
 
 #[tokio::test]
+async fn a_search_outside_the_project_gets_a_note() {
+    let dir = tmpdir("off-project");
+    let (base, seen) = mock_server(vec![
+        json!({"tool_calls": tc("Bash", json!({"command": "find / -maxdepth 0 -name nothing-here"}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "find . -maxdepth 0"}))}),
+        json!({"content": "Done."}),
+    ])
+    .await;
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
+    agent
+        .run_turn("fix the bug", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 3);
+    let tool_results: Vec<String> = bodies[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(tool_results.len(), 2);
+    // The whole-disk search ran, and its result steers back to the project.
+    assert!(tool_results[0].contains("searches `/`, outside the project"));
+    // A search of the project itself is left alone.
+    assert!(!tool_results[1].contains("outside the project"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn cached_usage_is_totalled_across_calls() {
     let dir = tmpdir("cached-usage");
     std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
