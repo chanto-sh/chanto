@@ -34,6 +34,11 @@ def check(root: Path, tag: str) -> None:
         f'version = "{version}"' in (root / "ide/jetbrains/build.gradle.kts").read_text(),
         "JetBrains version mismatch",
     )
+    leftover = sorted(p.name for p in (root / "changelog.d").glob("*.md") if p.name != "README.md")
+    require(
+        not leftover,
+        f"changelog.d still has {', '.join(leftover)}: run packaging/changelog.py {tag}",
+    )
     changelog = (root / "CHANGELOG.md").read_text()
     headings = re.findall(r"^## (.+)$", changelog, re.MULTILINE)
     require(len(headings) >= 2 and headings[0] == "Unreleased", "keep Unreleased first")
