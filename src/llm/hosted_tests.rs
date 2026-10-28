@@ -1041,6 +1041,15 @@ fn coding_plan_presets() {
         crate::providers::context("minimax-coding", "MiniMax-M2.7"),
         Some(204_800)
     );
+    assert_eq!(
+        crate::providers::context("deepseek", "deepseek-flash"),
+        Some(1_000_000)
+    );
+    assert_eq!(
+        crate::providers::context("deepseek", "deepseek-v4-pro"),
+        Some(1_000_000)
+    );
+    assert_eq!(crate::providers::context("deepseek", "deepseek-chat"), None);
     assert!(
         crate::providers::key_page("kimi-coding")
             .unwrap()

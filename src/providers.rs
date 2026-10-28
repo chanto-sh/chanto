@@ -608,6 +608,12 @@ pub fn context(id: &str, model: &str) -> Option<u32> {
         ("kimi-coding" | "kimi-coding-cn", _) => Some(262_144),
         ("minimax-coding" | "minimax", m) if m.starts_with("MiniMax-M3") => Some(1_000_000),
         ("minimax-coding" | "minimax", m) if m.starts_with("MiniMax-M2") => Some(204_800),
+        // V4 and its `deepseek-flash` alias take 1M; the older chat and
+        // reasoner models keep the 128K default. DeepSeek's model list
+        // doesn't say.
+        ("deepseek", m) if m.starts_with("deepseek-flash") || m.starts_with("deepseek-v4") => {
+            Some(1_000_000)
+        }
         _ => None,
     }
 }
