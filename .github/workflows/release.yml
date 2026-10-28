@@ -30,6 +30,21 @@ jobs:
         run: |
           python3 packaging/check-release.py "$TAG"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      # The licenses of every crate in the binary, which MIT, BSD and Apache-2.0
+      # ask to travel with it. Every archive, the npm packages and the container
+      # image carry this file next to LICENSE and NOTICE.
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RELEASE_RUST_VERSION }}
+      - name: Third-party licenses
+        run: |
+          cargo install cargo-about --version 0.9.2 --features cli --locked
+          cargo about generate --locked -o THIRD_PARTY_LICENSES.txt packaging/third-party-licenses.hbs
+          grep -q "Apache License 2.0" THIRD_PARTY_LICENSES.txt
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: third-party-licenses
+          path: THIRD_PARTY_LICENSES.txt
 
   build:
     needs: preflight
@@ -107,6 +122,9 @@ jobs:
           } finally {
             Remove-Item -Force $pfx -ErrorAction SilentlyContinue
           }
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: third-party-licenses
       - name: Package
         shell: bash
         run: |
@@ -114,7 +132,7 @@ jobs:
           bin="chanto"
           case "${{ matrix.target }}" in *windows*) bin="chanto.exe";; esac
           mkdir -p "dist/$name"
-          cp "target/${{ matrix.target }}/release/$bin" README.md "dist/$name/"
+          cp "target/${{ matrix.target }}/release/$bin" README.md LICENSE NOTICE THIRD_PARTY_LICENSES.txt "dist/$name/"
           case "${{ matrix.target }}" in
             *windows*) (cd dist && 7z a "$name.zip" "$name") ;;
             *) tar -C dist -czf "dist/$name.tar.gz" "$name" ;;
@@ -424,7 +442,7 @@ jobs:
               --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA"
           done
           name="chanto-$TAG-x86_64-unknown-linux-musl"
-          tar -xzf "dist/$name.tar.gz" -C "$RUNNER_TEMP" "$name/chanto"
+          tar -xzf "dist/$name.tar.gz" -C "$RUNNER_TEMP" "$name/chanto" "$name/LICENSE" "$name/NOTICE" "$name/THIRD_PARTY_LICENSES.txt"
           test "$("$RUNNER_TEMP/$name/chanto" --version)" = "chanto ${TAG#v}"
       - name: Require successful distribution jobs
         env:

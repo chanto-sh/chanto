@@ -21,6 +21,8 @@ TARGETS = {
     "linux-x64": ("x86_64-unknown-linux-musl", "linux", "x64"),
     "win32-x64": ("x86_64-pc-windows-msvc", "win32", "x64"),
 }
+# The license notices every release archive carries next to the binary.
+NOTICES = ["LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt"]
 COMMON = {
     "license": "Apache-2.0",
     "homepage": "https://chanto.sh",
@@ -39,14 +41,19 @@ for key, (target, os_name, cpu) in TARGETS.items():
     (pkg / "bin").mkdir(parents=True)
     exe = "chanto.exe" if os_name == "win32" else "chanto"
     member = f"chanto-{tag}-{target}/{exe}"
+    # The binary, with the license notices its archive carries.
+    names = {f"chanto-{tag}-{target}/{n}": n for n in NOTICES}
     if os_name == "win32":
         with zipfile.ZipFile(dist / f"chanto-{tag}-{target}.zip") as z:
             (pkg / "bin" / exe).write_bytes(z.read(member))
+            for m, n in names.items():
+                (pkg / n).write_bytes(z.read(m))
     else:
         with tarfile.open(dist / f"chanto-{tag}-{target}.tar.gz") as t:
             (pkg / "bin" / exe).write_bytes(t.extractfile(member).read())
+            for m, n in names.items():
+                (pkg / n).write_bytes(t.extractfile(m).read())
         (pkg / "bin" / exe).chmod(0o755)
-    shutil.copy(here / "../../LICENSE", pkg / "LICENSE")
     (pkg / "README.md").write_text(f"The `chanto` binary for {os_name} {cpu}. Install [`@chanto/cli`](https://www.npmjs.com/package/@chanto/cli) instead.\n")
     (pkg / "package.json").write_text(json.dumps({
         "name": f"@chanto/cli-{key}",
@@ -55,12 +62,13 @@ for key, (target, os_name, cpu) in TARGETS.items():
         **COMMON,
         "os": [os_name],
         "cpu": [cpu],
-        "files": ["bin", "LICENSE"],
+        "files": ["bin", *NOTICES],
     }, indent=2) + "\n")
 
 main = out / "chanto"
 shutil.copytree(here / "chanto", main)
-shutil.copy(here / "../../LICENSE", main / "LICENSE")
+for n in NOTICES:
+    shutil.copy(out / "linux-x64" / n, main / n)
 shutil.copy(here / "../../README.md", main / "README.md")
 (main / "package.json").write_text(json.dumps({
     "name": "@chanto/cli",
@@ -68,7 +76,7 @@ shutil.copy(here / "../../README.md", main / "README.md")
     "description": "A fast, lean coding agent for your terminal",
     **COMMON,
     "bin": {"chanto": "bin/chanto.js"},
-    "files": ["bin", "LICENSE"],
+    "files": ["bin", *NOTICES],
     "engines": {"node": ">=18"},
     "optionalDependencies": {f"@chanto/cli-{k}": version for k in TARGETS},
 }, indent=2) + "\n")
