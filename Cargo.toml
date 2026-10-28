@@ -95,9 +95,10 @@ uuid = { version = "1.28.0", features = ["v4"] }
 lto = "fat"
 codegen-units = 1
 strip = true
-# Our own code and the search/text crates are tuned for speed; the rest
-# (UI, HTTP, TLS, async runtime) for size.
-opt-level = 3
+# Tuned for size, our own code included: at opt-level 3 it made the binary
+# 5.3 MB larger (25.7 vs 20.3 MB) with no CPU gain on the perf gate's
+# workload. The search/text crates below, where time goes, stay at 3.
+opt-level = "s"
 
 [profile.release.package."*"]
 opt-level = "s"

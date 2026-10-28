@@ -61,6 +61,13 @@ LABELS = {
     "turn_cpu_ms": "CPU per request (ms)",
     "turn_rss_mb": "Peak RSS, 40 turns (MB)",
 }
+# The release binary's size: exact, so one reading each and no test. It fails
+# only over its platform's ceiling; a pull request that needs more raises the
+# ceiling in budgets.json, where the growth is visible in review. The change
+# from the base is reported either way.
+SIZE_LABELS = {
+    "binary_mb": "Binary size (MB)",
+}
 # Measured against a ceiling only, with no base to compare, so they are not
 # part of the per-platform budget every metric above has.
 DEVICE_LABELS = {
@@ -423,6 +430,31 @@ def clock_step(samples):
     return min(gaps) if gaps else 0.0
 
 
+def judge_size(base, head, budget):
+    """The binary size against its ceiling, with the change from the base."""
+    change = (head - base) / base if base else None
+    over_budget = budget is not None and head > budget
+    return {
+        "base": base,
+        "head": head,
+        "change": change,
+        "budget": budget,
+        "p_value": None,
+        "significant": False,
+        "over_budget": over_budget,
+        "too_big": False,
+        # Its ceiling sits close on purpose: flag only the last 5%.
+        "near_budget": budget is not None and head > budget * 0.95,
+        "verdict": "fail" if over_budget else "pass",
+        "base_samples": [base] if base else None,
+        "head_samples": [head],
+    }
+
+
+def binary_mb(path):
+    return Path(path).stat().st_size / 1e6
+
+
 def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
     """Apply the ceiling and the significance test to one metric."""
     head_value = aggregate(metric, head)
@@ -536,6 +568,11 @@ def run(head, base, config, device=False):
             cfg["alpha"],
             cfg["large_change"],
         )
+    metrics["binary_mb"] = judge_size(
+        binary_mb(base) if base else None,
+        binary_mb(head),
+        cfg["ceilings"].get("binary_mb"),
+    )
     report = {
         "platform": cfg["platform"],
         "base": str(base) if base else None,
@@ -556,6 +593,10 @@ def run(head, base, config, device=False):
         for m in group.values()
     )
     return report
+
+
+def label(metric):
+    return LABELS.get(metric) or SIZE_LABELS[metric]
 
 
 def number(value, unit=""):
@@ -588,15 +629,15 @@ def markdown(report):
             else:
                 verdict = "fail (significantly slower)"
         lines.append(
-            f"| {LABELS[metric]} | {number(m['base'])} | {number(m['head'])} | "
+            f"| {label(metric)} | {number(m['base'])} | {number(m['head'])} | "
             f"{change} | {number(m['budget'])} | {verdict} |"
         )
-    passing = [LABELS[k] for k, m in report["metrics"].items() if m["verdict"] == "pass"]
+    passing = [label(k) for k, m in report["metrics"].items() if m["verdict"] == "pass"]
     device = report.get("device", {})
     if report["ok"]:
         lines += ["", f"All {len(passing)} metrics are within their ceiling and the base."]
     else:
-        failed = [LABELS[k] for k, m in report["metrics"].items()
+        failed = [label(k) for k, m in report["metrics"].items()
                   if m["verdict"] != "pass"]
         failed_device = [DEVICE_LABELS[k] for k, m in device.get("metrics", {}).items()
                          if m["verdict"] != "pass"]
@@ -607,7 +648,7 @@ def markdown(report):
             lines += ["**The small device could not keep up:** "
                       + ", ".join(failed_device)]
     near = [
-        LABELS[k]
+        label(k)
         for k, m in report["metrics"].items()
         if m["verdict"] == "pass" and m.get("near_budget")
     ]

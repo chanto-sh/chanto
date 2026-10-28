@@ -25,7 +25,14 @@
     "and memory ceilings, for a machine with no spare cores and a phone's",
     "memory. It has no base to compare with, since wall time on a shared",
     "runner measures the runner; the ceilings are deliberately loose first-run",
-    "values, to be tightened from what the runners report."
+    "values, to be tightened from what the runners report.",
+    "binary_mb: the release binary's size, in 10^6 bytes. It is exact, so it",
+    "has no tolerance or test: it fails only over its ceiling, and a pull",
+    "request that needs more raises the ceiling here, where reviewers see the",
+    "growth. First values, about 15-20% above the opt-level \"s\" builds",
+    "(macOS arm64 20.3 MB; v0.1.7 at opt-level 3 was 25.6 / 31.2 / 40.0 MB on",
+    "macOS / Linux / Windows, about 21% more), to be tightened from what the",
+    "runners report."
   ],
   "alpha": 0.01,
   "warmup": 2,
@@ -56,19 +63,22 @@
       "startup_cpu_ms": 80,
       "startup_rss_mb": 34,
       "turn_cpu_ms": 8,
-      "turn_rss_mb": 40
+      "turn_rss_mb": 40,
+      "binary_mb": 29
     },
     "darwin": {
       "startup_cpu_ms": 80,
       "startup_rss_mb": 32,
       "turn_cpu_ms": 12,
-      "turn_rss_mb": 36
+      "turn_rss_mb": 36,
+      "binary_mb": 24
     },
     "windows": {
       "startup_cpu_ms": 160,
       "startup_rss_mb": 24,
       "turn_cpu_ms": 24,
-      "turn_rss_mb": 30
+      "turn_rss_mb": 30,
+      "binary_mb": 37
     }
   }
 }
