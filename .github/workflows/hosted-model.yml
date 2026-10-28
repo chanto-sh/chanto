@@ -23,10 +23,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Gemma 4 runs on Google AI Studio's own key below, which doesn't
+          # share OpenRouter's free pool.
           - service: openrouter
             model: poolside/laguna-xs-2.1:free
-          - service: openrouter
-            model: google/gemma-4-26b-a4b-it:free
           - service: openrouter
             model: nvidia/nemotron-3.5-lightning:free
           - service: groq
@@ -81,12 +81,17 @@ jobs:
           OPENROUTER_API_KEY: ${{ matrix.service == 'openrouter' && secrets.OPENROUTER_API_KEY || '' }}
           GROQ_API_KEY: ${{ matrix.service == 'groq' && secrets.GROQ_API_KEY || '' }}
           GEMINI_API_KEY: ${{ matrix.service == 'gemini' && secrets.GEMINI_API_KEY || '' }}
-        # Chanto sends CHANTO_API_KEY to a custom --base-url; it never sends
-        # OPENAI_API_KEY anywhere but OpenAI.
+        # Through Chanto's built-in provider for each service, which reads the
+        # service's own key variable. A free model's shared pool can be busy
+        # (429): wait and retry, but fail on anything else.
         run: |
-          case "$SERVICE" in
-            openrouter) base=https://openrouter.ai/api/v1; export CHANTO_API_KEY=$OPENROUTER_API_KEY ;;
-            groq) base=https://api.groq.com/openai/v1; export CHANTO_API_KEY=$GROQ_API_KEY ;;
-            gemini) base=https://generativelanguage.googleapis.com/v1beta/openai; export CHANTO_API_KEY=$GEMINI_API_KEY ;;
-          esac
-          tests/real-model/smoke.sh target/debug/chanto "$base" "$MODEL" openai
+          set -o pipefail
+          for attempt in 1 2 3; do
+            if tests/real-model/smoke.sh target/debug/chanto - "$SERVICE/$MODEL" 2>&1 | tee smoke.log; then
+              exit 0
+            fi
+            grep -q "API error 429" smoke.log || exit 1
+            echo "::warning::$SERVICE/$MODEL is rate-limited (attempt $attempt); retrying in a minute"
+            sleep 60
+          done
+          exit 1

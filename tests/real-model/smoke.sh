@@ -4,6 +4,10 @@
 #
 #   tests/real-model/smoke.sh CHANTO BASE_URL MODEL [PROVIDER]
 #
+# BASE_URL - (and no PROVIDER) sends MODEL to one of Chanto's built-in hosted
+# providers instead, as `openrouter/<model>` or `gemini/<model>`, with that
+# provider's own key variable set (OPENROUTER_API_KEY, GEMINI_API_KEY, ...).
+#
 # CI serves Qwen3.5-4B with llama-server (see .github/workflows/real-model.yml);
 # locally any OpenAI-compatible or Ollama server works. SMOKE_FLAGS adds
 # Chanto flags (--no-think for a thinking model).
@@ -12,6 +16,8 @@ BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 BASE_URL=$2
 MODEL=$3
 PROVIDER=${4:-openai}
+server=(--provider "$PROVIDER" --base-url "$BASE_URL")
+[ "$BASE_URL" = - ] && server=()
 
 W=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/chanto-smoke-XXXX")
 mkdir -p "$W/home" "$W/repo"
@@ -39,7 +45,7 @@ status=0
 # shellcheck disable=SC2086 # SMOKE_FLAGS is a list of flags
 HOME="$W/home" CHANTO_HOME="$W/home/.chanto" CHANTO_NO_PRESENCE=1 \
   ${limit[@]+"${limit[@]}"} "$BIN" -p --bare \
-  --provider "$PROVIDER" --base-url "$BASE_URL" --model "$MODEL" \
+  ${server[@]+"${server[@]}"} --model "$MODEL" \
   --num-ctx 16384 --max-turns 15 --mode bypassPermissions --no-session-persistence \
   ${SMOKE_FLAGS:-} \
   "python3 test_calc.py fails. Fix the bug in calc.py so it passes, then run it to confirm." \
