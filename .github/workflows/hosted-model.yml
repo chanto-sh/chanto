@@ -2,7 +2,7 @@ name: hosted model
 # The real-model smoke test (tests/real-model/smoke.sh) against free hosted
 # models, nightly and on demand. It needs API keys, so it never runs for pull
 # requests (fork pull requests get no secrets, and pull request code must not
-# see them): only main's own code runs here. A leg whose key secret isn't set
+# see them): only code pushed to this repository runs here. A leg whose key secret isn't set
 # is skipped; so is an OpenRouter model that has left its free list, which
 # changes month to month. Free tiers allow a few dozen requests a day, about
 # five per leg.
@@ -31,6 +31,10 @@ jobs:
             model: nvidia/nemotron-3.5-lightning:free
           - service: groq
             model: qwen/qwen3.8-27b
+          # Google AI Studio's free tier (a project with no billing account
+          # can't be charged); free-tier prompts may be used for training.
+          - service: gemini
+            model: gemma-4-26b-a4b-it
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -42,10 +46,12 @@ jobs:
           MODEL: ${{ matrix.model }}
           HAS_OPENROUTER: ${{ secrets.OPENROUTER_API_KEY != '' }}
           HAS_GROQ: ${{ secrets.GROQ_API_KEY != '' }}
+          HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
         run: |
           case "$SERVICE" in
             openrouter) has=$HAS_OPENROUTER ;;
             groq) has=$HAS_GROQ ;;
+            gemini) has=$HAS_GEMINI ;;
           esac
           if [ "$has" != true ]; then
             echo "::notice::no API key secret for $SERVICE; skipping $MODEL"
@@ -74,9 +80,11 @@ jobs:
           MODEL: ${{ matrix.model }}
           OPENROUTER_API_KEY: ${{ matrix.service == 'openrouter' && secrets.OPENROUTER_API_KEY || '' }}
           GROQ_API_KEY: ${{ matrix.service == 'groq' && secrets.GROQ_API_KEY || '' }}
+          GEMINI_API_KEY: ${{ matrix.service == 'gemini' && secrets.GEMINI_API_KEY || '' }}
         run: |
           case "$SERVICE" in
             openrouter) base=https://openrouter.ai/api/v1; export OPENAI_API_KEY=$OPENROUTER_API_KEY ;;
             groq) base=https://api.groq.com/openai/v1; export OPENAI_API_KEY=$GROQ_API_KEY ;;
+            gemini) base=https://generativelanguage.googleapis.com/v1beta/openai; export OPENAI_API_KEY=$GEMINI_API_KEY ;;
           esac
           tests/real-model/smoke.sh target/debug/chanto "$base" "$MODEL" openai
