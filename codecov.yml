@@ -1,5 +1,9 @@
 # Codecov (free for open source): a comment on each pull request with the
-# coverage of the changed lines. Informational: coverage never fails a check.
+# coverage of the changed lines. The patch status is a required check: at
+# least 80% of the lines a pull request changes must be covered by tests.
+# Whole-repository coverage stays informational here; CI's coverage floor
+# (ci.yml) already holds it at 80%, and gating it again would block a pull
+# request for coverage it did not change.
 coverage:
   status:
     project:
@@ -7,6 +11,6 @@ coverage:
         informational: true
     patch:
       default:
-        informational: true
+        target: 80%
 comment:
   layout: "condensed_header, diff, files"
