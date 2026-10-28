@@ -393,8 +393,10 @@ async fn run_rg(
         "count" => {
             cmd.arg("--count");
         }
+        // Unsorted: ripgrep's own --sortr makes it search on one thread. The
+        // newest-first order is applied to the paths below instead.
         _ => {
-            cmd.args(["--files-with-matches", "--sortr=modified"]);
+            cmd.arg("--files-with-matches");
         }
     }
     if arg_bool(args, "-i") {
@@ -433,6 +435,8 @@ async fn run_rg(
     use tokio::io::AsyncBufReadExt;
     let mut reader = tokio::io::BufReader::new(child.stdout.take().unwrap());
     let (mut out, mut kept, mut total) = (String::new(), 0usize, 0usize);
+    let paths_only = mode != "content" && mode != "count";
+    let mut paths: Vec<String> = Vec::new();
     let mut line = Vec::new();
     loop {
         line.clear();
@@ -440,13 +444,19 @@ async fn run_rg(
             break;
         }
         total += 1;
-        if kept < head && out.len() < 120_000 {
-            let l = String::from_utf8_lossy(&line);
-            let l = l.trim_end_matches(['\n', '\r']);
-            out.push_str(l.strip_prefix("./").unwrap_or(l));
+        let l = String::from_utf8_lossy(&line);
+        let l = l.trim_end_matches(['\n', '\r']);
+        let l = l.strip_prefix("./").unwrap_or(l);
+        if paths_only {
+            paths.push(l.to_string());
+        } else if kept < head && out.len() < 120_000 {
+            out.push_str(l);
             out.push('\n');
             kept += 1;
         }
+    }
+    if paths_only {
+        out = newest_first(cwd, paths, head).await;
     }
     let status = child.wait().await?;
     let err = err_task.await.unwrap_or_default();
@@ -461,6 +471,35 @@ async fn run_rg(
         )
     });
     Ok((out, total, warn))
+}
+
+/// The first `head` of `paths` (relative to `cwd`), most recently modified
+/// first, as `--sortr=modified` would list them.
+async fn newest_first(cwd: &Path, paths: Vec<String>, head: usize) -> String {
+    let cwd = cwd.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut dated: Vec<(std::time::SystemTime, String)> = paths
+            .into_iter()
+            .map(|p| {
+                let t = std::fs::metadata(cwd.join(&p))
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::UNIX_EPOCH);
+                (t, p)
+            })
+            .collect();
+        dated.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let mut out = String::new();
+        for (_, p) in dated.into_iter().take(head) {
+            if out.len() >= 120_000 {
+                break;
+            }
+            out.push_str(&p);
+            out.push('\n');
+        }
+        out
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// Search without ripgrep. Keeps only the entries needed for the first `head`
@@ -693,6 +732,34 @@ mod tests {
         let (text, total) = b.into_text();
         assert_eq!(text, "a1\na2\nb1\nb2\n");
         assert_eq!(total, 5);
+    }
+
+    #[tokio::test]
+    async fn ripgrep_paths_are_newest_first() {
+        if which_rg().is_none() {
+            return;
+        }
+        let d = std::env::temp_dir().join(format!("chanto-rg-order-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let now = std::time::SystemTime::now();
+        for (name, age) in [("old.txt", 300), ("new.txt", 0), ("mid.txt", 100)] {
+            let f = d.join(name);
+            std::fs::write(&f, "needle\n").unwrap();
+            std::fs::File::options()
+                .write(true)
+                .open(&f)
+                .unwrap()
+                .set_modified(now - std::time::Duration::from_secs(age))
+                .unwrap();
+        }
+        let args = json!({"pattern": "needle", "output_mode": "files_with_matches"});
+        let (out, total, _) = run_rg(&args, "needle", &d, "files_with_matches", &d, 2)
+            .await
+            .unwrap();
+        assert_eq!(out, "new.txt\nmid.txt\n");
+        assert_eq!(total, 3);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
