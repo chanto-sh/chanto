@@ -81,10 +81,12 @@ jobs:
           OPENROUTER_API_KEY: ${{ matrix.service == 'openrouter' && secrets.OPENROUTER_API_KEY || '' }}
           GROQ_API_KEY: ${{ matrix.service == 'groq' && secrets.GROQ_API_KEY || '' }}
           GEMINI_API_KEY: ${{ matrix.service == 'gemini' && secrets.GEMINI_API_KEY || '' }}
+        # Chanto sends CHANTO_API_KEY to a custom --base-url; it never sends
+        # OPENAI_API_KEY anywhere but OpenAI.
         run: |
           case "$SERVICE" in
-            openrouter) base=https://openrouter.ai/api/v1; export OPENAI_API_KEY=$OPENROUTER_API_KEY ;;
-            groq) base=https://api.groq.com/openai/v1; export OPENAI_API_KEY=$GROQ_API_KEY ;;
-            gemini) base=https://generativelanguage.googleapis.com/v1beta/openai; export OPENAI_API_KEY=$GEMINI_API_KEY ;;
+            openrouter) base=https://openrouter.ai/api/v1; export CHANTO_API_KEY=$OPENROUTER_API_KEY ;;
+            groq) base=https://api.groq.com/openai/v1; export CHANTO_API_KEY=$GROQ_API_KEY ;;
+            gemini) base=https://generativelanguage.googleapis.com/v1beta/openai; export CHANTO_API_KEY=$GEMINI_API_KEY ;;
           esac
           tests/real-model/smoke.sh target/debug/chanto "$base" "$MODEL" openai
