@@ -1,0 +1,1 @@
+- **License notices in every download.** Release archives, the npm packages, Homebrew installs and the container image now include `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`, the license of every open-source crate built into the binary.

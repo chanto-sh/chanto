@@ -27,6 +27,7 @@ class Chanto < Formula
 
   def install
     bin.install "chanto"
+    doc.install "LICENSE", "NOTICE", "THIRD_PARTY_LICENSES.txt"
   end
 
   test do

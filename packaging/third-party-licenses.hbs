@@ -1,0 +1,25 @@
+Third-party software in Chanto
+==============================
+
+The chanto binary includes the open-source Rust crates below. Each is
+distributed under the license reproduced here. Chanto's own license is in
+LICENSE, and NOTICE carries the attributions those licenses ask for.
+
+Source code for every crate, including those under the Mozilla Public License
+2.0, is available from crates.io at https://crates.io/crates/<name>/<version>.
+
+{{#each overview}}
+  {{{name}}}: {{count}} crates
+{{/each}}
+
+{{#each licenses}}
+--------------------------------------------------------------------------------
+{{{name}}}
+Used by:
+{{#each used_by}}
+  - {{crate.name}} {{crate.version}} ({{#if crate.repository}}{{crate.repository}}{{else}}https://crates.io/crates/{{crate.name}}{{/if}})
+{{/each}}
+
+{{{text}}}
+
+{{/each}}

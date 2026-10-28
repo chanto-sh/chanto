@@ -23,6 +23,7 @@ RUN apt-get update \
 
 ARG TARGETARCH
 COPY --chmod=755 bin/${TARGETARCH}/chanto /usr/local/bin/chanto
+COPY licenses/ /usr/share/doc/chanto/
 
 # Updates come from pulling a newer image, not from `chanto upgrade`.
 ENV CHANTO_NO_UPDATE_CHECK=1

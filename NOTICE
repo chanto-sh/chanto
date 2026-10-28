@@ -12,9 +12,10 @@ Rust dependencies
 -----------------
 Chanto is built on open-source Rust crates, each under a permissive license
 (MIT, Apache-2.0, BSD, ISC, ...). deny.toml restricts the dependency graph to
-those licenses and CI runs `cargo deny check`. To ship a release, generate the
-full dependency/license inventory with `cargo about generate about.hbs` (or
-`cargo deny list`) and distribute that output with the binaries.
+those licenses and CI runs `cargo deny check`. Every release ships
+THIRD_PARTY_LICENSES.txt next to the binary, generated with cargo-about
+(about.toml, packaging/third-party-licenses.hbs): the license text and the crates
+under it, for every crate in the binary.
 
 
 tldr-pages - Creative Commons Attribution 4.0 International (CC BY 4.0)

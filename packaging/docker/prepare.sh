@@ -7,7 +7,8 @@
 #
 # <dist> holds SHA256SUMS, SHA256SUMS.sig and <tag>'s two musl archives
 # (chanto-<tag>-{x86_64,aarch64}-unknown-linux-musl.tar.gz). <context> gets
-# bin/amd64/chanto and bin/arm64/chanto, named for Docker's TARGETARCH.
+# bin/amd64/chanto and bin/arm64/chanto, named for Docker's TARGETARCH, and
+# licenses/ with the archives' LICENSE, NOTICE and THIRD_PARTY_LICENSES.txt.
 # Needs OpenSSL 3 for the Ed25519 check.
 set -eu
 
@@ -32,6 +33,17 @@ for pair in amd64:x86_64-unknown-linux-musl arm64:aarch64-unknown-linux-musl; do
     (cd "$dist" && printf '%s\n' "$line" | sha256sum --check --strict -)
     rm -rf "${ctx:?}/bin/$arch" "${dist:?}/$name"
     mkdir -p "$ctx/bin/$arch"
-    tar -xzf "$dist/$name.tar.gz" -C "$dist" "$name/chanto"
+    tar -xzf "$dist/$name.tar.gz" -C "$dist"
     install -m 755 "$dist/$name/chanto" "$ctx/bin/$arch/chanto"
 done
+# The license notices from the (identical) amd64 archive. Releases before
+# v0.1.8 shipped none; the pull request check builds from those, so it takes
+# the repository's own LICENSE and NOTICE instead.
+rm -rf "${ctx:?}/licenses"
+mkdir -p "$ctx/licenses"
+notices="$dist/chanto-$tag-x86_64-unknown-linux-musl"
+if [ -f "$notices/THIRD_PARTY_LICENSES.txt" ]; then
+    cp "$notices/LICENSE" "$notices/NOTICE" "$notices/THIRD_PARTY_LICENSES.txt" "$ctx/licenses/"
+else
+    cp "$root/LICENSE" "$root/NOTICE" "$ctx/licenses/"
+fi
