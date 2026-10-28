@@ -1,10 +1,11 @@
 name: real model
-# A smoke test against a real model on every pull request: Qwen3.5-4B served by
-# llama.cpp on the runner's own CPU, so it needs no API key or secret and runs
-# the same for pull requests from forks. Chanto fixes a one-line bug and the
-# job checks the outcome (tests/real-model/smoke.sh). A small model can still
-# fumble a run, so this is not a required check; the mock-model tests in ci.yml
-# remain the merge gate.
+# Smoke tests against real models on every pull request, served on the
+# runner's own CPU, so they need no API key or secret and run the same for pull
+# requests from forks. In each, Chanto fixes a one-line bug and the job checks
+# the outcome (tests/real-model/smoke.sh). The legs cover three model families
+# through llama.cpp's OpenAI API, and Chanto's Ollama and Anthropic providers
+# through Ollama. A small model can still fumble a run, so these are not
+# required checks; the mock-model tests in ci.yml remain the merge gate.
 on:
   push:
     branches: [main]
@@ -17,63 +18,123 @@ permissions:
   contents: read
 
 env:
-  # Pinned by checksum: a llama.cpp build and the model at one Hugging Face revision.
+  # Servers and models are pinned by checksum. Models download on each run
+  # (seconds from Hugging Face) rather than filling the shared Actions cache.
   LLAMA_BUILD: b11966
   LLAMA_SHA256: c83ad2d4652fa270619f9ec2140d78b27cb731e17c676ae468122737083afb56
-  MODEL_URL: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf
-  MODEL_SHA256: 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
+  OLLAMA_VERSION: v0.40.5
+  OLLAMA_SHA256: dc5eabc292f9949546c90a97c820f924b035e05243b0de13c7f366182562169c
 
 jobs:
   smoke:
+    name: smoke (${{ matrix.leg }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - leg: qwen3.5-4b, openai
+            server: llama
+            provider: openai
+            model: qwen3.5-4b
+            url: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf
+            sha256: 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
+          - leg: lfm3-1.7b, openai
+            server: llama
+            provider: openai
+            model: lfm3-1.7b
+            url: https://huggingface.co/LiquidAI/LFM3-1.7B-GGUF/resolve/bad5729bba61d076fff20d2548e62526665af215/LFM3-1.7B-Q4_K_M.gguf
+            sha256: 3793e1e6e2266919d6e015287221b41100175a98eddaba92e111aed3b05c93c4
+          - leg: gemma-4-e4b, openai
+            server: llama
+            provider: openai
+            model: gemma-4-e4b
+            url: https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/gemma-4-E4B_q4_0-it.gguf
+            sha256: 676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee
+          # Ollama pulls from its registry; the checksum of the weights layer pins the model.
+          - leg: qwen3.5-4b, ollama
+            server: ollama
+            provider: ollama
+            model: qwen3.5:4b
+            sha256: a9d0a3e1d8c91732a3812becd31f8d4a8ff57414903f226306069f0437e2ac50
+          - leg: qwen3.5-4b, anthropic
+            server: ollama
+            provider: anthropic
+            model: qwen3.5:4b
+            sha256: a9d0a3e1d8c91732a3812becd31f8d4a8ff57414903f226306069f0437e2ac50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      # One leg on main writes the build cache; every leg restores it.
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && matrix.model == 'qwen3.5-4b' }}
       - run: cargo build --locked
-      # The 2.7 GB model is cached so pull requests don't fetch it from Hugging
-      # Face each time; as with the build cache, only main stores it.
-      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: model
-        with:
-          path: ~/models
-          key: qwen3.5-4b-q4km-${{ env.MODEL_SHA256 }}
-      - name: Download the model
-        if: steps.model.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/models
-          curl -fsSL --retry 5 --retry-all-errors -o ~/models/model.gguf "$MODEL_URL"
-          echo "$MODEL_SHA256  $HOME/models/model.gguf" | sha256sum -c -
-      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        if: ${{ steps.model.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
-        with:
-          path: ~/models
-          key: qwen3.5-4b-q4km-${{ env.MODEL_SHA256 }}
       - name: Start llama-server
+        if: ${{ matrix.server == 'llama' }}
+        env:
+          MODEL_URL: ${{ matrix.url }}
+          MODEL_SHA256: ${{ matrix.sha256 }}
         run: |
           cd "$RUNNER_TEMP"
+          curl -fsSL --retry 5 --retry-all-errors -o model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  model.gguf" | sha256sum -c -
           curl -fsSL --retry 5 -o llama.tar.gz \
             "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_BUILD/llama-$LLAMA_BUILD-bin-ubuntu-x64.tar.gz"
           echo "$LLAMA_SHA256  llama.tar.gz" | sha256sum -c -
           tar -xzf llama.tar.gz
           # --jinja for the model's own tool-call format; thinking off, since
           # reasoning tokens on four CPU cores would cost minutes per turn.
-          "llama-$LLAMA_BUILD/llama-server" -m ~/models/model.gguf --port 8080 \
+          "llama-$LLAMA_BUILD/llama-server" -m model.gguf --port 8080 \
             --jinja --reasoning off \
-            -c 16384 -t 4 --temp 0 --seed 1 > llama.log 2>&1 &
+            -c 16384 -t 4 --temp 0 --seed 1 > server.log 2>&1 &
           for _ in $(seq 120); do
             curl -fs http://127.0.0.1:8080/health > /dev/null && exit 0
             sleep 1
           done
-          cat llama.log
+          cat server.log
           exit 1
+      - name: Start Ollama
+        if: ${{ matrix.server == 'ollama' }}
+        env:
+          MODEL: ${{ matrix.model }}
+          MODEL_SHA256: ${{ matrix.sha256 }}
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 5 -o ollama.tar.zst \
+            "https://github.com/ollama/ollama/releases/download/$OLLAMA_VERSION/ollama-linux-amd64.tar.zst"
+          echo "$OLLAMA_SHA256  ollama.tar.zst" | sha256sum -c -
+          # The CPU build only: leave out the GPU libraries.
+          mkdir ollama && tar --zstd -xf ollama.tar.zst -C ollama --exclude='*cuda*' --exclude='*rocm*'
+          # Its Anthropic API takes no context size, so set it on the server;
+          # the default (4096) would cut Chanto's prompt.
+          OLLAMA_CONTEXT_LENGTH=16384 OLLAMA_HOST=127.0.0.1:11434 ollama/bin/ollama serve > server.log 2>&1 &
+          for _ in $(seq 60); do
+            curl -fs http://127.0.0.1:11434/api/version > /dev/null && break
+            sleep 1
+          done
+          ollama/bin/ollama pull "$MODEL"
+          # Ollama rewrites the manifest it stores, so check the weights instead:
+          # the pulled manifest must name the pinned layer, whose file must match.
+          grep -q "sha256:$MODEL_SHA256" "$HOME/.ollama/models/manifests/registry.ollama.ai/library/${MODEL%%:*}/${MODEL#*:}"
+          echo "$MODEL_SHA256  $HOME/.ollama/models/blobs/sha256-$MODEL_SHA256" | sha256sum -c -
       - name: Smoke test
-        run: tests/real-model/smoke.sh target/debug/chanto http://127.0.0.1:8080/v1 qwen3.5-4b
-      - name: llama-server log
+        env:
+          PROVIDER: ${{ matrix.provider }}
+          MODEL: ${{ matrix.model }}
+          SERVER: ${{ matrix.server }}
+        run: |
+          if [ "$SERVER" = llama ]; then
+            base=http://127.0.0.1:8080/v1
+          else
+            base=http://127.0.0.1:11434
+            # Qwen3.5 in Ollama thinks by default.
+            export SMOKE_FLAGS=--no-think
+          fi
+          tests/real-model/smoke.sh target/debug/chanto "$base" "$MODEL" "$PROVIDER"
+      - name: Server log
         if: ${{ !cancelled() }}
-        run: grep -E "chat format|prompt eval time|eval time|error" "$RUNNER_TEMP/llama.log" | tail -40
+        run: grep -E -i "chat format|prompt eval time|eval time|error" "$RUNNER_TEMP/server.log" | tail -40 || true
