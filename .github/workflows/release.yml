@@ -386,9 +386,6 @@ jobs:
     uses: ./.github/workflows/npm.yml
     with:
       tag: ${{ github.ref_name }}
-    # Only the fallback token npm.yml declares, not every repository secret.
-    secrets:
-      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   verify:
     name: verify published release
