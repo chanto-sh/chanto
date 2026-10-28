@@ -18,7 +18,7 @@ Keep PRs focused on one change.
 - [ ] `cargo clippy --locked --workspace --all-targets -- -D warnings` is clean
 - [ ] `cargo test --locked` passes
 - [ ] Added or updated tests for the behavior I changed
-- [ ] Updated `CHANGELOG.md` (Unreleased) if this is user-visible
+- [ ] Added a `changelog.d/<name>.md` fragment if this is user-visible
 - [ ] Updated docs / `AGENTS.md` if I changed a convention or interface
 
 ## Notes for reviewers

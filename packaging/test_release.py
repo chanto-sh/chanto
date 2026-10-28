@@ -11,6 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parent.parent
 check = runpy.run_path(str(ROOT / "packaging/check-release.py"))["check"]
+changelog = runpy.run_path(str(ROOT / "packaging/changelog.py"))
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -74,6 +75,62 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.replace("src/tui/snapshots/visual/dark_40x20_welcome.snap", self.version, "0.0.0")
         with self.assertRaisesRegex(ValueError, "stale welcome"):
             check(self.root, self.tag)
+
+    def test_rejects_uncollected_fragments(self):
+        (self.root / "changelog.d").mkdir()
+        (self.root / "changelog.d/README.md").write_text("how fragments work\n")
+        check(self.root, self.tag)
+        (self.root / "changelog.d/fix-x.md").write_text("- **Fix.** Something.\n")
+        with self.assertRaisesRegex(ValueError, "fix-x.md"):
+            check(self.root, self.tag)
+
+
+class ChangelogFragmentTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / "changelog.d").mkdir()
+        (self.root / "changelog.d/README.md").write_text("how fragments work\n")
+        (self.root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## Unreleased\n\n- **Old.** Written in place.\n\n"
+            "## v0.1.0 (October 1, 2026)\n\n- **First.** Released.\n"
+        )
+
+    def fragment(self, name, text):
+        (self.root / "changelog.d" / name).write_text(text)
+
+    def test_collects_unreleased_and_fragments(self):
+        self.fragment("b.md", "- **B.** Second.\n")
+        self.fragment("a.md", "- **A.** First.\n- **A2.** Also.\n")
+        changelog["release"](self.root, "v0.2.0", "October 28, 2026")
+        self.assertEqual(
+            (self.root / "CHANGELOG.md").read_text(),
+            "# Changelog\n\n## Unreleased\n\n## v0.2.0 (October 28, 2026)\n\n"
+            "- **Old.** Written in place.\n- **A.** First.\n- **A2.** Also.\n- **B.** Second.\n\n"
+            "## v0.1.0 (October 1, 2026)\n\n- **First.** Released.\n",
+        )
+        self.assertEqual([p.name for p in (self.root / "changelog.d").iterdir()], ["README.md"])
+
+    def test_rejects_malformed_fragment_and_keeps_files(self):
+        self.fragment("bad.md", "## Heading\nprose\n")
+        before = (self.root / "CHANGELOG.md").read_text()
+        with self.assertRaisesRegex(ValueError, "bad.md"):
+            changelog["release"](self.root, "v0.2.0", "October 28, 2026")
+        self.assertEqual((self.root / "CHANGELOG.md").read_text(), before)
+        self.assertTrue((self.root / "changelog.d/bad.md").exists())
+
+    def test_rejects_existing_section_and_bad_date(self):
+        with self.assertRaisesRegex(ValueError, "already"):
+            changelog["release"](self.root, "v0.1.0", "October 28, 2026")
+        with self.assertRaises(ValueError):
+            changelog["release"](self.root, "v0.2.0", "28/10/2026")
+
+    def test_collected_release_passes_release_check_shape(self):
+        self.fragment("a.md", "- **A.** First.\n")
+        changelog["release"](self.root, "v0.2.0", "October 28, 2026")
+        text = (self.root / "CHANGELOG.md").read_text()
+        self.assertRegex(text, r"## Unreleased\n\n## v0.2.0 \(October 28, 2026\)\n")
 
 
 if __name__ == "__main__":

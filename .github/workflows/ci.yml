@@ -60,6 +60,8 @@ jobs:
       - run: cargo fmt --all --check
       - name: Test release metadata checks
         run: python3 -m unittest discover -s packaging -p 'test_*release*.py'
+      - name: Check changelog fragments
+        run: python3 packaging/changelog.py --check
   # clippy over the whole workspace, on every push. The desktop app needs the
   # same GTK/WebKit packages as `desktop-linux` to build on Linux.
   clippy:
