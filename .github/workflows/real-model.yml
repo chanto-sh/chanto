@@ -1,0 +1,79 @@
+name: real model
+# A smoke test against a real model on every pull request: Qwen3.5-4B served by
+# llama.cpp on the runner's own CPU, so it needs no API key or secret and runs
+# the same for pull requests from forks. Chanto fixes a one-line bug and the
+# job checks the outcome (tests/real-model/smoke.sh). A small model can still
+# fumble a run, so this is not a required check; the mock-model tests in ci.yml
+# remain the merge gate.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: real-model-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+
+env:
+  # Pinned by checksum: a llama.cpp build and the model at one Hugging Face revision.
+  LLAMA_BUILD: b11966
+  LLAMA_SHA256: c83ad2d4652fa270619f9ec2140d78b27cb731e17c676ae468122737083afb56
+  MODEL_URL: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf
+  MODEL_SHA256: 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked
+      # The 2.7 GB model is cached so pull requests don't fetch it from Hugging
+      # Face each time; as with the build cache, only main stores it.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: model
+        with:
+          path: ~/models
+          key: qwen3.5-4b-q4km-${{ env.MODEL_SHA256 }}
+      - name: Download the model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/models
+          curl -fsSL --retry 5 --retry-all-errors -o ~/models/model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  $HOME/models/model.gguf" | sha256sum -c -
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ steps.model.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main' }}
+        with:
+          path: ~/models
+          key: qwen3.5-4b-q4km-${{ env.MODEL_SHA256 }}
+      - name: Start llama-server
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 5 -o llama.tar.gz \
+            "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_BUILD/llama-$LLAMA_BUILD-bin-ubuntu-x64.tar.gz"
+          echo "$LLAMA_SHA256  llama.tar.gz" | sha256sum -c -
+          tar -xzf llama.tar.gz
+          # --jinja for the model's own tool-call format; thinking off, since
+          # reasoning tokens on four CPU cores would cost minutes per turn.
+          "llama-$LLAMA_BUILD/llama-server" -m ~/models/model.gguf --port 8080 \
+            --jinja --reasoning off \
+            -c 16384 -t 4 --temp 0 --seed 1 > llama.log 2>&1 &
+          for _ in $(seq 120); do
+            curl -fs http://127.0.0.1:8080/health > /dev/null && exit 0
+            sleep 1
+          done
+          cat llama.log
+          exit 1
+      - name: Smoke test
+        run: tests/real-model/smoke.sh target/debug/chanto http://127.0.0.1:8080/v1 qwen3.5-4b
+      - name: llama-server log
+        if: ${{ !cancelled() }}
+        run: grep -E "chat format|prompt eval time|eval time|error" "$RUNNER_TEMP/llama.log" | tail -40

@@ -5,6 +5,7 @@
 - Test: `cargo test` (single test: `cargo test <name>`); agent-loop tests use a mock OpenAI server in `src/agent/tests.rs`
 - Format: `cargo fmt --all` (CI runs `cargo fmt --all --check`); enable the hooks (pre-commit checks, commit-msg format) once with `git config core.hooksPath .githooks`, and don't bypass them with `--no-verify`
 - Lint: `cargo clippy --workspace --all-targets` must stay warning-free (CI runs it with `-D warnings`)
+- Real-model smoke: `tests/real-model/smoke.sh <chanto> <base-url> <model> [provider]` has Chanto fix a one-line bug and checks the result; `.github/workflows/real-model.yml` runs it on every PR against Qwen3.5-4B in llama-server on the runner's CPU (no secrets, not a required check). Locally: `SMOKE_FLAGS=--no-think tests/real-model/smoke.sh target/debug/chanto http://localhost:11434 qwen3.5:4b ollama`
 - Debug a tool without a model: `chanto --run-tool <Tool> '<json args>'`
 - Inspect prompt size: `chanto --dump-prompt`; classifier check: `chanto --classify <Tool> '<json>' "<request>"`
 - Fuzz: `fuzz/` is its own crate (nightly + `cargo install cargo-fuzz`); from there, `cargo +nightly fuzz run <target> corpus/<target> seeds/<target>` with target `shell_permission`, `redact`, `url_checks` or `path_checks`. CI fuzzes pull requests with ClusterFuzzLite (`.clusterfuzzlite/`). Add a minimized crash to `fuzz/seeds/<target>/` and a unit test next to the fix
