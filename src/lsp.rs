@@ -853,20 +853,27 @@ async fn may_start(spec: &Spec, root: &Path, project: &Path) -> bool {
 /// compilation database.
 const LARGE_PROJECT_FILES: usize = 20_000;
 
+/// Each project's answer to [`large_project`], counted once.
+fn project_sizes() -> &'static Mutex<HashMap<PathBuf, bool>> {
+    static SEEN: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
 /// Whether `project` has more than [`LARGE_PROJECT_FILES`] files, counting
 /// what git and the ignore files leave in and stopping at the limit. Asked
 /// once per project.
 async fn large_project(project: &Path) -> bool {
-    static SEEN: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
-    let seen = SEEN.get_or_init(Default::default);
-    if let Some(&large) = seen.lock().unwrap().get(project) {
+    if let Some(&large) = project_sizes().lock().unwrap().get(project) {
         return large;
     }
     let dir = project.to_path_buf();
     let large = tokio::task::spawn_blocking(move || more_files_than(&dir, LARGE_PROJECT_FILES))
         .await
         .unwrap_or(false);
-    seen.lock().unwrap().insert(project.to_path_buf(), large);
+    project_sizes()
+        .lock()
+        .unwrap()
+        .insert(project.to_path_buf(), large);
     large
 }
 
@@ -1431,6 +1438,46 @@ mod tests {
         }
         assert!(more_files_than(&d, 4));
         assert!(!more_files_than(&d, 5));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn builtin_spec(name: &str) -> Spec {
+        builtin().into_iter().find(|s| s.name == name).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_small_project_is_counted_once() {
+        let d = std::env::temp_dir().join(format!("chanto-lsp-small-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("main.c"), "int main;\n").unwrap();
+        assert!(!large_project(&d).await);
+        assert_eq!(project_sizes().lock().unwrap().get(&d), Some(&false));
+        // The answer is remembered, not recounted.
+        project_sizes().lock().unwrap().insert(d.clone(), true);
+        assert!(large_project(&d).await);
+        project_sizes().lock().unwrap().remove(&d);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn clangd_needs_a_compile_database_in_a_large_project() {
+        let d = std::env::temp_dir().join(format!("chanto-lsp-large-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let sub = d.join("drivers/net");
+        std::fs::create_dir_all(&sub).unwrap();
+        let clangd = builtin_spec("clangd");
+        // A small project: clangd may run without a database.
+        assert!(may_start(&clangd, &sub, &d).await);
+        // A large one (marked so, rather than writing 20,000 files): only with one.
+        project_sizes().lock().unwrap().insert(d.clone(), true);
+        assert!(!may_start(&clangd, &sub, &d).await);
+        std::fs::write(d.join("compile_commands.json"), "[]").unwrap();
+        assert!(may_start(&clangd, &sub, &d).await);
+        // Other servers aren't held back by size.
+        let other = builtin().into_iter().find(|s| s.name != "clangd").unwrap();
+        assert!(may_start(&other, &sub, &d).await);
+        project_sizes().lock().unwrap().remove(&d);
         let _ = std::fs::remove_dir_all(&d);
     }
 
