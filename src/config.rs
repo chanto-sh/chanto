@@ -245,12 +245,14 @@ pub struct OptimizeConfig {
     /// across 30 MBPP tasks repeated three times it moved 69/90 to 73/90
     /// (within noise) for ~20% more tokens.
     pub spec_check: Option<bool>,
-    /// Ask for low reasoning effort after a reply that only called tools.
-    /// On by default: it costs prompt-cache reuse (DeepSeek re-reads the
-    /// prompt uncached each time the effort changes, ~18% more cost on the
-    /// beyond tier) but solved more: 67/68 vs 64/68 there, and 13/15 vs 9/15
-    /// (fixed high 10/15, fixed low 12/15) on the tasks that flipped.
-    /// `false` keeps the effort the same on every call.
+    /// Ask for low reasoning effort once a turn is under way: from the first
+    /// reply that only called tools, every later call in that turn uses `low`.
+    /// On by default: per-call switching solved more (67/68 vs 64/68 on the
+    /// beyond tier, 13/15 vs 9/15, fixed high 10/15, fixed low 12/15, on the
+    /// tasks that flipped) but cost prompt-cache reuse (DeepSeek re-reads the
+    /// prompt uncached each time the effort changes, ~18% more cost there), so
+    /// the effort now changes at most once a turn, early.
+    /// `false` keeps the provider's default effort on every call.
     pub adaptive_effort: Option<bool>,
     /// Send only Chanto's fixed instructions as the system message and the
     /// per-project part (environment, git status, skills, subagents, MCP
@@ -2059,7 +2061,7 @@ auto_allow = false              # auto mode: sandboxed commands skip the classif
 # quiet = true                    # no narration between tool calls, one short summary (also `--quiet`)
 # provenance = true               # flag unsupported numbers and identifiers in final answers
 # spec_check = true               # treat a written spec as the contract and test against it
-# adaptive_effort = false         # same effort on every call: better caching, fewer hard tasks solved
+# adaptive_effort = false         # provider's default effort on every call, never `low` mid-turn
 # stable_prefix = false           # keep project context in the system message (on by default)
 # defer_tools = true              # rarely used built-in tools load through ToolSearch
 # token_classifier = true         # auto mode: one-token ALLOW, full verdict only on BLOCK

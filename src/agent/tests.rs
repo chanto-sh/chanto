@@ -344,6 +344,37 @@ async fn tools_with_no_user_to_answer_are_not_advertised() {
 }
 
 #[tokio::test]
+async fn a_search_outside_the_project_gets_a_note() {
+    let dir = tmpdir("off-project");
+    let (base, seen) = mock_server(vec![
+        json!({"tool_calls": tc("Bash", json!({"command": "find / -maxdepth 0 -name nothing-here"}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "find . -maxdepth 0"}))}),
+        json!({"content": "Done."}),
+    ])
+    .await;
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
+    agent
+        .run_turn("fix the bug", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 3);
+    let tool_results: Vec<String> = bodies[2]["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|m| m["role"] == "tool")
+        .map(|m| m["content"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(tool_results.len(), 2);
+    // The whole-disk search ran, and its result steers back to the project.
+    assert!(tool_results[0].contains("searches `/`, outside the project"));
+    // A search of the project itself is left alone.
+    assert!(!tool_results[1].contains("outside the project"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn cached_usage_is_totalled_across_calls() {
     let dir = tmpdir("cached-usage");
     std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
@@ -400,6 +431,57 @@ async fn mechanical_followups_use_low_effort() {
     // An explicit session effort still wins.
     agent.env.set_effort(Some("high".into()));
     assert_eq!(agent.effort().as_deref(), Some("high"));
+}
+
+#[tokio::test]
+async fn adaptive_effort_stays_the_same_within_a_turn() {
+    let dir = tmpdir("effort-sticky");
+    std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
+    let read = || tc("Read", json!({"file_path": "a.txt"}));
+    let (base, seen) = mock_server(vec![
+        json!({"tool_calls": read()}),
+        // Narration with the call used to switch the next call back to the
+        // provider's default effort, and the one after to `low` again.
+        json!({"content": "Checking it once more.", "tool_calls": read()}),
+        json!({"tool_calls": read()}),
+        json!({"content": "Done."}),
+        // The next user turn.
+        json!({"content": "Still done."}),
+    ])
+    .await;
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::AcceptEdits, 32768));
+    agent.env.set_think(true);
+    agent
+        .run_turn("read it", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 4);
+    // The opening call plans at the provider's default effort.
+    assert!(bodies[0].get("reasoning_effort").is_none());
+    // Every call after it sends the same effort, so the cached prefix holds.
+    for b in &bodies[1..] {
+        assert_eq!(b["reasoning_effort"], "low");
+    }
+    // Each call's request is the previous one plus what came after it: the
+    // same tools, and its messages start with all of the previous call's.
+    for w in bodies[1..].windows(2) {
+        assert_eq!(w[0]["tools"], w[1]["tools"]);
+        let (prev, next) = (
+            w[0]["messages"].as_array().unwrap(),
+            w[1]["messages"].as_array().unwrap(),
+        );
+        assert!(next.len() > prev.len());
+        assert_eq!(prev[..], next[..prev.len()]);
+    }
+    // A new user turn opens at the default again.
+    agent
+        .run_turn("and now?", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    let bodies = seen.lock().unwrap().clone();
+    assert!(bodies[4].get("reasoning_effort").is_none());
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]

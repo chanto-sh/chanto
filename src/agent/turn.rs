@@ -44,6 +44,9 @@ impl Agent {
             }
             None => self.run_turn_inner(input, images, cancel).await,
         };
+        // Between turns (compaction, side questions) adaptive effort reads the
+        // conversation as before; the next turn starts at the default again.
+        self.turn_low_effort = false;
         // The checkpoint snapshot runs alongside the turn. Anything that changes
         // files waits for it before running, so if the turn changed something
         // it's already done; make sure the saved session records it. A turn
@@ -91,6 +94,8 @@ impl Agent {
         self.turn_evidence.clear();
         // A fallback model serves one turn; each turn tries the session's model first.
         self.turn_fallback = None;
+        // Adaptive effort starts each turn at the provider's default again.
+        self.turn_low_effort = false;
         // `/model` is handled immediately even mid-turn (it only needs the env),
         // so the system prompt it affects is rebuilt here before it is used.
         if self.system_for_model.as_deref() != Some(self.env.model().as_str())
@@ -1207,6 +1212,29 @@ impl Agent {
                     m.content
                         .push_str(&format!("\n\n<system-reminder>\n{c}\n</system-reminder>"));
                 }
+            }
+            // A call that hunts for a ready-made answer outside the project
+            // (`find /`, `pip download`, `git fsck --lost-found`) still runs,
+            // since the user may want it; its result carries a note steering
+            // back to the project.
+            let project = self.cwd_override.clone().unwrap_or_else(|| self.env.cwd());
+            let home = dirs::home_dir();
+            for m in &mut self.messages[first_result..] {
+                if m.role != Role::Tool {
+                    continue;
+                }
+                let Some(what) = batch
+                    .iter()
+                    .find(|c| m.tool_call_id.as_deref() == Some(c.id.as_str()))
+                    .and_then(|c| {
+                        crate::loopwatch::off_project_search(c, &project, home.as_deref())
+                    })
+                else {
+                    continue;
+                };
+                m.content.push_str("\n\n");
+                m.content
+                    .push_str(&crate::loopwatch::off_project_note(&what));
             }
             // Loop guard: identical calls in a row, the same failure again and
             // again, long failure runs, or edits undoing earlier edits. The
