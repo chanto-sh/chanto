@@ -551,17 +551,51 @@ fn skip_alias(n: &str) -> bool {
         || EXACT.contains(&n)
 }
 
-/// `inherited` PATH entries the login shell's PATH lacks stay first (an
-/// activated venv), then the login shell's PATH in its order, without repeats.
+/// The inherited PATH keeps its order: it is what Chanto was started with,
+/// an activated venv first. The login shell can't decide that order: on macOS
+/// its `path_helper` puts the system directories first and moves the
+/// inherited entries after them, so a venv's `python3` would lose to
+/// `/usr/local/bin`'s. An entry only the login shell has (a PATH the startup
+/// files extend, when Chanto was launched without them) goes right after the
+/// inherited entry it follows there, or, before any, ahead of the first one
+/// it precedes. No repeats.
 fn merge_path(inherited: Option<&str>, captured: &str) -> String {
-    let cap: Vec<&str> = captured.split(':').filter(|s| !s.is_empty()).collect();
-    let mut out: Vec<&str> = Vec::new();
-    for e in inherited.unwrap_or("").split(':').filter(|s| !s.is_empty()) {
-        if !cap.contains(&e) && !out.contains(&e) {
-            out.push(e);
+    let inherited: Vec<&str> = inherited
+        .unwrap_or("")
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .collect();
+    let mut leading: Vec<&str> = Vec::new();
+    let mut first: Option<&str> = None;
+    let mut after: Vec<(&str, Vec<&str>)> = Vec::new();
+    let mut last: Option<&str> = None;
+    for e in captured.split(':').filter(|s| !s.is_empty()) {
+        if inherited.contains(&e) {
+            first = first.or(Some(e));
+            last = Some(e);
+        } else if let Some(anchor) = last {
+            match after.iter_mut().find(|(a, _)| *a == anchor) {
+                Some((_, extra)) => extra.push(e),
+                None => after.push((anchor, vec![e])),
+            }
+        } else {
+            leading.push(e);
         }
     }
-    for e in cap {
+    let mut order: Vec<&str> = Vec::new();
+    for e in &inherited {
+        if first == Some(*e) {
+            order.append(&mut leading);
+        }
+        order.push(e);
+        if let Some((_, extra)) = after.iter().find(|(a, _)| a == e) {
+            order.extend(extra);
+        }
+    }
+    // Nothing in common (or no inherited PATH): the captured one goes after.
+    order.append(&mut leading);
+    let mut out: Vec<&str> = Vec::new();
+    for e in order {
         if !out.contains(&e) {
             out.push(e);
         }
@@ -885,5 +919,32 @@ pub(crate) mod tests {
             "{s}"
         );
         assert_eq!(merge_path(None, "/a::/b:/a"), "/a:/b");
+    }
+
+    #[test]
+    fn an_activated_venv_stays_first_after_path_helper() {
+        // macOS's login shell runs path_helper: system directories first, the
+        // inherited entries (the venv) moved after them.
+        assert_eq!(
+            merge_path(
+                Some("/venv/bin:/usr/bin:/bin"),
+                "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/venv/bin"
+            ),
+            "/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin"
+        );
+    }
+
+    #[test]
+    fn startup_files_extend_a_bare_launch_path() {
+        // Launched from a GUI with a bare PATH: what the startup files add
+        // comes before the system directories, as they put it.
+        assert_eq!(
+            merge_path(
+                Some("/usr/bin:/bin"),
+                "/opt/homebrew/bin:/Users/u/.cargo/bin:/usr/bin:/bin"
+            ),
+            "/opt/homebrew/bin:/Users/u/.cargo/bin:/usr/bin:/bin"
+        );
+        assert_eq!(merge_path(Some("/usr/bin"), "/usr/bin:/x"), "/usr/bin:/x");
     }
 }
