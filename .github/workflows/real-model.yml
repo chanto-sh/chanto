@@ -52,17 +52,17 @@ jobs:
             model: gemma-4-e4b
             url: https://huggingface.co/google/gemma-4-E4B-it-qat-q4_0-gguf/resolve/4b4a2c1d584be7264f87aac328a1bc739ce81b6c/gemma-4-E4B_q4_0-it.gguf
             sha256: 676c35070db6dbe52f93e9c864ee0fba4eddea94b9c875d9cb10daff453fbaee
-          # Ollama pulls from its registry; the manifest's checksum pins the model.
+          # Ollama pulls from its registry; the checksum of the weights layer pins the model.
           - leg: qwen3.5-4b, ollama
             server: ollama
             provider: ollama
             model: qwen3.5:4b
-            sha256: d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04
+            sha256: a9d0a3e1d8c91732a3812becd31f8d4a8ff57414903f226306069f0437e2ac50
           - leg: qwen3.5-4b, anthropic
             server: ollama
             provider: anthropic
             model: qwen3.5:4b
-            sha256: d8b0f5e9760cd1682034f292d7ef72ec46f432149be0df7574bf2d6e92e38c04
+            sha256: a9d0a3e1d8c91732a3812becd31f8d4a8ff57414903f226306069f0437e2ac50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -117,7 +117,10 @@ jobs:
             sleep 1
           done
           ollama/bin/ollama pull "$MODEL"
-          echo "$MODEL_SHA256  $HOME/.ollama/models/manifests/registry.ollama.ai/library/${MODEL%%:*}/${MODEL#*:}" | sha256sum -c -
+          # Ollama rewrites the manifest it stores, so check the weights instead:
+          # the pulled manifest must name the pinned layer, whose file must match.
+          grep -q "sha256:$MODEL_SHA256" "$HOME/.ollama/models/manifests/registry.ollama.ai/library/${MODEL%%:*}/${MODEL#*:}"
+          echo "$MODEL_SHA256  $HOME/.ollama/models/blobs/sha256-$MODEL_SHA256" | sha256sum -c -
       - name: Smoke test
         env:
           PROVIDER: ${{ matrix.provider }}
