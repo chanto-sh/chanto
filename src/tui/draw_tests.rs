@@ -365,6 +365,45 @@ async fn the_frame_setting_changes_the_box() {
 }
 
 #[tokio::test]
+async fn a_click_on_the_pill_jumps_to_the_latest() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    let mut t = test_app();
+    for i in 0..40 {
+        t.push(Kind::Markdown(format!("paragraph {i}")));
+    }
+    t.scroll = 5;
+    t.render(80, 20);
+    let j = t.jump_area;
+    assert!(j.width > 0);
+    let click = |kind, column, row| MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    };
+    // A click beside the pill doesn't jump.
+    t.on_mouse(click(
+        MouseEventKind::Down(MouseButton::Left),
+        j.x.saturating_sub(2),
+        j.y,
+    ));
+    t.on_mouse(click(
+        MouseEventKind::Up(MouseButton::Left),
+        j.x.saturating_sub(2),
+        j.y,
+    ));
+    assert_eq!(t.scroll, 5);
+    t.on_mouse(click(MouseEventKind::Down(MouseButton::Left), j.x + 1, j.y));
+    t.on_mouse(click(MouseEventKind::Up(MouseButton::Left), j.x + 1, j.y));
+    assert_eq!(t.scroll, 0);
+    assert!(t.selection.is_none());
+    assert!(t.screen(80, 20).contains("paragraph 39"));
+    // At the bottom there is no pill to click.
+    t.render(80, 20);
+    assert_eq!(t.jump_area.width, 0);
+}
+
+#[tokio::test]
 async fn scrolled_up_shows_how_far() {
     let mut t = test_app();
     for i in 0..40 {
@@ -372,17 +411,17 @@ async fn scrolled_up_shows_how_far() {
     }
     t.scroll = 5;
     let s = t.screen(80, 20);
-    assert!(
-        s.contains("↑ scrolled 5 lines · esc to jump to bottom"),
-        "{s}"
-    );
+    assert!(s.contains("↓ jump to latest · click or esc"), "{s}");
     assert!(!s.contains("paragraph 39"));
     assert!(t.scroll_anchor.is_some());
-    // New output below keeps the same rows on screen.
+    // New output below keeps the same rows on screen, and the pill counts it.
     let before = t.render(80, 20)[2].clone();
     t.push(Kind::Markdown("new at the bottom".into()));
     assert_eq!(t.render(80, 20)[2], before);
     assert_eq!(t.scroll, 7);
+    assert!(t.screen(80, 20).contains("↓ 2 new lines · click or esc"));
+    // Too narrow for the full label: the short one keeps esc.
+    assert!(t.screen(20, 20).contains("↓ latest · esc"));
 }
 
 #[tokio::test]

@@ -4,7 +4,7 @@ expression: snapshot(buffer)
 ---
 40x20
 --- screen ---
- ↑ scrolled 5 lines · esc to jump to bot
+   the tests.
 
    Step 24: checked the project and ran
    the tests.
@@ -18,14 +18,14 @@ expression: snapshot(buffer)
    Step 27: checked the project and ran
    the tests.
 
-   Step 28: checked the project and ran
+   Ste ↓ jump to latest · click or esc
 
 ────────────────────────────────────────
  > Try "fix the failing test"
 ────────────────────────────────────────
  ? keys          ⎇ main · mock · 0% ctx
 --- cell styles ---
-row 00 cols 000..040: Style::new().black().bg(Color::Rgb(128, 128, 128)).underline_color(Color::Reset)
+row 00 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 01 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 03 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
@@ -39,7 +39,9 @@ row 10 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_c
 row 11 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 12 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 13 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
-row 14 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 14 cols 000..006: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 14 cols 006..039: Style::new().black().bg(Color::Rgb(128, 128, 128)).underline_color(Color::Reset)
+row 14 cols 039..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 15 cols 000..040: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 16 cols 000..040: Style::new().fg(Color::Rgb(100, 100, 100)).bg(Color::Reset).underline_color(Color::Reset)
 row 17 cols 000..001: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)

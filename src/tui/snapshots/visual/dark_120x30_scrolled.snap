@@ -4,7 +4,7 @@ expression: snapshot(buffer)
 ---
 120x30
 --- screen ---
-   Step 15: checked the project and ran the tests.                       ↑ scrolled 5 lines · esc to jump to bottom
+   Step 15: checked the project and ran the tests.
 
    Step 16: checked the project and ran the tests.
 
@@ -28,16 +28,14 @@ expression: snapshot(buffer)
 
    Step 26: checked the project and ran the tests.
 
-   Step 27: checked the project and ran the tests.
+   Step 27: checked the project and ran the tests.                                     ↓ jump to latest · click or esc
 
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  > Try "fix the failing test"
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
  ? keys                                                                                          ⎇ main · mock · 0% ctx
 --- cell styles ---
-row 00 cols 000..072: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
-row 00 cols 072..116: Style::new().black().bg(Color::Rgb(128, 128, 128)).underline_color(Color::Reset)
-row 00 cols 116..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 00 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 01 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 03 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
@@ -61,7 +59,9 @@ row 20 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_c
 row 21 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 22 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 23 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
-row 24 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 24 cols 000..086: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 24 cols 086..119: Style::new().black().bg(Color::Rgb(128, 128, 128)).underline_color(Color::Reset)
+row 24 cols 119..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 25 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 26 cols 000..120: Style::new().fg(Color::Rgb(100, 100, 100)).bg(Color::Reset).underline_color(Color::Reset)
 row 27 cols 000..001: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)

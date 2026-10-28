@@ -281,6 +281,8 @@ impl App {
             work_sel: None,
             viewing: None,
             work_area: Rect::default(),
+            jump_area: Rect::default(),
+            scroll_new: 0,
             work_start: 0,
             agent_view: None,
             suggestion: None,
