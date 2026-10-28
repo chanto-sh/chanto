@@ -88,6 +88,27 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(m["verdict"], "pass")
 
 
+class SizeTest(unittest.TestCase):
+    def test_over_the_ceiling_fails(self):
+        self.assertEqual(gate.judge_size(20.0, 25.0, 24.0)["verdict"], "fail")
+
+    def test_growth_under_the_ceiling_passes_and_is_reported(self):
+        m = gate.judge_size(20.0, 21.0, 24.0)
+        self.assertEqual(m["verdict"], "pass")
+        self.assertAlmostEqual(m["change"], 0.05)
+
+    def test_no_base_compares_with_the_ceiling_only(self):
+        m = gate.judge_size(None, 20.0, 24.0)
+        self.assertIsNone(m["change"])
+        self.assertEqual(m["verdict"], "pass")
+
+    def test_the_report_shows_the_size_row(self):
+        report = {"platform": "linux", "base": "b", "head": "h", "ok": True,
+                  "workload": {"turns": 40, "blob_kb": 40},
+                  "metrics": {"binary_mb": gate.judge_size(20.0, 20.5, 24.0)}}
+        self.assertIn("| Binary size (MB) | 20.0 | 20.5 | +2.5% | 24.0 | pass |", gate.markdown(report))
+
+
 class ClockStepTest(unittest.TestCase):
     def test_the_step_is_the_smallest_gap_between_values(self):
         self.assertEqual(gate.clock_step([15.625, 31.25, 46.875]), 15.625)
@@ -139,7 +160,7 @@ class ConfigTest(unittest.TestCase):
 
     def test_every_metric_has_a_tolerance_and_a_ceiling_per_platform(self):
         for platform, ceilings in self.cfg["budgets"].items():
-            self.assertEqual(sorted(ceilings), sorted(gate.LABELS), platform)
+            self.assertEqual(sorted(ceilings), sorted({**gate.LABELS, **gate.SIZE_LABELS}), platform)
         self.assertEqual(sorted(self.cfg["tolerance"]), sorted(gate.LABELS))
 
     def test_the_thresholds_are_sane(self):
