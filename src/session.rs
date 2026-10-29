@@ -674,6 +674,18 @@ pub fn repair_tool_pairs(msgs: &mut Vec<Message>) {
                         .is_some_and(|id| ids.iter().any(|x| x == id))
             })
             .collect();
+        // Every call answered, the answers right after it: the usual case, run
+        // before every model call. Leave it in place, since each remove and
+        // insert below shifts the whole rest of the transcript.
+        let answered = msgs[i].tool_calls.iter().all(|c| {
+            found
+                .iter()
+                .any(|&k| msgs[k].tool_call_id.as_deref() == Some(c.id.as_str()))
+        });
+        if answered && found.iter().enumerate().all(|(j, &k)| k == i + 1 + j) {
+            i += 1 + found.len();
+            continue;
+        }
         // Remove from the back so the earlier indexes stay valid.
         let moved: Vec<Message> = found
             .drain(..)
@@ -837,6 +849,34 @@ mod tests {
         repair_tool_pairs(&mut msgs);
         let after: Vec<(Role, String)> = msgs.iter().map(|m| (m.role, m.content.clone())).collect();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn a_long_well_formed_transcript_is_unchanged() {
+        // Several calls per turn, some answered out of call order: all in
+        // place, so nothing moves.
+        let mut msgs = vec![Message::user("go")];
+        for t in 0..300 {
+            let calls: Vec<_> = (0..3)
+                .map(|c| crate::llm::ToolCall {
+                    id: format!("t{t}c{c}"),
+                    name: "Read".into(),
+                    arguments: serde_json::json!({}),
+                })
+                .collect();
+            let mut assistant = Message::assistant("reading");
+            assistant.tool_calls = calls.clone();
+            msgs.push(assistant);
+            for c in [2, 0, 1] {
+                msgs.push(Message::tool(&calls[c], &format!("result {t}.{c}")));
+            }
+            if t % 7 == 0 {
+                msgs.push(Message::user("<system-reminder>note</system-reminder>"));
+            }
+        }
+        let before = serde_json::to_value(&msgs).unwrap();
+        repair_tool_pairs(&mut msgs);
+        assert_eq!(serde_json::to_value(&msgs).unwrap(), before);
     }
 
     #[test]

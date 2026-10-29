@@ -1,0 +1,1 @@
+- **Long sessions stay fast.** Before every model request Chanto checks that each tool call's results sit right after it, and it used to take every result out and put it back even when they already did, shifting the whole transcript each time. A well-formed transcript is now left in place: a 400-turn session uses about 20% less CPU, and the saving grows with the session.
