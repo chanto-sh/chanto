@@ -868,7 +868,7 @@ mod tests {
             assistant.tool_calls = calls.clone();
             msgs.push(assistant);
             for c in [2, 0, 1] {
-                msgs.push(Message::tool(&calls[c], &format!("result {t}.{c}")));
+                msgs.push(Message::tool(&calls[c], format!("result {t}.{c}")));
             }
             if t % 7 == 0 {
                 msgs.push(Message::user("<system-reminder>note</system-reminder>"));
