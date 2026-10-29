@@ -631,6 +631,31 @@ pub fn hosted_context(kind: ProviderKind, model: &str) -> u32 {
     }
 }
 
+/// What a model lookup changes: `(context size, vision)` from the configured
+/// size, and a warning when that size exceeds what the model was trained on.
+/// An OpenAI-compatible server that reports its window gets all of it (it only
+/// sets when to compact), unless the user set one; Ollama keeps the default,
+/// since there num_ctx is memory the server allocates.
+pub(crate) fn model_info_effect(
+    (ctx_len, vision): (u64, bool),
+    explicit_ctx: bool,
+    serving_kind: ProviderKind,
+    num_ctx: u32,
+) -> (u32, bool, Option<String>) {
+    let mut n = num_ctx;
+    if !explicit_ctx && serving_kind == ProviderKind::Openai && ctx_len > n as u64 {
+        n = ctx_len.min(u32::MAX as u64) as u32;
+    }
+    let mut warning = None;
+    if ctx_len > 0 && n as u64 > ctx_len {
+        warning = Some(format!(
+            "num_ctx {n} exceeds the model's trained context {ctx_len}; clamping"
+        ));
+        n = ctx_len as u32;
+    }
+    (n, vision, warning)
+}
+
 /// Model-metadata cache lifetime: a model's context window and vision support
 /// are effectively fixed, so a day keeps startup instant (the fetch is paid at
 /// most once per day) while still picking up a reconfigured or re-pulled model
@@ -648,10 +673,11 @@ fn unix_now() -> u64 {
         .unwrap_or(0)
 }
 
-/// A fresh cached `(context length, vision)` for this endpoint+model, or `None`
-/// when absent or older than the TTL. A `\0` separates the key's two parts so no
-/// base URL / model name can collide with another pairing.
-fn model_info_cached(base_url: &str, model: &str) -> Option<(u64, bool)> {
+/// A fresh cached answer for this endpoint+model: `Some(None)` when the server
+/// had no metadata for it, `None` when nothing fresh is cached. A `\0`
+/// separates the key's two parts so no base URL / model name can collide with
+/// another pairing.
+fn model_info_cached(base_url: &str, model: &str) -> Option<Option<(u64, bool)>> {
     let key = format!("{base_url}\u{0}{model}");
     let v: Value =
         serde_json::from_str(&std::fs::read_to_string(model_info_cache_path()).ok()?).ok()?;
@@ -659,13 +685,17 @@ fn model_info_cached(base_url: &str, model: &str) -> Option<(u64, bool)> {
     if unix_now().saturating_sub(e.get("t")?.as_u64()?) > MODEL_INFO_TTL_SECS {
         return None;
     }
-    Some((e.get("ctx")?.as_u64()?, e.get("vision")?.as_bool()?))
+    if e.get("unknown").and_then(Value::as_bool) == Some(true) {
+        return Some(None);
+    }
+    Some(Some((e.get("ctx")?.as_u64()?, e.get("vision")?.as_bool()?)))
 }
 
-/// Record `(context length, vision)` for this endpoint+model. Best-effort: a
-/// write failure just means the next start fetches again. The temp-then-rename
-/// keeps a concurrent reader from seeing a half-written file.
-fn model_info_cache_store(base_url: &str, model: &str, val: (u64, bool)) {
+/// Record the server's answer for this endpoint+model, `None` when it had no
+/// metadata. Best-effort: a write failure just means the next start fetches
+/// again. The temp-then-rename keeps a concurrent reader from seeing a
+/// half-written file.
+fn model_info_cache_store(base_url: &str, model: &str, val: Option<(u64, bool)>) {
     let path = model_info_cache_path();
     let mut v: Value = std::fs::read_to_string(&path)
         .ok()
@@ -674,8 +704,14 @@ fn model_info_cache_store(base_url: &str, model: &str, val: (u64, bool)) {
     let Some(obj) = v.as_object_mut() else { return };
     obj.insert(
         format!("{base_url}\u{0}{model}"),
-        json!({ "ctx": val.0, "vision": val.1, "t": unix_now() }),
+        match val {
+            Some((ctx, vision)) => json!({ "ctx": ctx, "vision": vision, "t": unix_now() }),
+            None => json!({ "unknown": true, "t": unix_now() }),
+        },
     );
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
     let tmp = path.with_extension("json.tmp");
     if std::fs::write(&tmp, v.to_string()).is_ok() {
         let _ = std::fs::rename(&tmp, &path);
@@ -1211,29 +1247,37 @@ impl Provider {
     pub async fn model_info(&self, model: &str) -> Option<(u64, bool)> {
         let cacheable = matches!(self.kind, ProviderKind::Openai | ProviderKind::Ollama);
         if cacheable && let Some(hit) = model_info_cached(&self.base_url, model) {
-            return Some(hit);
+            return hit;
         }
-        let info = self.model_info_uncached(model).await;
-        if cacheable && let Some(v) = info {
-            model_info_cache_store(&self.base_url, model, v);
+        let looked = self.model_info_uncached(model).await;
+        // An answer is cached even when it has no size (DeepSeek's model list
+        // gives none), so the next start skips the round trip; a server that
+        // couldn't be reached is asked again next time.
+        if cacheable && let Some(info) = looked {
+            model_info_cache_store(&self.base_url, model, info);
         }
-        info
+        looked.flatten()
     }
 
-    async fn model_info_uncached(&self, model: &str) -> Option<(u64, bool)> {
+    /// `None` when the server couldn't be asked, `Some(None)` when it answered
+    /// without the metadata.
+    async fn model_info_uncached(&self, model: &str) -> Option<Option<(u64, bool)>> {
         match self.kind {
             ProviderKind::Ollama => {}
-            ProviderKind::Anthropic => return self.anthropic_model_info(model).await,
+            ProviderKind::Anthropic => return Some(self.anthropic_model_info(model).await),
             // No network: the context table is enough, and startup stays fast.
             ProviderKind::OpenaiResponses
             | ProviderKind::Bedrock
             | ProviderKind::Vertex
             | ProviderKind::Azure
             | ProviderKind::Foundry => {
-                return Some((hosted_context(self.kind, model) as u64, true));
+                return Some(Some((hosted_context(self.kind, model) as u64, true)));
             }
             ProviderKind::Openai => {
-                return self.openai_model_info(model).await.map(|ctx| (ctx, true));
+                return self
+                    .openai_model_info(model)
+                    .await
+                    .map(|ctx| ctx.map(|ctx| (ctx, true)));
             }
         }
         let v: Value = self
@@ -1258,14 +1302,16 @@ impl Provider {
             .as_array()
             .map(|a| a.iter().any(|c| c == "vision"))
             .unwrap_or(false);
-        Some((ctx, vision))
+        Some(Some((ctx, vision)))
     }
 
     /// Context window an OpenAI-compatible server reports for `model`: the
     /// model list's `max_model_len` (vLLM), `context_length` (OpenRouter-style
     /// catalogs), `max_context_length` (LM Studio) or `meta.n_ctx_train`
     /// (llama.cpp), else LiteLLM's `/model/info`. Quick, since startup waits.
-    async fn openai_model_info(&self, model: &str) -> Option<u64> {
+    /// `None` when the server couldn't be asked; `Some(None)` when it answered
+    /// without a size, as DeepSeek's list does.
+    async fn openai_model_info(&self, model: &str) -> Option<Option<u64>> {
         let key = self.bearer().await.ok().flatten();
         let get = |url: String| {
             let mut rb = self
@@ -1287,25 +1333,27 @@ impl Provider {
             }
         };
         let base = self.openai_base();
-        let listed = get(format!("{base}/models")).await;
-        let entry = listed
-            .as_ref()
-            .and_then(|v| v["data"].as_array()?.iter().find(|m| m["id"] == model));
+        let listed = get(format!("{base}/models")).await?;
+        let entry = listed["data"]
+            .as_array()
+            .and_then(|a| a.iter().find(|m| m["id"] == model));
         if let Some(m) = entry {
             let ctx = ["max_model_len", "context_length", "max_context_length"]
                 .iter()
                 .find_map(|k| m[*k].as_u64())
                 .or_else(|| m["meta"]["n_ctx_train"].as_u64());
             if ctx.is_some() {
-                return ctx;
+                return Some(ctx);
             }
         }
-        let v = get(format!("{}/model/info", base.trim_end_matches("/v1"))).await?;
-        v["data"]
-            .as_array()?
-            .iter()
-            .filter(|m| m["model_name"] == model)
-            .find_map(|m| m["model_info"]["max_input_tokens"].as_u64())
+        let v = get(format!("{}/model/info", base.trim_end_matches("/v1"))).await;
+        Some(v.and_then(|v| {
+            v["data"]
+                .as_array()?
+                .iter()
+                .filter(|m| m["model_name"] == model)
+                .find_map(|m| m["model_info"]["max_input_tokens"].as_u64())
+        }))
     }
 
     /// The base for OpenAI-style paths: a bare server address gets `/v1`; a

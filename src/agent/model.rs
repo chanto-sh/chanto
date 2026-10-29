@@ -9,6 +9,7 @@ impl Agent {
         cancel: &CancellationToken,
     ) -> Result<Option<llm::ChatResponse>> {
         crate::util::timing("model call");
+        self.env.settle_model_info().await;
         // Also recover an interrupted turn in the current process, without
         // requiring the user to reload the session from disk.
         crate::session::repair_tool_pairs(&mut self.messages);

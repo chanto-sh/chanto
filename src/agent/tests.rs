@@ -6333,3 +6333,52 @@ async fn auto_mode_survives_always_allow_on_a_protected_edit() {
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_model_lookup_sets_the_context_and_clamps_an_oversized_one() {
+    use crate::llm::{ProviderKind, model_info_effect};
+    // A server that reports its window gets all of it, unless the user set one.
+    assert_eq!(
+        model_info_effect((131_072, true), false, ProviderKind::Openai, 32_768),
+        (131_072, true, None)
+    );
+    assert_eq!(
+        model_info_effect((131_072, true), true, ProviderKind::Openai, 32_768),
+        (32_768, true, None)
+    );
+    // No reported window (DeepSeek): nothing changes.
+    assert_eq!(
+        model_info_effect((0, false), false, ProviderKind::Openai, 32_768),
+        (32_768, false, None)
+    );
+    // A configured size beyond the model's is clamped, with a warning.
+    let (n, _, warning) = model_info_effect((8_192, false), true, ProviderKind::Ollama, 32_768);
+    assert_eq!(n, 8_192);
+    assert!(
+        warning
+            .unwrap()
+            .contains("exceeds the model's trained context 8192")
+    );
+}
+
+#[tokio::test]
+async fn a_lookup_that_outlasted_startup_is_applied_before_the_first_request() {
+    let dir = tmpdir("settle-model-info");
+    let env = make_env("http://127.0.0.1:9", &dir, Mode::Bypass, 32_768);
+    let lookup = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        Some((8_192u64, false))
+    });
+    *env.pending_model_info.lock().unwrap() = Some(crate::agent::PendingModelInfo {
+        lookup,
+        explicit_ctx: true,
+        serving_kind: crate::llm::ProviderKind::Openai,
+    });
+    env.settle_model_info().await;
+    assert_eq!(env.provider.read().unwrap().num_ctx, 8_192);
+    assert!(!env.vision());
+    assert!(env.pending_model_info.lock().unwrap().is_none());
+    // Settling again is a no-op.
+    env.settle_model_info().await;
+    assert_eq!(env.provider.read().unwrap().num_ctx, 8_192);
+}

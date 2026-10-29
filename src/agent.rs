@@ -425,6 +425,8 @@ pub struct Env {
     /// start, the new project's after `/cd`.
     pub auto_mode: RwLock<(Vec<String>, bool)>,
     pub provider: RwLock<Provider>,
+    /// The model's metadata lookup when startup didn't wait for it.
+    pub pending_model_info: Mutex<Option<PendingModelInfo>>,
     model: RwLock<String>,
     mode: RwLock<Mode>,
     /// The mode an edit's "always allow" switched away from to accept edits.
@@ -602,6 +604,15 @@ mod checkpoint_files {
             })
             .collect())
     }
+}
+
+/// A model metadata lookup that outlasted startup (a slow or unreachable
+/// server), and what applying it needs.
+pub struct PendingModelInfo {
+    pub lookup: tokio::task::JoinHandle<Option<(u64, bool)>>,
+    /// The user set the context size, so a reported window doesn't raise it.
+    pub explicit_ctx: bool,
+    pub serving_kind: llm::ProviderKind,
 }
 
 pub struct EnvInit {
@@ -783,6 +794,7 @@ impl Env {
             think: AtomicBool::new(think),
             effort: RwLock::new(effort),
             vision: AtomicBool::new(i.vision),
+            pending_model_info: Mutex::new(None),
             text_tools: AtomicBool::new(false),
             cwd: RwLock::new(i.cwd),
             read_files: Default::default(),
@@ -1097,6 +1109,24 @@ impl Env {
     }
     pub fn vision(&self) -> bool {
         self.vision.load(Ordering::Relaxed)
+    }
+    /// Apply a model lookup that was still running when startup finished: the
+    /// first model request waits for it, since the context size and vision
+    /// support shape the request.
+    pub async fn settle_model_info(&self) {
+        let pending = self.pending_model_info.lock().unwrap().take();
+        let Some(p) = pending else { return };
+        let Ok(Some(info)) = p.lookup.await else {
+            return;
+        };
+        let current = self.provider.read().unwrap().num_ctx;
+        let (num_ctx, vision, warning) =
+            llm::model_info_effect(info, p.explicit_ctx, p.serving_kind, current);
+        self.set_vision(vision);
+        self.provider.write().unwrap().num_ctx = num_ctx;
+        if let Some(w) = warning {
+            self.frontend.emit(Event::Warn(w));
+        }
     }
     pub fn set_vision(&self, b: bool) {
         self.vision.store(b, Ordering::Relaxed)
