@@ -14,13 +14,17 @@
     "with the base, measured on the same runner, is what holds a change.",
     "reps: startup runs are cheap and noisy, so there are more of them; the",
     "turn workload is a whole session each but still costs a second, next to",
-    "two eight-minute builds. With 20 and 15 samples the U test reaches",
-    "alpha=0.01 when about 75% of one set sits above the other, so a 10% shift",
-    "against ~1% run-to-run noise is caught with room to spare. warmup runs",
-    "are discarded.",
+    "two eight-minute builds. With 50 and 15 samples the U test reaches",
+    "alpha=0.01 when about 64% (startup) or 75% (turns) of one set sits above",
+    "the other, so a 10% shift",
+    "against ~1% run-to-run noise is caught with room to spare. Startup was 20",
+    "runs, whose median a few milliseconds of jitter on a busy macOS runner",
+    "moved by 15% with the code unchanged. warmup runs are discarded.",
     "tolerance: below this change a metric is never called a regression.",
     "alpha: the one-sided Mann-Whitney U test on the two sample sets.",
-    "large_change: fails even without a significant p-value.",
+    "large_change: fails even without a significant p-value, if p is under",
+    "large_change_p: the sets must at least lean apart. Noise that moved only",
+    "the median gives p near 0.3; a real 10-30% shift, well under 0.001.",
     "device: the same 40-turn workload pinned to `cpus` core against wall-time",
     "and memory ceilings, for a machine with no spare cores and a phone's",
     "memory. It has no base to compare with, since wall time on a shared",
@@ -37,7 +41,7 @@
   "alpha": 0.01,
   "warmup": 2,
   "reps": {
-    "startup": 20,
+    "startup": 50,
     "turns": 15
   },
   "workload": {
@@ -51,6 +55,7 @@
     "turn_rss_mb": 0.08
   },
   "large_change": 0.10,
+  "large_change_p": 0.1,
   "stress": {
     "_comment": [
       "tests/perf/stress.py: a long session and a large tree, against the fake",
