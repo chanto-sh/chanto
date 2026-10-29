@@ -394,11 +394,11 @@ pub(super) static NESTED_WARNED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 pub fn start_sandbox_probe() {
+    if !already_sandboxed() {
+        let _ = PROBE.set(true);
+        return;
+    }
     if cfg!(target_os = "macos") && PROBE.get().is_none() {
-        if !already_sandboxed() {
-            let _ = PROBE.set(true);
-            return;
-        }
         let mut t = PROBE_THREAD.lock().unwrap_or_else(|e| e.into_inner());
         if t.is_none() {
             *t = Some(std::thread::spawn(probe_nested));
@@ -409,7 +409,7 @@ pub fn start_sandbox_probe() {
 /// Whether this process already runs inside a sandbox: `sandbox_check` with
 /// no operation, a system call where the probe below starts a process.
 #[cfg(target_os = "macos")]
-fn already_sandboxed() -> bool {
+pub(super) fn already_sandboxed() -> bool {
     unsafe extern "C" {
         fn sandbox_check(
             pid: libc::pid_t,
@@ -421,8 +421,9 @@ fn already_sandboxed() -> bool {
     unsafe { sandbox_check(libc::getpid(), std::ptr::null(), 0) != 0 }
 }
 
+/// Nothing to probe off macOS: its sandbox is the only one that can't nest.
 #[cfg(not(target_os = "macos"))]
-fn already_sandboxed() -> bool {
+pub(super) fn already_sandboxed() -> bool {
     false
 }
 
@@ -447,9 +448,6 @@ pub fn sandbox_works() -> bool {
         return true;
     }
     *PROBE.get_or_init(|| {
-        if !already_sandboxed() {
-            return true;
-        }
         let handle = PROBE_THREAD
             .lock()
             .unwrap_or_else(|e| e.into_inner())

@@ -359,3 +359,13 @@ fn seatbelt_refuses_renaming_dot_git() {
     assert!(root.join(".git/config").exists());
     let _ = std::fs::remove_dir_all(&root);
 }
+
+#[test]
+fn outside_a_sandbox_no_probe_starts() {
+    if sandbox::already_sandboxed() {
+        return; // the probe is needed here, and starts as before
+    }
+    start_sandbox_probe();
+    assert_eq!(sandbox::PROBE.get(), Some(&true));
+    assert!(sandbox::PROBE_THREAD.lock().unwrap().is_none());
+}
