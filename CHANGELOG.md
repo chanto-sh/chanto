@@ -2,10 +2,18 @@
 
 ## Unreleased
 
+## v0.1.8 (October 28, 2026)
+
 - **Smaller install.** The release binary is about 21% smaller (25.7 to 20.3 MB on Apple Silicon): Chanto's own code is now optimized for size, like its dependencies, while the search and text crates stay optimized for speed. Startup and per-request CPU and peak memory are unchanged or slightly lower.
 - **Faster file search in big repositories.** Grep's default `files_with_matches` mode lets ripgrep search on every core again and sorts the matching files newest first itself: ripgrep's own `--sortr=modified` made it search on one thread. Listing the files that mention `MODULE_DESCRIPTION` in the Linux kernel (97,000 files) went from 8-21 s to 3.4 s, in the same order.
 - **Adaptive effort keeps the prompt cache.** Adaptive effort now changes the reasoning effort at most once a turn: the turn opens at the provider's default, and from the first reply that only called tools every later call in that turn asks for `low`, even after a reply with text. Switching between `low` and the default on every call made providers such as DeepSeek re-read the whole history uncached, 31% of uncached input in SWE benchmark runs.
 - **Off-task searching.** Chanto works from the code in the working directory and its own dependencies instead of hunting for a ready-made fix on the disk, in package caches, other checkouts or the project's upstream history. A call that searches outside the project (`find /`, `grep -r ~`, `pip download`, `git fsck --lost-found`) still runs, and its result carries a short note steering back to the project. In benchmark sessions such searches were 18% of all calls.
+- **Activated virtualenvs on macOS.** Bash commands run with the venv Chanto was started in first on PATH again. The shell snapshot took PATH's order from the login shell, whose `path_helper` puts the system directories first, so `python3` and `pytest` resolved to `/usr/local/bin` instead of the venv, and test runs failed for missing packages.
+- **DeepSeek V4's context window.** `deepseek/deepseek-flash` and the other V4 models are budgeted at their 1M-token window instead of 128K, so long sessions compact far less often. DeepSeek's model list doesn't report a window, so Chanto had fallen back to its default.
+- **License notices in every download.** Release archives, the npm packages, Homebrew installs and the container image now include `LICENSE`, `NOTICE` and `THIRD_PARTY_LICENSES.txt`, the license of every open-source crate built into the binary.
+- **Language servers in large projects.** In a project with more than 20,000 files, reading a file no longer starts a language server; the first edit does. clangd runs there only with a compilation database (`compile_commands.json`, `compile_flags.txt` or `.clangd`): without one it guessed each file's flags, started one server per directory with a Makefile, and on the Linux kernel used about 500 MB for diagnostics that were mostly noise. Smaller projects are unchanged.
+- **Jump to latest.** Scrolled up in full-screen mode, a pill on the transcript's bottom row says how many new lines arrived below (`↓ 12 new lines · click or esc`); a click on it, or esc, jumps back to the latest output.
+- **Interrupting a turn stops its command.** A Bash command running when the turn was interrupted (Esc, Ctrl+C, SIGTERM) was left running about half the time, along with everything it started, even after Chanto exited. It is now stopped like a command that times out.
 
 ## v0.1.7 (October 27, 2026)
 
