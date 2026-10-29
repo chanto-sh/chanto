@@ -288,6 +288,54 @@ impl ProviderKind {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ChatResponse {
+    pub text: String,
+    pub reasoning: String,
+    pub tool_calls: Vec<ToolCall>,
+    pub usage: Usage,
+    pub finish_reason: Option<String>,
+    /// See [`Message::provider_items`]; the agent stores it on the assistant message.
+    pub provider_items: Option<ProviderItems>,
+    /// Account rate limits reported by the provider on this call (ChatGPT plans).
+    pub rate_limits: Option<crate::limits::Snapshot>,
+}
+
+/// Provider safety stops must remain visible even when no answer was sent.
+impl ChatResponse {
+    pub fn safety_stopped(&self) -> bool {
+        matches!(
+            self.finish_reason.as_deref(),
+            Some("content_filter" | "refusal")
+        )
+    }
+
+    pub fn show_safety_notice(&mut self, on_delta: &mut (dyn FnMut(Delta) + Send)) {
+        if !self.safety_stopped() {
+            return;
+        }
+        // A filtered response can contain an unfinished tool call. Neither
+        // native calls nor tool-shaped text from this response should run.
+        self.tool_calls.clear();
+        let notice = match self.finish_reason.as_deref() {
+            Some("content_filter") => {
+                "ⓘ This response was stopped by the provider's safety filter."
+            }
+            _ if self.text.trim().is_empty() => {
+                "ⓘ The provider declined to respond to this request."
+            }
+            _ => return,
+        };
+        let text = if self.text.trim().is_empty() {
+            notice.to_string()
+        } else {
+            format!("\n\n{notice}")
+        };
+        self.text.push_str(&text);
+        on_delta(Delta::Text(text));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
