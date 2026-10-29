@@ -1,0 +1,1 @@
+- **Lighter start on macOS.** Chanto no longer starts a `sandbox-exec` probe on every launch. It asks the kernel whether it already runs inside a sandbox, which is the only case where its own sandbox can fail to start, and runs the probe only then. That saves about 8 ms of CPU per launch.

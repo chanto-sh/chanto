@@ -383,7 +383,10 @@ pub fn sandbox_on() -> bool {
 /// Operation not permitted`), e.g. when Chanto itself runs inside another
 /// tool's sandbox. Then every command would fail; instead treat the sandbox as
 /// off (the outer one still applies) so nothing assumes isolation it lacks.
-/// The probe starts at launch in the background; the first check waits for it.
+/// Only a process already in a sandbox can hit this, and the kernel says
+/// whether it is, so the usual unsandboxed process starts no probe at all.
+/// Otherwise the probe starts at launch in the background; the first check
+/// waits for it.
 pub(super) static PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 pub(super) static PROBE_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<bool>>> =
     std::sync::Mutex::new(None);
@@ -392,11 +395,35 @@ pub(super) static NESTED_WARNED: std::sync::atomic::AtomicBool =
 
 pub fn start_sandbox_probe() {
     if cfg!(target_os = "macos") && PROBE.get().is_none() {
+        if !already_sandboxed() {
+            let _ = PROBE.set(true);
+            return;
+        }
         let mut t = PROBE_THREAD.lock().unwrap_or_else(|e| e.into_inner());
         if t.is_none() {
             *t = Some(std::thread::spawn(probe_nested));
         }
     }
+}
+
+/// Whether this process already runs inside a sandbox: `sandbox_check` with
+/// no operation, a system call where the probe below starts a process.
+#[cfg(target_os = "macos")]
+fn already_sandboxed() -> bool {
+    unsafe extern "C" {
+        fn sandbox_check(
+            pid: libc::pid_t,
+            operation: *const libc::c_char,
+            kind: libc::c_int,
+            ...
+        ) -> libc::c_int;
+    }
+    unsafe { sandbox_check(libc::getpid(), std::ptr::null(), 0) != 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn already_sandboxed() -> bool {
+    false
 }
 
 pub(super) fn probe_nested() -> bool {
@@ -420,6 +447,9 @@ pub fn sandbox_works() -> bool {
         return true;
     }
     *PROBE.get_or_init(|| {
+        if !already_sandboxed() {
+            return true;
+        }
         let handle = PROBE_THREAD
             .lock()
             .unwrap_or_else(|e| e.into_inner())
