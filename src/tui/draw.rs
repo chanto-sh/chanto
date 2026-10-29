@@ -357,6 +357,9 @@ impl App {
         // The quiet view leaves a turn's steps out (no rows, no blank line).
         let quiet = self.quiet_mask();
         let hides = |i: usize| quiet.as_ref().is_some_and(|q| q.hides(i));
+        if self.scroll == 0 {
+            self.scroll_new = 0;
+        }
         // Scrolled up: keep the same top row on screen by growing the offset
         // by the rows added below it since the last frame.
         if let Some((ai, ak, below)) = self.scroll_anchor.take()
@@ -368,7 +371,9 @@ impl App {
                 .map(|j| self.block_len(j, width, &mut live) + 1)
                 .sum::<usize>()
                 .saturating_sub(ak);
-            self.scroll += now.saturating_sub(below);
+            let grown = now.saturating_sub(below);
+            self.scroll += grown;
+            self.scroll_new += grown;
         }
         let need = h + self.scroll;
         let mut spans: Vec<(usize, usize)> = Vec::new(); // (block, lines incl. the blank after it)
@@ -439,17 +444,29 @@ impl App {
         if !self.help {
             self.paint_screen_links(f.buffer_mut(), widget, &links);
         }
+        // Scrolled up: a pill on the transcript's last row, next to where new
+        // output appears; a click on it (or esc) jumps to the latest.
+        self.jump_area = Rect::default();
         if self.scroll > 0 {
-            let s = format!(
-                " ↑ scrolled {} · esc to jump to bottom ",
-                crate::util::plural(self.scroll, "line")
-            );
+            let mut s = if self.scroll_new > 0 {
+                format!(
+                    " ↓ {} · click or esc ",
+                    crate::util::plural(self.scroll_new, "new line")
+                )
+            } else {
+                " ↓ jump to latest · click or esc ".to_string()
+            };
+            if s.chars().count() as u16 + 2 > area.width {
+                s = " ↓ latest · esc ".to_string();
+            }
+            let width = (s.chars().count() as u16).min(area.width);
             let r = Rect {
-                x: area.x + area.width.saturating_sub(s.len() as u16 + 1),
-                y: area.y,
-                width: s.len() as u16,
+                x: area.x + area.width.saturating_sub(width + 1),
+                y: area.y + area.height.saturating_sub(1),
+                width,
                 height: 1,
             };
+            self.jump_area = r;
             let st = if theme::no_color() {
                 Style::default().add_modifier(Modifier::REVERSED)
             } else {

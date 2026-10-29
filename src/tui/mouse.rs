@@ -15,6 +15,18 @@ impl App {
                 self.selection = None;
             }
             MouseEventKind::Down(MouseButton::Left) => {
+                // The "↓ jump to latest" pill: back to the bottom, nothing selected.
+                let j = self.jump_area;
+                if self.scroll > 0
+                    && j.width > 0
+                    && m.row == j.y
+                    && m.column >= j.x
+                    && m.column < j.x + j.width
+                {
+                    self.scroll = 0;
+                    self.selection = None;
+                    return;
+                }
                 // Rapid presses in the same cell build a double/triple click; a
                 // fourth press starts a fresh run. The first press of a run may
                 // have toggled a block, so take that back before selecting.

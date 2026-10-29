@@ -996,6 +996,11 @@ struct App {
     viewing: Option<String>,
     /// Where the agents panel was drawn, and its first visible item (for clicks).
     work_area: Rect,
+    /// Where the "↓ jump to latest" pill was drawn while scrolled up (empty
+    /// otherwise), so a click on it can jump to the bottom.
+    jump_area: Rect,
+    /// Rows of output that arrived below the view since it was scrolled up.
+    scroll_new: usize,
     work_start: usize,
     /// The viewed agent's rendered transcript: (key, version, width, expand_all, lines).
     agent_view: Option<(String, u64, u16, bool, Vec<Line<'static>>)>,
