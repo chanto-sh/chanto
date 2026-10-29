@@ -1128,13 +1128,19 @@ pub fn strip_ansi(s: &str) -> String {
 
 pub struct BashOutput;
 
+/// How long unfiltered output must stay quiet before `wait_secs` returns it.
+#[cfg(not(test))]
+const SETTLE: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SETTLE: Duration = Duration::from_millis(300);
+
 #[async_trait]
 impl Tool for BashOutput {
     fn name(&self) -> String {
         "BashOutput".into()
     }
     fn description(&self) -> String {
-        "Read new output from a background shell started with run_in_background. Returns only output produced since the last read, plus status. Optional `filter` regex keeps matching lines only. Optional `wait_secs` (max 600) waits until there is new output (a matching line, with `filter`) or the shell exits, instead of sleeping.".into()
+        "Read new output from a background shell started with run_in_background. Returns only output produced since the last read, plus status. Optional `filter` regex keeps matching lines only. Optional `wait_secs` (max 600) waits instead of sleeping: until the shell exits, new output has stopped arriving for a few seconds, or (with `filter`) a matching line appears. One call with a long `wait_secs` is enough for a test run or build; don't poll.".into()
     }
     fn schema(&self) -> Value {
         json!({
@@ -1173,10 +1179,16 @@ impl Tool for BashOutput {
             let waiting = if filter.is_some() {
                 "Waiting for matching output"
             } else {
-                "Waiting for new output"
+                "Waiting for output to settle"
             };
             ctx.progress(format!("{waiting} (up to {}s)", secs.min(600)));
             let deadline = std::time::Instant::now() + Duration::from_secs(secs.min(600));
+            // Without a filter, return once new output has stopped arriving
+            // for a moment, not on its first byte: a test run printing a dot
+            // per test otherwise ends every wait at once, and each return
+            // costs the model another call.
+            let mut seen = sh.output.lock().unwrap().len();
+            let mut changed = std::time::Instant::now();
             loop {
                 if sh.exit.lock().unwrap().is_some()
                     || ctx.cancel.is_cancelled()
@@ -1193,7 +1205,13 @@ impl Tool for BashOutput {
                     }
                     match &filter {
                         Some(re) => out[start..].lines().any(|l| re.is_match(l)),
-                        None => out.len() > pos,
+                        None => {
+                            if out.len() != seen {
+                                seen = out.len();
+                                changed = std::time::Instant::now();
+                            }
+                            out.len() > pos && changed.elapsed() >= SETTLE
+                        }
                     }
                 };
                 if fresh {

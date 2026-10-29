@@ -124,7 +124,7 @@ async fn output_status_distinguishes_success_failure_and_filtered_silence() {
         assert_eq!(out.is_error, error);
     }
     assert!(capture.0.lock().unwrap().iter().any(
-        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for new output (up to 5s)")
+        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for output to settle (up to 5s)")
     ));
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -149,7 +149,7 @@ async fn waiting_poll_reports_what_it_is_waiting_for_then_shows_arriving_output(
         _ = tokio::time::sleep(Duration::from_millis(10)) => {}
     }
     assert!(capture.0.lock().unwrap().iter().any(
-        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for new output (up to 5s)")
+        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for output to settle (up to 5s)")
     ));
     *shell.output.lock().unwrap() = "Compiling chanto\n".into();
     let out = tokio::time::timeout(Duration::from_secs(2), poll)
@@ -160,6 +160,35 @@ async fn waiting_poll_reports_what_it_is_waiting_for_then_shows_arriving_output(
         out.display.as_deref(),
         Some("Still running · 1 new line\nCompiling chanto")
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_wait_collects_output_until_it_stops_arriving() {
+    // A test run prints a dot per test: the wait must not end on the first one.
+    let (ctx, shell, _, dir) = setup();
+    let writer = shell.clone();
+    let feed = tokio::spawn(async move {
+        for _ in 0..10 {
+            writer.output.lock().unwrap().push('.');
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+    let started = std::time::Instant::now();
+    let out = tokio::time::timeout(
+        Duration::from_secs(4),
+        BashOutput.run(json!({"bash_id":"bash_6","wait_secs":5}), &ctx),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    feed.await.unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(out.content.contains(".........."), "{}", out.content);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
