@@ -270,6 +270,15 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
+    def server_bind(self):
+        # HTTPServer.server_bind also looks up the host's name
+        # (socket.getfqdn), a reverse DNS query. On GitHub's macOS runners,
+        # after the first couple, each one waits 35 s for the runner's DNS to
+        # time out, and the perf gate starts a server per session: 20 minutes
+        # of a PR's run. The name only matters to CGI, so skip it.
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
+
 
 def main():
     global SCEN, LOGF, CTX
