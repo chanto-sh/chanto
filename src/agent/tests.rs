@@ -5882,6 +5882,8 @@ async fn hanging_mcp_server() -> (String, Arc<Mutex<Vec<Value>>>) {
                         json!({"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]})
                     }
                     "tools/call" => {
+                        // Recorded, so a test can act once the call is in flight.
+                        notes.lock().unwrap().push(body.clone());
                         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                         return;
                     }
@@ -5966,8 +5968,24 @@ async fn an_mcp_tool_call_that_never_answers_times_out_and_esc_aborts_it() {
     let mut agent = Agent::new(env_with_mcp(&base, &dir, client));
     let cancel = CancellationToken::new();
     let c2 = cancel.clone();
+    // Press esc once the call is in flight, not after a fixed delay: on a slow
+    // runner the delay can pass before the call is sent, and then there is
+    // nothing to cancel.
+    let calls = notes.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        for _ in 0..200 {
+            let n = calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|n| n["method"] == "tools/call")
+                .count();
+            if n >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         c2.cancel();
     });
     let end = tokio::time::timeout(

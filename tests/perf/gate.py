@@ -131,7 +131,9 @@ def child_env(home, port):
 
 def wait_with_usage(binary, args, env):
     """Run one child to completion and return its usage and exit code."""
-    start = time.monotonic()
+    # perf_counter, not monotonic: Windows' monotonic clock ticks every
+    # 15.6 ms, so a quick child could measure as taking no time at all.
+    start = time.perf_counter()
     p = subprocess.Popen(
         [binary, *args],
         env=env,
@@ -151,7 +153,7 @@ def wait_with_usage(binary, args, env):
         code = p.returncode
         cpu_ms = (ru.ru_utime + ru.ru_stime) * 1000
         rss_mb = peak_rss_mb(ru)
-    return Usage(cpu_ms, rss_mb, (time.monotonic() - start) * 1000), code
+    return Usage(cpu_ms, rss_mb, (time.perf_counter() - start) * 1000), code
 
 
 def peak_rss_mb(ru):
