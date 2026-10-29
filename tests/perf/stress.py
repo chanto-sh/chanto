@@ -20,6 +20,13 @@ network is involved, with the session's own HOME and CHANTO_HOME.
   (ripgrep's --sortr) is not; every step has a
   ceiling, and so does memory.
 
+- Resume: `--continue` the long session. Its request must carry the
+  session's history, within a ceiling on time to that request and on memory.
+
+- Cleanup: a session starts clangd (where installed), a background command
+  and an MCP server, then ends normally, or on SIGTERM or SIGINT during a
+  command. None of them may outlive it, and a signal gives 128 + its number.
+
 - Language servers, where clangd is installed: in the large tree, reading and
   editing a C file must not start one (too many files to start one on a Read,
   and no compilation database for clangd); in a small C project the same
@@ -31,6 +38,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -41,6 +49,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 FAKE = REPO / "tests/chaos/fakemodel.py"
+FAKE_MCP = REPO / "tests/chaos/fakemcp.py"
 CONFIG = REPO / "tests/perf/budgets.json"
 
 LONG_SCENARIO = r'''
@@ -124,8 +133,55 @@ def respond(body, n):
 '''
 
 
+# Continuing the long session: the first request must carry its history (the
+# compaction summary).
+RESUME_SCENARIO = r'''
+import json, os
+
+
+def respond(body, n):
+    usage = {"prompt_tokens": max(1, len(json.dumps(body)) // 4), "completion_tokens": 5}
+    if n == 0:
+        if "Read every file in order" in json.dumps(body):
+            with open(os.environ["STRESS_LOG"], "a") as f:
+                f.write("history\n")
+        # Hold the session for the memory sampler.
+        return {"tool_calls": [{"name": "Bash", "args": {"command": "sleep 1"}}], "usage": usage}
+    return {"text": "resumed", "usage": usage}
+'''
+
+# Start everything Chanto can leave behind, then hold a foreground command
+# (STRESS_HOLD seconds; Chanto refuses a bare foreground `sleep` of more than
+# a moment) while the session ends or is signalled.
+BACKGROUND_MARKER = "sleep 3071"
+CLEANUP_SCENARIO = r'''
+import json, os
+STEPS = [
+    {"name": "Read", "args": {"file_path": "main.c"}},
+    {"name": "Bash", "args": {"command": "sleep 3071", "run_in_background": True}},
+    {"name": "mcp__fake__echo", "args": {"text": "ping"}},
+    {"name": "Bash", "args": {"command": "python3 -c 'import time; time.sleep(%s)'" % os.environ["STRESS_HOLD"]}},
+]
+
+
+def respond(body, n):
+    usage = {"prompt_tokens": max(1, len(json.dumps(body)) // 4), "completion_tokens": 20}
+    if n < len(STEPS):
+        return {"tool_calls": [STEPS[n]], "usage": usage}
+    return {"text": "done", "usage": usage}
+'''
+
+
+def proc_name(comm):
+    """A `ps` command name without its directory, or macOS's parentheses
+    around a process that is exiting."""
+    name = Path(comm.strip()).name
+    return name[1:-1] if name.startswith("(") and name.endswith(")") else name
+
+
 def tree_usage(root):
-    """Resident MB of `root` and everything under it, and their command names."""
+    """Resident MB of `root` and everything under it, and their command names
+    by pid."""
     out = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,rss=,comm="], capture_output=True, text=True).stdout
     kids, rss, comm = {}, {}, {}
     for line in out.splitlines():
@@ -136,19 +192,21 @@ def tree_usage(root):
             continue
         kids.setdefault(ppid, []).append(pid)
         rss[pid] = r
-        comm[pid] = Path(parts[3]).name if len(parts) > 3 else ""
-    total, names, todo = 0, set(), [root]
+        comm[pid] = proc_name(parts[3]) if len(parts) > 3 else ""
+    total, names, todo = 0, {}, [root]
     while todo:
         p = todo.pop()
         total += rss.get(p, 0)
-        names.add(comm.get(p, ""))
+        names[p] = comm.get(p, "")
         todo += kids.get(p, [])
     return total / 1024, names
 
 
-def session(binary, work, home, scenario, num_ctx, env_extra, timeout):
+def session(binary, work, home, scenario, num_ctx, env_extra, timeout, args=(), signal_at=None):
     """One `-p` session: (exit code, peak MB, model request times relative to
-    start, stderr's end, the names of every process it ran)."""
+    start, stderr's end, every process it ran as {pid: name}). `args` go before
+    the prompt; `signal_at` = (n, signum) sends Chanto that signal a second
+    after the fake model gets its nth request."""
     log = home / "model.jsonl"
     log.write_text("")
     script = home / "scenario.py"
@@ -173,18 +231,24 @@ def session(binary, work, home, scenario, num_ctx, env_extra, timeout):
                PWD=str(work), **env_extra)
     cmd = [str(binary), "-p", "--provider", "openai", "--base-url", f"http://127.0.0.1:{port}/v1",
            "--model", "fake", "--num-ctx", str(num_ctx), "--mode", "bypassPermissions",
-           "--output-format", "json", "Work through the task."]
+           "--output-format", "json", *args, "Work through the task."]
     start = time.time()
     p = subprocess.Popen(cmd, cwd=work, env=env, stdin=subprocess.DEVNULL,
                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     peak = [0.0]
-    seen = set()
+    seen = {}
 
     def poll():
+        signal_due = None
         while p.poll() is None:
             mb, names = tree_usage(p.pid)
             peak[0] = max(peak[0], mb)
             seen.update(names)
+            if signal_at and signal_due is None and len(log.read_text().splitlines()) >= signal_at[0]:
+                signal_due = time.time() + 1
+            if signal_due and time.time() >= signal_due:
+                p.send_signal(signal_at[1])
+                signal_due = float("inf")
             time.sleep(0.1)
 
     th = threading.Thread(target=poll, daemon=True)
@@ -271,7 +335,8 @@ def large_tree(binary, cfg, scratch):
     if shutil.which("clangd"):
         # Too large to start a language server on a Read, and no compilation
         # database for clangd: none may run.
-        checks["no language server"] = ("clangd" not in seen, "clangd ran" if "clangd" in seen else "none started")
+        ran = "clangd" in seen.values()
+        checks["no language server"] = (not ran, "clangd ran" if ran else "none started")
     return {"exit": code, "stderr": err if code else "", "checks": checks}
 
 
@@ -285,8 +350,85 @@ def small_project(binary, cfg, scratch):
     home = scratch / "small-home"
     home.mkdir()
     code, _, _, err, seen = session(binary, work, home, SMALL_SCENARIO, 200_000, {}, cfg["timeout_s"])
-    checks = {"language server started": ("clangd" in seen, "clangd ran" if "clangd" in seen else "none started")}
+    ran = "clangd" in seen.values()
+    checks = {"language server started": (ran, "clangd ran" if ran else "none started")}
     return {"exit": code, "stderr": err if code else "", "checks": checks}
+
+
+def resume(binary, cfg, scratch):
+    """Continue the long session: load its whole history, then one turn."""
+    work, home = scratch / "long", scratch / "long-home"
+    marks = home / "history.log"
+    marks.write_text("")
+    code, peak, times, err, _ = session(binary, work, home, RESUME_SCENARIO, 32768,
+                                        {"STRESS_LOG": str(marks)}, cfg["timeout_s"], args=["--continue"])
+    first = times[0] if times else None
+    checks = {
+        "history loaded": ("history" in marks.read_text(),
+                           "the request carries the session" if "history" in marks.read_text() else "a fresh session"),
+        "first request": (first is not None and first <= cfg["first_request_s"],
+                          f"{first:.2f} s (ceiling {cfg['first_request_s']})" if first is not None else "none"),
+        "peak memory": (peak <= cfg["rss_mb"], f"{peak:.1f} MB (ceiling {cfg['rss_mb']})"),
+    }
+    return {"exit": code, "stderr": err if code else "", "checks": checks}
+
+
+def alive(pid, name):
+    """`pid` still runs as `name` (not a reused pid)."""
+    out = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).stdout.strip()
+    return bool(out) and proc_name(out) == name
+
+
+def marked(marker):
+    """Pids of processes whose command line contains `marker`."""
+    out = subprocess.run(["ps", "-A", "-o", "pid=,args="], capture_output=True, text=True).stdout
+    return [int(l.split(None, 1)[0]) for l in out.splitlines() if marker in l]
+
+
+def cleanup(binary, cfg, scratch, how):
+    """A session that starts clangd, a background command and an MCP server,
+    then ends: normally, or on SIGTERM or SIGINT mid-command. Nothing it
+    started may outlive it."""
+    work = scratch / f"cleanup-{how}"
+    work.mkdir()
+    (work / "Makefile").write_text("all: main\n")
+    (work / "main.c").write_text("int main(void) {\n    return 0;\n}\n")
+    subprocess.run(["git", "init", "-q"], cwd=work)
+    home = scratch / f"cleanup-{how}-home"
+    home.mkdir()
+    mcp_ran = home / "mcp-ran"
+    mcp = home / "mcp.json"
+    mcp.write_text(json.dumps({"mcpServers": {"fake": {"command": sys.executable,
+                                                       "args": [str(FAKE_MCP), "ok", str(mcp_ran)]}}}))
+    signum = {"exit": None, "SIGTERM": signal.SIGTERM, "SIGINT": signal.SIGINT}[how]
+    code, _, _, err, seen = session(binary, work, home, CLEANUP_SCENARIO, 200_000,
+                                    {"STRESS_HOLD": "2" if signum is None else "60"}, cfg["timeout_s"],
+                                    args=["--mcp-config", str(mcp)],
+                                    signal_at=(4, signum) if signum else None)
+    # Give children Chanto signalled a moment to go.
+    deadline = time.time() + cfg["grace_s"]
+    while True:
+        left = sorted({name for pid, name in seen.items() if alive(pid, name)}
+                      | ({"sleep (background)"} if marked(BACKGROUND_MARKER) else set()))
+        if not left or time.time() >= deadline:
+            break
+        time.sleep(0.2)
+    for pid, name in seen.items():
+        if alive(pid, name):
+            os.kill(pid, signal.SIGKILL)
+    for pid in marked(BACKGROUND_MARKER):
+        os.kill(pid, signal.SIGKILL)
+    started = ["MCP server" if mcp_ran.exists() else None, "background command" if "sleep" in seen.values() else None]
+    if shutil.which("clangd"):
+        started.append("clangd" if "clangd" in seen.values() else None)
+    want = {"exit": 0, "SIGTERM": 128 + signal.SIGTERM, "SIGINT": 128 + signal.SIGINT}[how]
+    checks = {
+        "children started": (None not in started, ", ".join(x for x in started if x) or "none"),
+        "nothing left running": (not left, ", ".join(left) or "none"),
+    }
+    if signum:
+        checks["exit code"] = (code == want, f"{code} (expected {want})")
+    return {"exit": 0 if code == want else code, "stderr": err if code != want else "", "checks": checks}
 
 
 def markdown(report):
@@ -312,12 +454,15 @@ def main():
     try:
         parts = {
             "long session": long_session(binary, cfg["long_session"], scratch),
+            "resume": resume(binary, cfg["resume"], scratch),
             "large tree": large_tree(binary, cfg["large_tree"], scratch),
         }
         if shutil.which("clangd"):
             parts["small C project"] = small_project(binary, cfg["large_tree"], scratch)
         else:
             print("clangd isn't installed: the language server checks are skipped", file=sys.stderr)
+        for how in ("exit", "SIGTERM", "SIGINT"):
+            parts[f"cleanup on {how}"] = cleanup(binary, cfg["cleanup"], scratch, how)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     report = {"parts": parts, "ok": all(r["exit"] == 0 and all(ok for ok, _ in r["checks"].values())

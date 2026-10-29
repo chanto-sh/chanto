@@ -75,7 +75,9 @@
       "step_s": {"glob_all": 1, "grep_paths": 3, "grep_count": 4, "read_large": 1, "read_c": 1, "edit_c": 1},
       "grep_vs_rg": 2.0,
       "timeout_s": 900
-    }
+    },
+    "resume": {"first_request_s": 3, "rss_mb": 80, "timeout_s": 120},
+    "cleanup": {"grace_s": 3, "timeout_s": 120}
   },
   "device": {
     "cpus": 1,
