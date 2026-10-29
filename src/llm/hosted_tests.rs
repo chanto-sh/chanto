@@ -678,6 +678,30 @@ async fn live_smoke() {
 }
 
 #[tokio::test]
+async fn a_model_list_without_a_size_is_remembered_but_an_unreachable_server_is_not() {
+    let j = |v: Value| v.to_string().into_bytes();
+    // DeepSeek's shape: the list answers but names no window, and there is no
+    // `/model/info`. Asking again on every start cost each launch ~600 ms.
+    let (base, seen) = super::mock::serve_bytes(vec![
+        (200, "application/json", j(json!({"data": [{"id": "m"}]}))),
+        (404, "application/json", j(json!({}))),
+    ])
+    .await;
+    let p = Provider::new(ProviderKind::Openai, &base, None, 32768);
+    assert_eq!(p.model_info("m").await, None);
+    let asked = seen.lock().unwrap().headers.len();
+    assert_eq!(asked, 2);
+    // The next start answers from the cache, without a request.
+    assert_eq!(p.model_info("m").await, None);
+    assert_eq!(seen.lock().unwrap().headers.len(), asked);
+    // A server that can't be reached is asked again next time.
+    let down = "http://127.0.0.1:9";
+    let p = Provider::new(ProviderKind::Openai, down, None, 32768);
+    assert_eq!(p.model_info("m").await, None);
+    assert_eq!(super::model_info_cached(down, "m"), None);
+}
+
+#[tokio::test]
 async fn openai_compatible_servers_report_their_context_window() {
     let j = |v: Value| v.to_string().into_bytes();
     // vLLM-style: the model list carries the window.

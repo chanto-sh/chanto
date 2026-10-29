@@ -842,51 +842,52 @@ async fn setup_session(
     // only feeds `vision`/`num_ctx` (and dump-prompt's output is independent of
     // both). Skip its network round-trip so these paths stay fast — a hosted
     // provider's model_info otherwise blocks startup ~600ms fetching `/models`.
-    let info = if cli.run_tool.is_some() || cli.dump_prompt {
-        None
-    } else {
-        match model.split_once('/') {
-            Some((p, m)) if cfg.providers.contains_key(p) => {
-                cfg.providers[p].provider(cfg.num_ctx()).model_info(m).await
+    let explicit_ctx = cfg.num_ctx.is_some();
+    let lookup: Option<std::pin::Pin<Box<dyn std::future::Future<Output = _> + Send>>> =
+        if cli.run_tool.is_some() || cli.dump_prompt {
+            None
+        } else {
+            Some(match model.split_once('/') {
+                Some((p, m)) if cfg.providers.contains_key(p) => {
+                    let (p, m) = (cfg.providers[p].provider(cfg.num_ctx()), m.to_string());
+                    Box::pin(async move { p.model_info(&m).await })
+                }
+                // A built-in hosted provider manages its own context budget; just read vision support.
+                Some((p, m))
+                    if cfg.allows_builtin_hosted() && llm::builtin_provider(p, m).is_some() =>
+                {
+                    let (p, m) = (llm::builtin_provider(p, m).unwrap(), m.to_string());
+                    Box::pin(async move { p.model_info(&m).await.map(|(_, v)| (0, v)) })
+                }
+                Some(("ollama" | "lmstudio" | "llamacpp", _)) => {
+                    let (p, m, _) = doctor::resolve(&cfg, &model);
+                    Box::pin(async move { p.model_info(&m).await })
+                }
+                _ => {
+                    let (p, m) = (provider.clone(), model.clone());
+                    Box::pin(async move { p.model_info(&m).await })
+                }
+            })
+        };
+    // A quick answer (cached, or a server on this machine) applies now; a slow
+    // or unreachable server doesn't hold up the start: the first model request
+    // waits for it instead (`Env::settle_model_info`).
+    let mut pending_lookup = None;
+    if let Some(lookup) = lookup {
+        let mut task = tokio::spawn(lookup);
+        match tokio::time::timeout(std::time::Duration::from_millis(50), &mut task).await {
+            Ok(Ok(Some(info))) => {
+                let (num_ctx, v, warning) =
+                    llm::model_info_effect(info, explicit_ctx, serving_kind, cfg.num_ctx());
+                vision = v;
+                cfg.num_ctx = Some(num_ctx);
+                warnings.extend(warning);
             }
-            // A built-in hosted provider manages its own context budget; just read vision support.
-            Some((p, m))
-                if cfg.allows_builtin_hosted() && llm::builtin_provider(p, m).is_some() =>
-            {
-                llm::builtin_provider(p, m)
-                    .unwrap()
-                    .model_info(m)
-                    .await
-                    .map(|(_, v)| (0, v))
-            }
-            Some(("ollama" | "lmstudio" | "llamacpp", _)) => {
-                let (p, m, _) = doctor::resolve(&cfg, &model);
-                p.model_info(&m).await
-            }
-            _ => provider.model_info(&model).await,
-        }
-    };
-    crate::util::timing("model_info done");
-    if let Some((ctx_len, v)) = info {
-        vision = v;
-        // An OpenAI-compatible server that reports its window gets all of it
-        // (it only sets when to compact). Ollama keeps the default: there,
-        // num_ctx is memory the server allocates.
-        if cfg.num_ctx.is_none()
-            && serving_kind == ProviderKind::Openai
-            && ctx_len > cfg.num_ctx() as u64
-        {
-            cfg.num_ctx = Some(ctx_len.min(u32::MAX as u64) as u32);
-        }
-        if ctx_len > 0 && (cfg.num_ctx() as u64) > ctx_len {
-            warnings.push(format!(
-                "num_ctx {} exceeds the model's trained context {}; clamping",
-                cfg.num_ctx(),
-                ctx_len
-            ));
-            cfg.num_ctx = Some(ctx_len as u32);
+            Ok(_) => {}
+            Err(_) => pending_lookup = Some(task),
         }
     }
+    crate::util::timing("model_info done");
     let provider = Provider::new(
         cfg.provider,
         &cfg.base_url(),
@@ -1153,6 +1154,13 @@ async fn setup_session(
         frontend,
         interactive,
     });
+    if let Some(lookup) = pending_lookup {
+        *env.pending_model_info.lock().unwrap() = Some(agent::PendingModelInfo {
+            lookup,
+            explicit_ctx,
+            serving_kind,
+        });
+    }
     *env.session_tool_policy.write().unwrap() = (
         list(&cli.allowed_tools),
         list(&cli.disallowed_tools).unwrap_or_default(),
