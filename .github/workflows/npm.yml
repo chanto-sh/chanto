@@ -59,16 +59,31 @@ jobs:
             # npm may stage a publish for approval on npmjs.com (2FA) rather than
             # release it, and `npm view` doesn't see staged or brand-new
             # versions; a refusal to publish over one also counts as done.
-            local out
-            if ! out=$(cd "$1" && npm publish --access public --provenance --tag "$dist_tag" 2>&1); then
+            # A transient failure (the registry or sigstore's transparency log
+            # timing out or erroring, or a provenance upload that npm retried
+            # into a 409 duplicate) is tried again after a pause; anything else,
+            # such as a refused token, fails at once.
+            local out attempt
+            for attempt in 1 2 3 4; do
+              if out=$(cd "$1" && npm publish --access public --provenance --tag "$dist_tag" 2>&1); then
+                echo "$out"
+                return
+              fi
               if grep -qiE 'publish over (the )?previously (published|staged)' <<<"$out"; then
                 echo "$name@$version is already published or staged"
                 return
               fi
               echo "$out"
-              return 1
-            fi
-            echo "$out"
+              if [ "$attempt" = 4 ] || ! grep -qE 'TLOG_CREATE_ENTRY_ERROR|E50[0-9]|E429|ETIMEDOUT|ECONNRESET|EAI_AGAIN|socket hang up' <<<"$out"; then
+                return 1
+              fi
+              echo "::warning::$name@$version: transient publish failure (attempt $attempt of 4), retrying"
+              sleep $((attempt * 30))
+              if npm view "$name@$version" version >/dev/null 2>&1; then
+                echo "$name@$version reached npm after all"
+                return
+              fi
+            done
           }
           # Platform packages first, so @chanto/cli never points at a missing one.
           for dir in npm/*/; do
