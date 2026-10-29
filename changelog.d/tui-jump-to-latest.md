@@ -1,1 +1,0 @@
-- **Jump to latest.** Scrolled up in full-screen mode, a pill on the transcript's bottom row says how many new lines arrived below (`↓ 12 new lines · click or esc`); a click on it, or esc, jumps back to the latest output.
