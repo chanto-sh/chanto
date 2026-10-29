@@ -179,6 +179,12 @@ def proc_name(comm):
     return name[1:-1] if name.startswith("(") and name.endswith(")") else name
 
 
+def ran_clangd(seen):
+    """clangd among the processes seen. On Linux it renames its main thread,
+    so ps shows `clangd.main` once it is up."""
+    return any(name == "clangd" or name.startswith("clangd.") for name in seen.values())
+
+
 def tree_usage(root):
     """Resident MB of `root` and everything under it, and their command names
     by pid."""
@@ -335,7 +341,7 @@ def large_tree(binary, cfg, scratch):
     if shutil.which("clangd"):
         # Too large to start a language server on a Read, and no compilation
         # database for clangd: none may run.
-        ran = "clangd" in seen.values()
+        ran = ran_clangd(seen)
         checks["no language server"] = (not ran, "clangd ran" if ran else "none started")
     return {"exit": code, "stderr": err if code else "", "checks": checks}
 
@@ -350,7 +356,7 @@ def small_project(binary, cfg, scratch):
     home = scratch / "small-home"
     home.mkdir()
     code, _, _, err, seen = session(binary, work, home, SMALL_SCENARIO, 200_000, {}, cfg["timeout_s"])
-    ran = "clangd" in seen.values()
+    ran = ran_clangd(seen)
     checks = {"language server started": (ran, "clangd ran" if ran else "none started")}
     return {"exit": code, "stderr": err if code else "", "checks": checks}
 
@@ -374,9 +380,10 @@ def resume(binary, cfg, scratch):
 
 
 def alive(pid, name):
-    """`pid` still runs as `name` (not a reused pid)."""
+    """`pid` still runs as `name` (not a reused pid). A process may rename its
+    main thread (clangd becomes `clangd.main`), so compare up to the first dot."""
     out = subprocess.run(["ps", "-p", str(pid), "-o", "comm="], capture_output=True, text=True).stdout.strip()
-    return bool(out) and proc_name(out) == name
+    return bool(out) and proc_name(out).split(".")[0] == name.split(".")[0]
 
 
 def marked(marker):
@@ -420,7 +427,7 @@ def cleanup(binary, cfg, scratch, how):
         os.kill(pid, signal.SIGKILL)
     started = ["MCP server" if mcp_ran.exists() else None, "background command" if "sleep" in seen.values() else None]
     if shutil.which("clangd"):
-        started.append("clangd" if "clangd" in seen.values() else None)
+        started.append("clangd" if ran_clangd(seen) else None)
     want = {"exit": 0, "SIGTERM": 128 + signal.SIGTERM, "SIGINT": 128 + signal.SIGINT}[how]
     checks = {
         "children started": (None not in started, ", ".join(x for x in started if x) or "none"),
