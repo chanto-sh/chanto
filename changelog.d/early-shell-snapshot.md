@@ -1,0 +1,1 @@
+- **Quicker first shell command.** Chanto captures your shell's setup (PATH, aliases and functions from your startup files) while the model writes its first reply, instead of when the first command needs it. With busy startup files the first command in a session used to wait for that capture, 2.5 s in one measurement; it now waits for whatever the reply didn't cover, 0.5 s there.
