@@ -9,6 +9,14 @@ impl Agent {
         cancel: &CancellationToken,
     ) -> Result<Option<llm::ChatResponse>> {
         crate::util::timing("model call");
+        // A session's first shell command would wait for the shell snapshot
+        // (the user's startup files: seconds on a busy setup). Taking it while
+        // the model writes its reply hides that; a command that arrives first
+        // waits for the same capture.
+        if self.tool_allowed("Bash") && !self.env.shell_snapshot.initialized() {
+            let env = self.env.clone();
+            tokio::spawn(async move { crate::shell::snapshot::ensure(&env).await });
+        }
         self.env.settle_model_info().await;
         // Also recover an interrupted turn in the current process, without
         // requiring the user to reload the session from disk.

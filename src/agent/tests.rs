@@ -6382,3 +6382,24 @@ async fn a_lookup_that_outlasted_startup_is_applied_before_the_first_request() {
     env.settle_model_info().await;
     assert_eq!(env.provider.read().unwrap().num_ctx, 8_192);
 }
+
+#[tokio::test]
+async fn the_shell_snapshot_is_taken_during_the_first_model_call() {
+    let dir = tmpdir("early-snapshot");
+    let (base, _seen) = mock_server(vec![json!({"content": "Done."})]).await;
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::Default, 32768));
+    assert!(!agent.env.shell_snapshot.initialized());
+    agent
+        .run_turn("hi", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    // Started in the background by the model call, with no shell command run.
+    for _ in 0..50 {
+        if agent.env.shell_snapshot.initialized() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(agent.env.shell_snapshot.initialized());
+    let _ = std::fs::remove_dir_all(dir);
+}
