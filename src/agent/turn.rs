@@ -299,8 +299,8 @@ impl Agent {
         let n_msgs = self.messages.len();
         match self.messages.last_mut() {
             Some(last) if last.role == Role::User && n_msgs > 1 => {
-                last.content.push_str("\n\n");
-                last.content.push_str(&content);
+                std::sync::Arc::make_mut(&mut last.content).push_str("\n\n");
+                std::sync::Arc::make_mut(&mut last.content).push_str(&content);
                 last.images.extend(images);
                 if self.depth == 0
                     && let Some(cp) = self.env.checkpoints.lock().unwrap().last_mut()
@@ -439,7 +439,7 @@ impl Agent {
                 }
             };
             if let Some(last) = self.messages.last_mut().filter(|m| m.role == Role::User) {
-                last.content.push_str(&format!(
+                std::sync::Arc::make_mut(&mut last.content).push_str(&format!(
                     "\n\n<system-reminder>Verified mode: when you finish, chanto runs {checks} and checks that existing tests were not deleted or weakened. \
                      Run them yourself before your final answer, and fix the code, not the tests. The user's instructions come first: \
                      if a check fails in code they told you to leave alone, leave it and say so in your answer.</system-reminder>"
@@ -1209,7 +1209,7 @@ impl Agent {
                         .rev()
                         .find(|m| m.role == Role::Tool)
                 {
-                    m.content
+                    std::sync::Arc::make_mut(&mut m.content)
                         .push_str(&format!("\n\n<system-reminder>\n{c}\n</system-reminder>"));
                 }
             }
@@ -1232,8 +1232,8 @@ impl Agent {
                 else {
                     continue;
                 };
-                m.content.push_str("\n\n");
-                m.content
+                std::sync::Arc::make_mut(&mut m.content).push_str("\n\n");
+                std::sync::Arc::make_mut(&mut m.content)
                     .push_str(&crate::loopwatch::off_project_note(&what));
             }
             // Loop guard: identical calls in a row, the same failure again and
@@ -1247,7 +1247,7 @@ impl Agent {
                     (
                         m.tool_call_id.clone().unwrap_or_default(),
                         m.content.starts_with("Error") || m.content.starts_with("Blocked"),
-                        m.content.clone(),
+                        String::clone(&m.content),
                     )
                 })
                 .collect();

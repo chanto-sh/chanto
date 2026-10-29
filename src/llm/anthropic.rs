@@ -136,7 +136,7 @@ pub(super) fn body(req: &ChatRequest) -> Value {
     let mut msgs: Vec<Value> = Vec::new();
     for m in &req.messages {
         match m.role {
-            Role::System if msgs.is_empty() => system.push(m.content.clone()),
+            Role::System if msgs.is_empty() => system.push(String::clone(&m.content)),
             Role::System => push(
                 &mut msgs,
                 "user",

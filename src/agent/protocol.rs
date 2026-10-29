@@ -169,13 +169,13 @@ pub(super) fn move_project_context(msgs: &mut [Message]) {
     let Some(user) = msgs.iter().position(|m| m.role == Role::User) else {
         return;
     };
-    let project = msgs[0].content.split_off(at);
+    let project = std::sync::Arc::make_mut(&mut msgs[0].content).split_off(at);
     let m = &mut msgs[user];
-    m.content = format!(
+    m.set_content(format!(
         "<system-reminder>\n{}\n</system-reminder>\n\n{}",
         project.trim(),
         m.content
-    );
+    ));
 }
 
 /// Neutralize the text protocol's control tags inside untrusted tool output.
@@ -210,7 +210,7 @@ pub(super) fn to_text_protocol(msgs: &[Message], tools: &[llm::ToolSpec]) -> Vec
     for m in msgs {
         match m.role {
             Role::System => {
-                let mut s = m.content.clone();
+                let mut s = String::clone(&m.content);
                 s.push_str("\n\n# Tools\nYou can call these tools. To call one, output exactly:\n<tool_call>\n{\"name\": \"ToolName\", \"arguments\": {...}}\n</tool_call>\nYou may output several tool_call blocks in one response. Then stop and wait: results arrive in <tool_response> blocks. When the task is done, reply normally without any tool_call.\n\nAvailable tools (JSON schemas):\n");
                 for t in tools {
                     s.push_str(&format!("{}\n", serde_json::json!({"name": t.name, "description": t.description, "parameters": t.parameters})));
@@ -218,7 +218,7 @@ pub(super) fn to_text_protocol(msgs: &[Message], tools: &[llm::ToolSpec]) -> Vec
                 out.push(Message::system(s));
             }
             Role::Assistant if !m.tool_calls.is_empty() => {
-                let mut s = m.content.clone();
+                let mut s = String::clone(&m.content);
                 for c in &m.tool_calls {
                     s.push_str(&format!(
                         "\n<tool_call>\n{}\n</tool_call>",
@@ -239,8 +239,8 @@ pub(super) fn to_text_protocol(msgs: &[Message], tools: &[llm::ToolSpec]) -> Vec
                         if prev.role == Role::User
                             && prev.content.starts_with("<tool_response") =>
                     {
-                        prev.content.push('\n');
-                        prev.content.push_str(&block);
+                        std::sync::Arc::make_mut(&mut prev.content).push('\n');
+                        std::sync::Arc::make_mut(&mut prev.content).push_str(&block);
                     }
                     _ => out.push(Message::user(block)),
                 }

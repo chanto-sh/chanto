@@ -716,7 +716,7 @@ pub fn redact_request_messages(msgs: &[crate::llm::Message]) -> Option<Vec<crate
         }
         let out = out.get_or_insert_with(|| msgs.to_vec());
         if let Some(c) = content {
-            out[i].content = c;
+            out[i].set_content(c);
         }
         for (j, a) in args.into_iter().enumerate() {
             if let Some(a) = a {
@@ -734,7 +734,7 @@ pub fn redact_messages(msgs: &mut [crate::llm::Message]) {
     }
     for m in msgs {
         if let Cow::Owned(r) = redact(&m.content) {
-            m.content = r;
+            m.set_content(r);
         }
         for c in &mut m.tool_calls {
             redact_value(&mut c.arguments);
@@ -840,7 +840,7 @@ impl MessageRedactor {
             }
             let entry = &mut self.contents[i];
             if let Some(s) = &entry.redacted {
-                m.content.clone_from(s);
+                m.set_content(s.clone());
             }
             entry.arguments.truncate(m.tool_calls.len());
             for (j, c) in m.tool_calls.iter_mut().enumerate() {
@@ -1254,7 +1254,7 @@ mod tests {
         check(&mut cache, &msgs);
         with_values(&[("NEW_KEY", "later-known-secret")]);
         check(&mut cache, &msgs);
-        msgs[0].content = "changed later-known-secret".into();
+        msgs[0].set_content("changed later-known-secret");
         msgs[0].tool_calls.push(crate::llm::ToolCall {
             id: "1".into(),
             name: "Bash".into(),
@@ -1303,7 +1303,7 @@ mod tests {
         let mut cache = MessageRedactor::default();
         let mut msgs = vec![crate::llm::Message::user("plain-value-1 here")];
         cache.redact(&mut msgs.clone());
-        msgs[0].content = "secret-value-1 her".into();
+        msgs[0].set_content("secret-value-1 her");
         assert_eq!(msgs[0].content.len(), "plain-value-1 here".len());
         let mut sent = msgs.clone();
         cache.redact(&mut sent);
@@ -1464,7 +1464,7 @@ mod tests {
         });
         let msgs = vec![clean[0].clone(), call];
         let masked = redact_request_messages(&msgs).unwrap();
-        assert_eq!(masked[0].content, "nothing here");
+        assert_eq!(*masked[0].content, "nothing here");
         assert_eq!(
             masked[1].tool_calls[0].arguments["command"],
             "echo [REDACTED:DEPLOY_TOKEN]"

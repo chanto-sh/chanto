@@ -903,7 +903,7 @@ async fn quiet_view_of_a_real_turn_keeps_the_session_intact() {
         agent
             .messages
             .iter()
-            .any(|m| m.content == "Let me read the file." && m.tool_calls.len() == 1)
+            .any(|m| *m.content == "Let me read the file." && m.tool_calls.len() == 1)
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

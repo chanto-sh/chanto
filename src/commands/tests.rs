@@ -961,7 +961,7 @@ async fn rewind_lists_checkpoints_and_validates_arguments() {
         ),
         o => panic!("expected Reset, got {}", kind(&o)),
     }
-    assert!(!agent.messages.iter().any(|m| m.content == "first prompt"));
+    assert!(!agent.messages.iter().any(|m| *m.content == "first prompt"));
 }
 
 #[tokio::test]
@@ -1021,7 +1021,7 @@ async fn sessions_are_listed_renamed_and_resumed() {
         agent
             .messages
             .iter()
-            .any(|m| m.content == "plan the migration")
+            .any(|m| *m.content == "plan the migration")
     );
     match handle(&mut agent, "/fork side-quest").await {
         Outcome::Reset(Some(note)) => assert!(note.starts_with("Forked session: "), "{note}"),

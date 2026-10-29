@@ -23,6 +23,7 @@ use anyhow::{Context, Result, bail};
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -44,8 +45,11 @@ pub struct ToolCall {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
+    /// Shared, so the copies of the conversation a request needs (the
+    /// published snapshot, the request itself) don't copy every message's
+    /// text; `Arc::make_mut` copies one only when it changes.
     #[serde(default)]
-    pub content: String,
+    pub content: Arc<String>,
     /// Base64-encoded images (png/jpeg) attached to the message.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<String>,
@@ -118,13 +122,17 @@ impl Message {
     pub fn new(role: Role, content: impl Into<String>) -> Self {
         Message {
             role,
-            content: content.into(),
+            content: Arc::new(content.into()),
             images: vec![],
             tool_calls: vec![],
             tool_call_id: None,
             tool_name: None,
             provider_items: None,
         }
+    }
+    /// Replace the text (the old text stays with whoever still shares it).
+    pub fn set_content(&mut self, c: impl Into<String>) {
+        self.content = Arc::new(c.into());
     }
     pub fn system(c: impl Into<String>) -> Self {
         Self::new(Role::System, c)

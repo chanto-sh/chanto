@@ -341,7 +341,7 @@ impl Session {
         // Don't persist images (large); keep a placeholder.
         for m in &mut messages {
             if !m.images.is_empty() {
-                m.content
+                std::sync::Arc::make_mut(&mut m.content)
                     .push_str(&format!("\n[{} image(s) omitted]", m.images.len()));
                 m.images.clear();
             }
@@ -805,9 +805,9 @@ mod tests {
             }
             assert!(msgs[2].content.contains("may have run"));
             if partial {
-                assert_eq!(msgs[1].content, "saved result");
+                assert_eq!(*msgs[1].content, "saved result");
             }
-            assert_eq!(msgs[3].content, "continue");
+            assert_eq!(*msgs[3].content, "continue");
             let before = serde_json::to_value(&msgs).unwrap();
             repair_tool_pairs(&mut msgs);
             assert_eq!(serde_json::to_value(&msgs).unwrap(), before);
@@ -842,12 +842,17 @@ mod tests {
                 Role::User
             ]
         );
-        assert_eq!(msgs[2].content, "contents");
+        assert_eq!(*msgs[2].content, "contents");
         // A well-formed transcript is left alone.
-        let before: Vec<(Role, String)> =
-            msgs.iter().map(|m| (m.role, m.content.clone())).collect();
+        let before: Vec<(Role, String)> = msgs
+            .iter()
+            .map(|m| (m.role, String::clone(&m.content)))
+            .collect();
         repair_tool_pairs(&mut msgs);
-        let after: Vec<(Role, String)> = msgs.iter().map(|m| (m.role, m.content.clone())).collect();
+        let after: Vec<(Role, String)> = msgs
+            .iter()
+            .map(|m| (m.role, String::clone(&m.content)))
+            .collect();
         assert_eq!(before, after);
     }
 
@@ -1013,7 +1018,7 @@ mod tests {
                 timestamp: "date".into(),
                 tree: Some("tree".into()),
                 msg_index,
-                prompt: messages[msg_index].content.clone(),
+                prompt: String::clone(&messages[msg_index].content),
                 files: Default::default(),
             })
             .collect();
@@ -1076,7 +1081,7 @@ mod tests {
         let (meta2, _) = Session::load(&cwd, &s2.id).unwrap();
         assert!(!meta2.title.contains(&key), "{}", meta2.title);
         assert!(back[1].images.is_empty() && back[1].content.contains("1 image(s) omitted"));
-        assert_eq!(back[2].content, "ok");
+        assert_eq!(*back[2].content, "ok");
         unsafe {
             if let Some(previous) = previous {
                 std::env::set_var("CHANTO_HOME", previous);

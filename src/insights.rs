@@ -937,7 +937,7 @@ mod tests {
         msgs[0] = Message::system("sys v2");
         s.before_call("m", "[tools]", &msgs);
         s.before_call("m", "[tools, new]", &msgs);
-        msgs[2].content = "[old tool result cleared]".into();
+        msgs[2].set_content("[old tool result cleared]");
         s.expect_break("old tool results cleared");
         s.before_call("m", "[tools, new]", &msgs);
         // A different effort re-renders the prompt even with the same messages.

@@ -48,7 +48,7 @@ pub fn html(
     for m in &mut messages {
         m.images.clear();
         if no_tool_output && m.role == Role::Tool {
-            m.content = "[tool output omitted]".into();
+            m.set_content("[tool output omitted]");
         }
     }
     let mut meta = session.clone();
@@ -280,7 +280,7 @@ mod tests {
         let (_, back) = Session::load(&dir, &imported.id).unwrap();
         assert_eq!(back.len(), messages.len());
         assert!(back[1].content.contains("~/project"));
-        assert_eq!(back[2].content, "reply");
+        assert_eq!(*back[2].content, "reply");
         let json = dir.join("session.json");
         std::fs::copy(imported.path(), &json).unwrap();
         assert_ne!(import(&json, &dir).unwrap().id, imported.id);
