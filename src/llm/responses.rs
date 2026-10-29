@@ -41,7 +41,7 @@ pub(super) fn body(req: &ChatRequest) -> Value {
             input.push(user_images(&std::mem::take(&mut pending_images)));
         }
         match m.role {
-            Role::System if input.is_empty() => instructions.push(m.content.clone()),
+            Role::System if input.is_empty() => instructions.push(String::clone(&m.content)),
             Role::System => input.push(json!({"role": "developer", "content": m.content})),
             Role::User => {
                 let mut parts = vec![json!({"type": "input_text", "text": m.content})];

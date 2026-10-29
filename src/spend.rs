@@ -2059,7 +2059,7 @@ mod tests {
             .messages
             .iter()
             .filter(|m| m.role == crate::llm::Role::Tool)
-            .map(|m| m.content.clone())
+            .map(|m| String::clone(&m.content))
             .collect();
         let _ = std::fs::remove_dir_all(dir);
         (fe, seen, format!("{text}\n{}", tool_results.join("\n")))

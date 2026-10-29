@@ -70,8 +70,8 @@ impl Agent {
                 let note = crate::tools::tool_search::announcement(&new);
                 match self.messages.last_mut() {
                     Some(m) if matches!(m.role, Role::User | Role::Tool) => {
-                        m.content.push_str("\n\n");
-                        m.content.push_str(&note);
+                        std::sync::Arc::make_mut(&mut m.content).push_str("\n\n");
+                        std::sync::Arc::make_mut(&mut m.content).push_str(&note);
                     }
                     _ => self.messages.push(Message::user(note)),
                 }

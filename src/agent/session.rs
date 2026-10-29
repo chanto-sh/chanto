@@ -409,7 +409,7 @@ impl Agent {
     pub fn refresh_system(&mut self) {
         let sys = self.system_prompt();
         match self.messages.first_mut() {
-            Some(m) if m.role == Role::System => m.content = sys,
+            Some(m) if m.role == Role::System => m.set_content(sys),
             _ => self.messages.insert(0, Message::system(sys)),
         }
         self.system_for_model = Some(self.env.model());

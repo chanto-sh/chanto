@@ -479,7 +479,7 @@ impl Server {
                         if m.role == crate::llm::Role::Tool {
                             fe.emit(Event::ToolEnd {
                                 id: m.tool_call_id.clone().unwrap_or_default(),
-                                content: m.content.clone(),
+                                content: String::clone(&m.content),
                                 display: String::new(),
                                 is_error: false,
                                 images: Vec::new(),

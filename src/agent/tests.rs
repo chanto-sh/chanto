@@ -516,8 +516,8 @@ fn a_side_question_sees_the_context_without_changing_it() {
     // The real conversation is untouched — that is the point of /btw.
     assert_eq!(base.len(), 2);
     assert_eq!(msgs.len(), 3);
-    assert_eq!(msgs[0].content, "sys");
-    assert_eq!(msgs[1].content, "read src/main.rs");
+    assert_eq!(*msgs[0].content, "sys");
+    assert_eq!(*msgs[1].content, "read src/main.rs");
     assert!(msgs[2].content.contains("what does main do?"));
     assert!(msgs[2].content.contains("side question"));
 }
@@ -916,12 +916,12 @@ fn project_context_moves_to_the_first_user_message() {
         Message::user("more"),
     ];
     move_project_context(&mut msgs);
-    assert_eq!(msgs[0].content, "fixed");
+    assert_eq!(*msgs[0].content, "fixed");
     assert_eq!(
-        msgs[1].content,
+        *msgs[1].content,
         "<system-reminder>\n# Environment\n- Working directory: /x\n</system-reminder>\n\nhi"
     );
-    assert_eq!(msgs[3].content, "more");
+    assert_eq!(*msgs[3].content, "more");
     // Nothing to move: unchanged.
     let mut plain = vec![Message::system("fixed"), Message::user("hi")];
     move_project_context(&mut plain);
@@ -1078,7 +1078,7 @@ async fn quiet_adds_one_stable_instruction_and_keeps_the_steps() {
         );
         // ...while the session keeps the narration and the tool call.
         assert!(agent.messages.iter().any(|m| m.role == Role::Assistant
-            && m.content == "Let me read the file."
+            && *m.content == "Let me read the file."
             && m.tool_calls.len() == 1));
         agent
             .run_turn("and again", vec![], CancellationToken::new())
@@ -3014,7 +3014,7 @@ async fn btw_threads_earlier_side_questions_and_forks_with_the_conversation() {
         .await
         .messages
         .iter()
-        .map(|m| m.content.clone())
+        .map(|m| String::clone(&m.content))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
@@ -3750,7 +3750,7 @@ async fn auto_compacts_near_context_limit() {
             .iter()
             .any(|m| m.content.contains("SUMMARY OF EVERYTHING"))
     );
-    assert!(!agent.messages.iter().any(|m| m.content == "first answer"));
+    assert!(!agent.messages.iter().any(|m| *m.content == "first answer"));
     assert_eq!(seen.lock().unwrap().len(), 3);
     // The prompt that triggered compaction reaches the model as written,
     // folded into the continuation user message (with the summary) rather
@@ -4137,7 +4137,7 @@ async fn autocompact_off_and_a_token_threshold() {
         .await
         .unwrap();
     assert_eq!(seen.lock().unwrap().len(), 2, "no summary call");
-    assert!(agent.messages.iter().any(|m| m.content == "first answer"));
+    assert!(agent.messages.iter().any(|m| *m.content == "first answer"));
     // A token count well under the configured 85%: compacts there.
     let dir = tmpdir("autocompact-tokens");
     let (base, seen) = mock_server(vec![
@@ -5128,7 +5128,7 @@ async fn editing_an_earlier_prompt_branches_and_keeps_the_original() {
     );
     // The original is intact and resumable; `/rewind undo` in the branch brings the files back.
     let (_, kept) = crate::session::Session::load(&dir, &original).unwrap();
-    assert!(kept.iter().any(|m| m.content == "wrote v2"));
+    assert!(kept.iter().any(|m| *m.content == "wrote v2"));
     assert!(env.rewind_undo.lock().unwrap().is_some());
     // Conversation only: the files stay as they are.
     std::fs::write(dir.join("a.txt"), "user's").unwrap();
