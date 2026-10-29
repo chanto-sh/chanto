@@ -104,11 +104,15 @@ def respond(body, n):
 TREE_STEPS = ["glob_all", "grep_paths", "grep_count", "read_large", "read_c", "edit_c"]
 
 # A small C project: reading and editing a file starts its language server.
+# The last step keeps the session open long enough for the process sampler
+# (every 0.1 s) to see clangd; without it the session can end, and stop
+# clangd, between two samples.
 SMALL_SCENARIO = r'''
 import json
 STEPS = [
     {"name": "Read", "args": {"file_path": "main.c"}},
     {"name": "Edit", "args": {"file_path": "main.c", "old_string": "return 0;", "new_string": "return 1;"}},
+    {"name": "Bash", "args": {"command": "sleep 2"}},
 ]
 
 

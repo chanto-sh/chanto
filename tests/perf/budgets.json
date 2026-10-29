@@ -54,23 +54,25 @@
   "stress": {
     "_comment": [
       "tests/perf/stress.py: a long session and a large tree, against the fake",
-      "model. First values, loose like the device ceilings, to be tightened from",
-      "what the runners report. drift: the last quarter's median gap between",
-      "model requests may be at most this times the first quarter's, plus 2 ms.",
+      "model. Ceilings from what the Linux and macOS runners report (October",
+      "2026: 26-44 MB, every step under 0.8 s): about twice for memory and",
+      "5-15 times for step times, which vary more on a shared runner. drift:",
+      "the last quarter's median gap between model requests may be at most",
+      "this times the first quarter's, plus 2 ms.",
       "grep_vs_rg: Grep for paths may take at most this times `rg -l` on the",
       "same tree, plus 0.3 s; a search forced onto one thread is not."
     ],
     "long_session": {
       "turns": 2000,
       "files": 400,
-      "rss_mb": 120,
+      "rss_mb": 80,
       "drift": 2.0,
       "timeout_s": 600
     },
     "large_tree": {
       "files": 30000,
-      "rss_mb": 200,
-      "step_s": {"glob_all": 10, "grep_paths": 15, "grep_count": 15, "read_large": 5, "read_c": 5, "edit_c": 10},
+      "rss_mb": 80,
+      "step_s": {"glob_all": 1, "grep_paths": 3, "grep_count": 4, "read_large": 1, "read_c": 1, "edit_c": 1},
       "grep_vs_rg": 2.0,
       "timeout_s": 900
     }
