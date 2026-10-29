@@ -14,11 +14,13 @@ pull request's base commit built from its own source) and with a fixed
 ceiling in `tests/perf/budgets.json`. A metric fails when it is over its
 ceiling, when it is both outside `tolerance` and significantly slower than
 the base by a one-sided Mann-Whitney U test at `alpha`, or when it is slower
-by more than `large_change` whatever the p-value. Requiring a tolerance keeps
-a lucky run of a few milliseconds from failing a pull request; the hard cap
-catches a real regression that noise spread over both groups, and it only
-counts a difference larger than the clock's own step, so a single tick of a
-coarse timer is not a regression.
+by more than `large_change` and the test at least leans that way (p below
+`large_change_p`). Requiring a tolerance keeps a lucky run of a few
+milliseconds from failing a pull request; the hard cap catches a real
+regression that noise spread over both groups. It only counts a difference
+larger than the clock's own step, so a single tick of a coarse timer is not a
+regression, and not a median that moved while the two sample sets still
+overlap evenly: a few milliseconds of runner jitter on a 30 ms startup.
 
 Runs of the two binaries are interleaved, and the binaries are measured
 through the kernel, not the wall clock, so scheduling and an idle machine do
@@ -457,7 +459,7 @@ def binary_mb(path):
     return Path(path).stat().st_size / 1e6
 
 
-def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
+def judge(metric, base, head, budget, tolerance, alpha, large_change=None, large_change_p=1.0):
     """Apply the ceiling and the significance test to one metric."""
     head_value = aggregate(metric, head)
     base_value = aggregate(metric, base) if base else None
@@ -472,12 +474,16 @@ def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
             p_value = mann_whitney_greater(base, head)
             significant = p_value < alpha
         # A small-sample test can miss a large regression that noise spreads
-        # over both groups; a jump this big fails without asking for a p-value.
-        # A difference the clock cannot resolve is never such a jump.
+        # over both groups; a jump this big fails on a weak p-value too. Not on
+        # none at all: a median can move this far by chance on a short metric
+        # while the two sets overlap evenly. A difference the clock cannot
+        # resolve is never such a jump.
         too_big = (
             large_change is not None
             and change > large_change
             and head_value - base_value > clock_step(base + head)
+            and p_value is not None
+            and p_value < large_change_p
         )
     if over_budget or significant or too_big:
         verdict = "fail"
@@ -569,6 +575,7 @@ def run(head, base, config, device=False):
             cfg["tolerance"][metric],
             cfg["alpha"],
             cfg["large_change"],
+            cfg["large_change_p"],
         )
     metrics["binary_mb"] = judge_size(
         binary_mb(base) if base else None,

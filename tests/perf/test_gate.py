@@ -41,7 +41,7 @@ class SignificanceTest(unittest.TestCase):
 
 class VerdictTest(unittest.TestCase):
     def judge(self, base, head, budget=100.0, tolerance=0.05, large_change=0.25):
-        return gate.judge("startup_cpu_ms", base, head, budget, tolerance, 0.01, large_change)
+        return gate.judge("startup_cpu_ms", base, head, budget, tolerance, 0.01, large_change, 0.1)
 
     def test_a_change_inside_tolerance_passes(self):
         m = self.judge(SAME, [v * 1.02 for v in SAME])
@@ -67,6 +67,16 @@ class VerdictTest(unittest.TestCase):
         m = self.judge(base, head)
         self.assertEqual(m["verdict"], "fail")
         self.assertTrue(m["too_big"])
+
+    def test_a_median_moved_by_noise_alone_passes(self):
+        # The same two values in both sets, only a little more often slow in
+        # head: its median jumps 28%, but the sets overlap evenly (p ~ 0.27).
+        base = [25.0] * 11 + [32.0] * 9
+        head = [25.0] * 9 + [32.0] * 11
+        m = gate.judge("startup_cpu_ms", base, head, 100.0, 0.04, 0.01, 0.10, 0.1)
+        self.assertGreater(m["change"], 0.10)
+        self.assertFalse(m["too_big"])
+        self.assertEqual(m["verdict"], "pass")
 
     def test_a_faster_change_passes_and_is_reported(self):
         m = self.judge(SAME, [v * 0.9 for v in SAME])
@@ -130,14 +140,14 @@ class CoarseClockTest(unittest.TestCase):
             109.375, 109.375, 125.0, 109.375]
 
     def test_a_one_tick_median_shift_is_not_a_regression(self):
-        m = gate.judge("startup_cpu_ms", self.BASE, self.HEAD, 160.0, 0.04, 0.01, 0.10)
+        m = gate.judge("startup_cpu_ms", self.BASE, self.HEAD, 160.0, 0.04, 0.01, 0.10, 0.1)
         self.assertFalse(m["significant"])
         self.assertFalse(m["too_big"])
         self.assertEqual(m["verdict"], "pass")
 
     def test_a_shift_of_several_ticks_still_fails(self):
         head = [v + 46.875 for v in self.HEAD]
-        m = gate.judge("startup_cpu_ms", self.BASE, head, 160.0, 0.04, 0.01, 0.10)
+        m = gate.judge("startup_cpu_ms", self.BASE, head, 160.0, 0.04, 0.01, 0.10, 0.1)
         self.assertTrue(m["too_big"])
         self.assertEqual(m["verdict"], "fail")
 
@@ -167,6 +177,8 @@ class ConfigTest(unittest.TestCase):
         self.assertLess(0, self.cfg["alpha"])
         self.assertLess(self.cfg["alpha"], 0.5)
         self.assertLess(0, self.cfg["large_change"])
+        self.assertLess(self.cfg["alpha"], self.cfg["large_change_p"])
+        self.assertLess(self.cfg["large_change_p"], 0.5)
         for value in self.cfg["tolerance"].values():
             self.assertLess(0, value)
             self.assertLess(value, self.cfg["large_change"])
