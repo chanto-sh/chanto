@@ -204,11 +204,20 @@ pub fn create(
     let dir = private_dir()
         .map_err(|e| Error::Failed(format!("can't create the snapshot directory: {e}")))?;
     let result = capture_in(&dir, shell, home, timeout).and_then(|c| {
-        let text = render(&c, &|k| std::env::var(k).ok(), &config.secrets, &|k| {
-            config.env.contains_key(k)
-        });
+        let functions_path = dir.join("functions.sh");
+        let r = render(
+            &c,
+            &|k| std::env::var(k).ok(),
+            &config.secrets,
+            &|k| config.env.contains_key(k),
+            &functions_path,
+        );
+        // The functions first: a stub that ran before they were written
+        // would define nothing.
+        write_private(&functions_path, r.functions.as_bytes())
+            .map_err(|e| Error::Failed(format!("can't write the snapshot: {e}")))?;
         let p = dir.join("snapshot.sh");
-        write_private(&p, text.as_bytes())
+        write_private(&p, r.snapshot.as_bytes())
             .map_err(|e| Error::Failed(format!("can't write the snapshot: {e}")))?;
         Ok(p)
     });
@@ -603,15 +612,23 @@ fn merge_path(inherited: Option<&str>, captured: &str) -> String {
     out.join(":")
 }
 
-/// The snapshot file: bash code that recreates what the startup files set
-/// up. Variables already as `inherited` has them, and `pinned` ones (the
-/// config's `env`, which Chanto set itself), are left alone.
+/// The snapshot: bash code that recreates what the startup files set up,
+/// and the definitions of their functions. Variables already as `inherited`
+/// has them, and `pinned` ones (the config's `env`, which Chanto set itself),
+/// are left alone.
+///
+/// The snapshot is sourced before every command, and defining every function
+/// each time cost more than the command itself (~20 ms for nvm's alone). So
+/// it defines a one-line stub per function instead; the first call to any of
+/// them sources `functions` (written to `functions_path`), which replaces
+/// all the stubs with the real definitions and runs the call.
 pub fn render(
     c: &Captured,
     inherited: &dyn Fn(&str) -> Option<String>,
     secrets: &crate::secrets::SecretsConfig,
     pinned: &dyn Fn(&str) -> bool,
-) -> String {
+    functions_path: &Path,
+) -> Rendered {
     let mut out = String::from(
         "# chanto shell snapshot: your shell's setup, sourced before each Bash command\n",
     );
@@ -637,7 +654,10 @@ pub fn render(
         }
         out.push_str(&format!("export {name}={}\n", sq(&value)));
     }
-    // Functions before aliases, so no alias rewrites a function as it's defined.
+    // Functions before aliases, so no alias rewrites a function as it's
+    // defined (the loader turns alias expansion off while it defines them).
+    let mut lazy: Vec<&str> = Vec::new();
+    let mut defs = String::new();
     for (name, def) in &c.functions {
         if skip_function(name)
             || def.len() > MAX_FUNCTION
@@ -647,10 +667,29 @@ pub fn render(
             continue;
         }
         let line = format!("eval {} 2>/dev/null\n", sq(def));
-        if out.len() + line.len() > MAX_TOTAL {
+        if out.len() + defs.len() + line.len() > MAX_TOTAL {
             break;
         }
-        out.push_str(&line);
+        if stub_name(name) {
+            lazy.push(name);
+            defs.push_str(&line);
+        } else {
+            out.push_str(&line);
+        }
+    }
+    let mut functions = String::new();
+    if !lazy.is_empty() {
+        let loader = sq(&functions_path.display().to_string());
+        for name in &lazy {
+            out.push_str(&format!(
+                "{name} () {{ . {loader} 2>/dev/null; {name} \"$@\"; }}\n"
+            ));
+        }
+        functions.push_str(&format!("unset -f {} 2>/dev/null\n", lazy.join(" ")));
+        functions.push_str("__chanto_aliases=$(shopt -p expand_aliases 2>/dev/null)\n");
+        functions.push_str("shopt -u expand_aliases 2>/dev/null\n");
+        functions.push_str(&defs);
+        functions.push_str("eval \"$__chanto_aliases\" 2>/dev/null; unset __chanto_aliases\n");
     }
     let mut aliases = String::new();
     for (name, value) in &c.aliases {
@@ -667,7 +706,27 @@ pub fn render(
         out.push_str("shopt -s expand_aliases 2>/dev/null\n");
         out.push_str(&aliases);
     }
-    out
+    Rendered {
+        snapshot: out,
+        functions,
+    }
+}
+
+/// The two files of a snapshot: what's sourced before each command, and the
+/// function definitions its stubs load on first use (empty without any).
+pub struct Rendered {
+    pub snapshot: String,
+    pub functions: String,
+}
+
+/// A function name that can be written as a plain stub definition: anything
+/// else is defined in the snapshot itself, as before.
+fn stub_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.'))
 }
 
 /// A new directory only this user can enter, for one snapshot. Also clears
@@ -779,7 +838,13 @@ pub(crate) mod tests {
             std::fs::metadata(&p).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        let text = std::fs::read_to_string(&p).unwrap();
+        let functions = p.with_file_name("functions.sh");
+        assert_eq!(
+            std::fs::metadata(&functions).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        let text =
+            std::fs::read_to_string(&p).unwrap() + &std::fs::read_to_string(&functions).unwrap();
         assert!(
             !text.contains("ghp_"),
             "secrets stay out of the snapshot: {text}"
@@ -826,6 +891,42 @@ pub(crate) mod tests {
                 || crate::config::home_dir().starts_with(std::env::temp_dir())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn functions_load_on_first_call_without_aliases_rewriting_them() {
+        let dir = std::env::temp_dir().join(format!("chanto-lazy-fn-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let c = Captured {
+            vars: vec![],
+            aliases: vec![("ls".into(), "echo ALIASED".into())],
+            alias_defs: vec![],
+            functions: vec![
+                ("listit".into(), "listit () { ls -d /; }".into()),
+                ("twice".into(), "twice () { listit; listit; }".into()),
+            ],
+        };
+        let functions = dir.join("functions.sh");
+        let r = render(&c, &|_| None, &Default::default(), &|_| false, &functions);
+        std::fs::write(&functions, &r.functions).unwrap();
+        let snap = dir.join("snapshot.sh");
+        std::fs::write(&snap, &r.snapshot).unwrap();
+        // Defining the functions costs nothing until one is called; then the
+        // real ones replace the stubs, and the alias defined before them
+        // doesn't leak into their bodies.
+        let out = std::process::Command::new("/bin/bash")
+            .arg("-c")
+            .arg(format!(
+                // The last line is parsed after the snapshot ran, as a later
+                // command would be: aliases still apply there.
+                ". '{}'; twice; declare -f listit | grep -c 'functions.sh'\nls -d /",
+                snap.display()
+            ))
+            .output()
+            .unwrap();
+        let out = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(out, "/\n/\n0\nALIASED -d /\n", "{out}");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -895,7 +996,14 @@ pub(crate) mod tests {
             "SAME" => Some("x".to_string()),
             _ => None,
         };
-        let s = render(&c, &inherited, &Default::default(), &|k| k == "PINNED");
+        let r = render(
+            &c,
+            &inherited,
+            &Default::default(),
+            &|k| k == "PINNED",
+            Path::new("/snap/functions.sh"),
+        );
+        let s = format!("{}{}", r.snapshot, r.functions);
         assert!(
             s.contains("export PATH='/venv/bin:/opt/new/bin:/usr/bin:/bin'"),
             "{s}"
@@ -914,8 +1022,16 @@ pub(crate) mod tests {
         ] {
             assert!(!s.contains(bad), "{bad}: {s}");
         }
+        assert!(r.snapshot.contains("alias 'll'='ls -l'"), "{s}");
+        // A stub in the snapshot; the definition in the file it loads.
         assert!(
-            s.contains("alias 'll'='ls -l'") && s.contains("eval 'ok () { echo '\\''q'\\''; }'"),
+            r.snapshot
+                .contains("ok () { . '/snap/functions.sh' 2>/dev/null; ok \"$@\"; }"),
+            "{s}"
+        );
+        assert!(r.functions.starts_with("unset -f ok "), "{s}");
+        assert!(
+            r.functions.contains("eval 'ok () { echo '\\''q'\\''; }'"),
             "{s}"
         );
         assert_eq!(merge_path(None, "/a::/b:/a"), "/a:/b");
