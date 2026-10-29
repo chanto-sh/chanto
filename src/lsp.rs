@@ -834,8 +834,76 @@ async fn client_for_file(env: &Env, path: &Path, wait: Duration) -> Option<(Arc<
     if !eligible(env, path, &spec) {
         return None;
     }
-    let root = root_for(&spec, path, &project_root(env));
+    let project = project_root(env);
+    let root = root_for(&spec, path, &project);
+    if !may_start(&spec, &root, &project).await {
+        return None;
+    }
     Some((client(&spec, &root, wait).await?, spec))
+}
+
+/// Whether `spec` may run for `root`: not clangd in a large project without a
+/// compilation database.
+async fn may_start(spec: &Spec, root: &Path, project: &Path) -> bool {
+    spec.name != "clangd" || has_compile_db(root, project) || !large_project(project).await
+}
+
+/// Projects with more files than this don't start language servers on a
+/// Read (they start on the first edit), and run clangd only with a
+/// compilation database.
+const LARGE_PROJECT_FILES: usize = 20_000;
+
+/// Each project's answer to [`large_project`], counted once.
+fn project_sizes() -> &'static Mutex<HashMap<PathBuf, bool>> {
+    static SEEN: OnceLock<Mutex<HashMap<PathBuf, bool>>> = OnceLock::new();
+    SEEN.get_or_init(Default::default)
+}
+
+/// Whether `project` has more than [`LARGE_PROJECT_FILES`] files, counting
+/// what git and the ignore files leave in and stopping at the limit. Asked
+/// once per project.
+async fn large_project(project: &Path) -> bool {
+    if let Some(&large) = project_sizes().lock().unwrap().get(project) {
+        return large;
+    }
+    let dir = project.to_path_buf();
+    let large = tokio::task::spawn_blocking(move || more_files_than(&dir, LARGE_PROJECT_FILES))
+        .await
+        .unwrap_or(false);
+    project_sizes()
+        .lock()
+        .unwrap()
+        .insert(project.to_path_buf(), large);
+    large
+}
+
+fn more_files_than(dir: &Path, limit: usize) -> bool {
+    let mut n = 0;
+    for entry in ignore::WalkBuilder::new(dir).build().flatten() {
+        if entry.file_type().is_some_and(|t| t.is_file()) {
+            n += 1;
+            if n > limit {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// clangd without a compilation database guesses each file's flags, which
+/// across a large tree (the Linux kernel's Makefiles) gives a server per
+/// directory and diagnostics that are mostly noise. With one it is accurate.
+fn has_compile_db(root: &Path, project: &Path) -> bool {
+    [root, project].iter().any(|d| {
+        [
+            "compile_commands.json",
+            "compile_flags.txt",
+            ".clangd",
+            "build/compile_commands.json",
+        ]
+        .iter()
+        .any(|f| d.join(f).exists())
+    })
 }
 
 pub fn shutdown() {
@@ -860,9 +928,15 @@ pub fn warm(env: &Env, path: &Path) {
     if !eligible(env, path, &spec) {
         return;
     }
-    let root = root_for(&spec, path, &project_root(env));
+    let project = project_root(env);
+    let root = root_for(&spec, path, &project);
     let path = path.to_path_buf();
     tokio::spawn(async move {
+        // In a large project a Read doesn't start a server: the first edit does,
+        // so reading around a big tree doesn't start one per directory.
+        if large_project(&project).await {
+            return;
+        }
         if let Some(c) = client(&spec, &root, Duration::from_secs(60)).await {
             let _ = c.sync_disk(&path).await;
         }
@@ -940,7 +1014,11 @@ pub async fn diagnostics_after_edit(env: &Env, path: &Path) -> Option<(String, u
     }
     let wait = wait_for(&env.config.lsp, &spec);
     let deadline = Instant::now() + wait;
-    let root = root_for(&spec, path, &project_root(env));
+    let project = project_root(env);
+    let root = root_for(&spec, path, &project);
+    if !may_start(&spec, &root, &project).await {
+        return None;
+    }
     let c = client(&spec, &root, wait).await?;
     let after = *c.seq.borrow();
     let (uri, version, changed) = c.sync_disk(path).await.ok()?;
@@ -1203,6 +1281,9 @@ pub async fn query(
                 }
                 let mut cs = Vec::new();
                 for s in v {
+                    if !may_start(&s, &root, &root).await {
+                        continue;
+                    }
                     if let Some(c) = client(&s, &root, start_wait).await {
                         cs.push(c);
                     }
@@ -1346,6 +1427,71 @@ pub async fn query(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn counting_files_stops_at_the_limit() {
+        let d = std::env::temp_dir().join(format!("chanto-lsp-count-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        for i in 0..5 {
+            std::fs::write(d.join(format!("f{i}.c")), "int x;\n").unwrap();
+        }
+        assert!(more_files_than(&d, 4));
+        assert!(!more_files_than(&d, 5));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    fn builtin_spec(name: &str) -> Spec {
+        builtin().into_iter().find(|s| s.name == name).unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_small_project_is_counted_once() {
+        let d = std::env::temp_dir().join(format!("chanto-lsp-small-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("main.c"), "int main;\n").unwrap();
+        assert!(!large_project(&d).await);
+        assert_eq!(project_sizes().lock().unwrap().get(&d), Some(&false));
+        // The answer is remembered, not recounted.
+        project_sizes().lock().unwrap().insert(d.clone(), true);
+        assert!(large_project(&d).await);
+        project_sizes().lock().unwrap().remove(&d);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
+    async fn clangd_needs_a_compile_database_in_a_large_project() {
+        let d = std::env::temp_dir().join(format!("chanto-lsp-large-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let sub = d.join("drivers/net");
+        std::fs::create_dir_all(&sub).unwrap();
+        let clangd = builtin_spec("clangd");
+        // A small project: clangd may run without a database.
+        assert!(may_start(&clangd, &sub, &d).await);
+        // A large one (marked so, rather than writing 20,000 files): only with one.
+        project_sizes().lock().unwrap().insert(d.clone(), true);
+        assert!(!may_start(&clangd, &sub, &d).await);
+        std::fs::write(d.join("compile_commands.json"), "[]").unwrap();
+        assert!(may_start(&clangd, &sub, &d).await);
+        // Other servers aren't held back by size.
+        let other = builtin().into_iter().find(|s| s.name != "clangd").unwrap();
+        assert!(may_start(&other, &sub, &d).await);
+        project_sizes().lock().unwrap().remove(&d);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn a_compile_database_lets_clangd_run_anywhere() {
+        let d = std::env::temp_dir().join(format!("chanto-lsp-db-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let sub = d.join("kernel/sched");
+        std::fs::create_dir_all(&sub).unwrap();
+        assert!(!has_compile_db(&sub, &d));
+        std::fs::write(d.join("compile_commands.json"), "[]").unwrap();
+        assert!(has_compile_db(&sub, &d));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[tokio::test]
     async fn framing_roundtrip() {

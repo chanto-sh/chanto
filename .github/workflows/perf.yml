@@ -179,6 +179,24 @@ jobs:
             ${{ matrix.extra_args }} \
             --json "$BENCH_TEMP/perf.json" \
             --summary-md "$BENCH_TEMP/perf.md"
+      # A very long session and a very large tree (tests/perf/stress.py),
+      # against the fake model. ripgrep and clangd make its Grep and
+      # language-server checks real; it needs POSIX tools, so not Windows.
+      - name: Stress
+        if: ${{ env.MEASURE == 'true' && github.event_name != 'push' && runner.os != 'Windows' }}
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep clangd >/dev/null
+          else
+            brew install ripgrep >/dev/null
+          fi
+          $PYTHON tests/perf/stress.py --bin "$BENCH_TEMP/chanto-head" \
+            --json "$BENCH_TEMP/stress.json" --summary-md "$BENCH_TEMP/stress.md"
+      - if: ${{ env.MEASURE == 'true' && !cancelled() && github.event_name != 'push' && runner.os != 'Windows' }}
+        run: |
+          if [ -f "$BENCH_TEMP/stress.md" ]; then cat "$BENCH_TEMP/stress.md" >> "$GITHUB_STEP_SUMMARY"; fi
       - name: Upload the report
         if: ${{ env.MEASURE == 'true' && (!cancelled() && github.event_name != 'push') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
