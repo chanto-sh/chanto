@@ -1,0 +1,1 @@
+- **Interrupting a turn stops its command.** A Bash command running when the turn was interrupted (Esc, Ctrl+C, SIGTERM) was left running about half the time, along with everything it started, even after Chanto exited. It is now stopped like a command that times out.

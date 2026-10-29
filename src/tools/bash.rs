@@ -96,6 +96,19 @@ pub(crate) fn kill_group(pid: u32) {
     });
 }
 
+/// Stops a foreground command's process group if the tool is dropped while
+/// it runs: an interrupted turn stops waiting for the tool rather than letting
+/// it finish, and the command would otherwise outlive Chanto.
+struct KillOnDrop(Option<u32>);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        if let Some(pid) = self.0 {
+            kill_group(pid);
+        }
+    }
+}
+
 #[cfg(windows)]
 pub(crate) fn kill_group(pid: u32) {
     crate::runs::container::kill_tracked(pid);
@@ -652,6 +665,7 @@ independent calls in parallel."
         apply_env_vars(ctx, &cwd, unsandboxed, &mut cmd);
         let mut child = cmd.spawn()?;
         let pid = child.id();
+        let mut reaper = KillOnDrop(pid);
         if let Some((c, token)) = &exec {
             crate::runs::container::track(pid, c, token);
         }
@@ -706,6 +720,8 @@ independent calls in parallel."
             _ = ctx.cancel.cancelled() => None,
             _ = progress => None,
         };
+        // From here the command has exited, is killed below, or moves to the background.
+        reaper.0 = None;
         if status.is_none()
             && !ctx.cancel.is_cancelled()
             && !pid.is_some_and(crate::resources::was_killed)

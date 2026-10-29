@@ -180,3 +180,46 @@ async fn completion_waits_for_both_output_readers() {
     drain.await.unwrap();
     assert_eq!(*output.lock().unwrap(), "final failure line");
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn dropping_a_running_command_stops_it() {
+    let (ctx, _, _, dir) = setup();
+    let pidfile = dir.join("child.pid");
+    let args = serde_json::json!({
+        "command": format!("tail -f /dev/null & echo $! > '{}'; wait", pidfile.display())
+    });
+    let run = Bash.run(args, &ctx);
+    let started = async {
+        while std::fs::read_to_string(&pidfile).map_or(true, |s| s.trim().is_empty()) {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    };
+    // Like an interrupted turn: stop waiting for the tool once the command runs.
+    tokio::select! {
+        _ = run => panic!("the command finished on its own"),
+        _ = started => {}
+    }
+    let pid = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .to_string();
+    let gone = || {
+        !std::process::Command::new("kill")
+            .args(["-0", &pid])
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    for _ in 0..100 {
+        if gone() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        gone(),
+        "the command's child {pid} outlived the dropped tool call"
+    );
+}
