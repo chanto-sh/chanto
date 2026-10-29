@@ -27,7 +27,7 @@ include = [
 # reach the CLI: `cargo build` here builds only `chanto`. proto/ holds the wire
 # types the CLI shares with the hosted service.
 [workspace]
-members = [".", "desktop", "proto"]
+members = [".", "core", "desktop", "proto"]
 # fuzz/ builds on nightly with cargo-fuzz, as a workspace of its own.
 exclude = ["fuzz"]
 
@@ -44,6 +44,7 @@ repository = "https://github.com/chanto-sh/chanto.git"
 fuzzing = []
 
 [dependencies]
+chanto-core = { path = "core", version = "0.1.0" }
 chanto-proto = { path = "proto", version = "0.1.0" }
 aho-corasick = "1.1.5"
 memchr = "2.8.3"

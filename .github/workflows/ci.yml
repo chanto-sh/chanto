@@ -78,6 +78,22 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+  # chanto-core is what the WebAssembly build shares with the CLI: it must keep
+  # building for the browser target, with no OS-only dependency creeping in.
+  core-wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo check --locked -p chanto-core --target wasm32-unknown-unknown
+      - run: cargo test --locked -p chanto-core
   # The main suite on Linux, on every push (Linux minutes are the cheapest).
   linux:
     runs-on: ubuntu-latest
