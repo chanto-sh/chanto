@@ -6462,3 +6462,42 @@ async fn the_first_request_waits_for_mcp_servers_still_connecting() {
     clients[0].shutdown(crate::mcp::Status::Off("test over".into()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn a_model_switch_doesnt_wait_for_a_slow_lookup() {
+    let dir = tmpdir("switch-vision");
+    let env = make_env("http://127.0.0.1:1", &dir, Mode::Default, 8192);
+    // A lookup for the startup model that hasn't answered: the switch drops it.
+    *env.pending_model_info.lock().unwrap() = Some(crate::agent::PendingModelInfo {
+        lookup: tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            None
+        }),
+        explicit_ctx: false,
+        serving_kind: ProviderKind::Openai,
+    });
+    // Slow: the assumption holds until the next request, which waits for it.
+    let slow = tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Some((8192, false))
+    });
+    let t = std::time::Instant::now();
+    env.switch_vision(slow, true).await;
+    assert!(
+        t.elapsed() < Duration::from_millis(250),
+        "{:?}",
+        t.elapsed()
+    );
+    assert!(env.vision());
+    assert!(env.pending_model_info.lock().unwrap().is_none());
+    env.settle_model_info().await;
+    assert!(!env.vision());
+    // Quick: it applies at once.
+    env.switch_vision(tokio::spawn(async { Some((8192, true)) }), false)
+        .await;
+    assert!(env.vision() && env.pending_vision.lock().unwrap().is_none());
+    // Unknown: the assumption.
+    env.switch_vision(tokio::spawn(async { None }), false).await;
+    assert!(!env.vision());
+    let _ = std::fs::remove_dir_all(&dir);
+}
