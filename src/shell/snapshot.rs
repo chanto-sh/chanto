@@ -752,13 +752,10 @@ fn private_dir() -> std::io::Result<PathBuf> {
         }
     }
     let dir = base.join(uuid::Uuid::new_v4().simple().to_string());
-    let mut b = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        b.mode(0o700);
-    }
-    b.create(&dir)?;
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700).create(&dir)?;
+    #[cfg(not(unix))]
+    std::fs::DirBuilder::new().create(&dir)?;
     Ok(dir)
 }
 
