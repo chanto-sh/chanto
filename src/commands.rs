@@ -969,7 +969,8 @@ pub async fn handle_env(env: &std::sync::Arc<Env>, line: &str) -> Option<Outcome
             // OpenAI-compatible servers report no capabilities; assume vision so
             // a newly switched-to model doesn't silently drop images.
             let assumed = p.kind.assumes_vision();
-            env.set_vision(p.model_info(&m).await.map(|(_, v)| v).unwrap_or(assumed));
+            env.switch_vision(tokio::spawn(async move { p.model_info(&m).await }), assumed)
+                .await;
             Outcome::Show(if save {
                 format!(
                     "Switched model to **{arg}** (saved as the default; `/model --session <model>` switches this session only)"

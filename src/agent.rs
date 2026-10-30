@@ -430,6 +430,9 @@ pub struct Env {
     /// MCP servers an interactive session started without waiting for: the
     /// first model request waits for whichever are still connecting.
     pub pending_mcp: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// A `/model` switch's vision lookup that hadn't answered: the next
+    /// model request waits for it.
+    pub pending_vision: Mutex<Option<ModelLookup>>,
     model: RwLock<String>,
     mode: RwLock<Mode>,
     /// The mode an edit's "always allow" switched away from to accept edits.
@@ -611,8 +614,11 @@ mod checkpoint_files {
 
 /// A model metadata lookup that outlasted startup (a slow or unreachable
 /// server), and what applying it needs.
+/// A model's (context size, vision) lookup, running in the background.
+pub type ModelLookup = tokio::task::JoinHandle<Option<(u64, bool)>>;
+
 pub struct PendingModelInfo {
-    pub lookup: tokio::task::JoinHandle<Option<(u64, bool)>>,
+    pub lookup: ModelLookup,
     /// The user set the context size, so a reported window doesn't raise it.
     pub explicit_ctx: bool,
     pub serving_kind: llm::ProviderKind,
@@ -799,6 +805,7 @@ impl Env {
             vision: AtomicBool::new(i.vision),
             pending_model_info: Mutex::new(None),
             pending_mcp: Mutex::new(None),
+            pending_vision: Mutex::new(None),
             text_tools: AtomicBool::new(false),
             cwd: RwLock::new(i.cwd),
             read_files: Default::default(),
@@ -1118,6 +1125,12 @@ impl Env {
     /// first model request waits for it, since the context size and vision
     /// support shape the request.
     pub async fn settle_model_info(&self) {
+        let vision = self.pending_vision.lock().unwrap().take();
+        if let Some(lookup) = vision
+            && let Ok(Some((_, v))) = lookup.await
+        {
+            self.set_vision(v);
+        }
         let pending = self.pending_model_info.lock().unwrap().take();
         let Some(p) = pending else { return };
         let Ok(Some(info)) = p.lookup.await else {
@@ -1148,6 +1161,25 @@ impl Env {
         }
         let _ = p.await;
         true
+    }
+    /// Take a switched-to model's vision support from `lookup`: now if it
+    /// answers quickly (cached, or a local server), else `assumed` until the
+    /// next model request, which waits for it. A startup lookup still running
+    /// was about the previous model, so it no longer applies.
+    pub async fn switch_vision(&self, mut lookup: ModelLookup, assumed: bool) {
+        if let Some(p) = self.pending_model_info.lock().unwrap().take() {
+            p.lookup.abort();
+        }
+        if let Some(old) = self.pending_vision.lock().unwrap().take() {
+            old.abort();
+        }
+        match tokio::time::timeout(Duration::from_millis(50), &mut lookup).await {
+            Ok(r) => self.set_vision(r.ok().flatten().map_or(assumed, |(_, v)| v)),
+            Err(_) => {
+                self.set_vision(assumed);
+                *self.pending_vision.lock().unwrap() = Some(lookup);
+            }
+        }
     }
     pub fn set_vision(&self, b: bool) {
         self.vision.store(b, Ordering::Relaxed)
