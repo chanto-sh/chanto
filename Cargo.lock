@@ -510,8 +510,10 @@ name = "chanto-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "memchr",
  "serde",
  "serde_json",
+ "similar 3.2.0",
  "uuid",
 ]
 

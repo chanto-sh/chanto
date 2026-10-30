@@ -328,7 +328,7 @@ pub fn proposed_change(cwd: &Path, tool: &str, args: &Value) -> Option<(PathBuf,
             };
             for e in edits {
                 let all = e["replace_all"].as_bool() == Some(true);
-                text = crate::tools::fs::apply_edit(
+                text = chanto_core::edit::apply_edit(
                     &text,
                     e["old_string"].as_str()?,
                     e["new_string"].as_str()?,
