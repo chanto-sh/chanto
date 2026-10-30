@@ -725,10 +725,8 @@ async fn setup_session(
     crate::util::timing("connection resolved");
     context::prefetch_git(&cwd);
     // MCP servers connect while the rest of startup runs.
-    let mcp_task = {
-        let servers = cfg.mcp_servers.clone();
-        tokio::spawn(async move { mcp::connect_all(&servers).await })
-    };
+    let (mcp, connecting) = mcp::start_all(&cfg.mcp_servers);
+    let mcp_task = tokio::spawn(connecting);
     // Language-server detection may start a process (rustup); run it alongside.
     lsp::set_trusted(config::is_trusted(&cwd));
     let lsp_task = {
@@ -995,9 +993,16 @@ async fn setup_session(
         // SAFETY: called during startup before any other threads read the environment.
         unsafe { std::env::set_var(k, v) };
     }
-    let (mcp, errs) = mcp_task.await.unwrap_or_default();
-    crate::util::timing("mcp connected");
-    warnings.extend(errs);
+    // A session someone is about to type into doesn't wait for them: its
+    // first request does, if they are still connecting by then. One that
+    // starts with a prompt, a script or a client's request waits here.
+    let mcp_task = if interactive && cli.prompt.is_empty() && mcp::connects_in_background() {
+        Some(mcp_task)
+    } else {
+        warnings.extend(mcp_task.await.unwrap_or_default());
+        crate::util::timing("mcp connected");
+        None
+    };
     let mut tools = tools::Registry::builtin();
     // In-session scheduling, where a frontend fires the tasks (TUI, REPL).
     if crate::cron::available() {
@@ -1154,6 +1159,14 @@ async fn setup_session(
         frontend,
         interactive,
     });
+    if let Some(task) = mcp_task {
+        let fe = env.frontend.clone();
+        *env.pending_mcp.lock().unwrap() = Some(tokio::spawn(async move {
+            for w in task.await.unwrap_or_default() {
+                fe.emit(agent::Event::Warn(w));
+            }
+        }));
+    }
     if let Some(lookup) = pending_lookup {
         *env.pending_model_info.lock().unwrap() = Some(agent::PendingModelInfo {
             lookup,

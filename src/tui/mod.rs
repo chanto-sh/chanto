@@ -405,6 +405,7 @@ fn mcp_actions(row: &crate::commands::McpRow) -> Vec<(&'static str, String)> {
             ("Reject", format!("/mcp disable {n}")),
         ],
         McpState::Rejected => vec![],
+        McpState::Connecting => vec![("Disable for this project", format!("/mcp disable {n}"))],
     }
 }
 
@@ -451,7 +452,7 @@ fn mcp_overlay_lines(
             McpState::Connected => pal().accent,
             McpState::NeedsLogin | McpState::Pending => warn(),
             McpState::Failed | McpState::Rejected => pal().error,
-            McpState::Off => pal().dim,
+            McpState::Off | McpState::Connecting => pal().dim,
         };
         let mut spans = vec![
             Span::styled(

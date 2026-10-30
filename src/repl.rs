@@ -16,6 +16,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     let fe = Arc::new(PlainFrontend::new(OutputFormat::Live, true));
     // Between prompts the REPL fires /loop iterations and scheduled tasks.
     crate::cron::set_frontend_drives();
+    crate::mcp::connect_in_background();
     let Setup {
         env,
         mut agent,

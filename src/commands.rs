@@ -2900,6 +2900,8 @@ async fn run_hook_test(command: &str, event: &str) -> Outcome {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum McpState {
     Connected,
+    /// Started at launch and still connecting.
+    Connecting,
     NeedsLogin,
     Failed,
     Off,
@@ -2914,6 +2916,7 @@ impl McpState {
     pub fn label(self) -> &'static str {
         match self {
             McpState::Connected => "connected",
+            McpState::Connecting => "connecting",
             McpState::NeedsLogin => "needs login",
             McpState::Failed => "failed",
             McpState::Off => "disabled",
@@ -2925,6 +2928,7 @@ impl McpState {
     pub fn glyph(self) -> &'static str {
         match self {
             McpState::Connected => "✓",
+            McpState::Connecting => "…",
             McpState::NeedsLogin => "!",
             McpState::Failed => "✗",
             McpState::Off => "⊘",
@@ -2960,6 +2964,7 @@ impl McpRow {
                 format!("- **{name}** ✗ {}: {}", self.state.label(), self.detail)
             }
             McpState::NeedsLogin => format!("- **{name}** ! {}", self.state.label()),
+            McpState::Connecting => format!("- **{name}** … {}", self.state.label()),
             McpState::Pending => format!("- **{name}** ⏸ {} · {}", self.state.label(), self.detail),
             McpState::Rejected => {
                 format!("- **{name}** ✘ {} · {}", self.state.label(), self.detail)
@@ -3050,6 +3055,7 @@ pub fn mcp_rows(env: &crate::agent::Env) -> Vec<McpRow> {
                     (McpState::Connected, extra.join(" · "), false)
                 }
                 (_, Some((_, Status::NeedsLogin))) => (McpState::NeedsLogin, String::new(), false),
+                (_, Some((_, Status::Connecting))) => (McpState::Connecting, String::new(), false),
                 (_, Some((_, Status::Failed(why)))) => {
                     (McpState::Failed, failed_detail(name, &why), false)
                 }
@@ -3119,7 +3125,7 @@ pub fn mcp_summary(env: &crate::agent::Env) -> (usize, usize, bool) {
         match c.status() {
             Status::Connected => connected += 1,
             Status::NeedsLogin | Status::Failed(_) => attention = true,
-            Status::Off(_) => {}
+            Status::Off(_) | Status::Connecting => {}
         }
     }
     (connected, total, attention)

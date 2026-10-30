@@ -18,6 +18,11 @@ impl Agent {
             tokio::spawn(async move { crate::shell::snapshot::ensure(&env).await });
         }
         self.env.settle_model_info().await;
+        // The system prompt was written before they connected: it names the
+        // servers and carries their instructions.
+        if self.env.settle_mcp().await {
+            self.refresh_system();
+        }
         // Also recover an interrupted turn in the current process, without
         // requiring the user to reload the session from disk.
         crate::session::repair_tool_pairs(&mut self.messages);
@@ -26,6 +31,14 @@ impl Agent {
             return Ok(None);
         }
         let mut tools = self.env.tools.specs(&|n| self.tool_allowed(n));
+        // Startup hides the resource tools when no server it connected has
+        // resources; one that connected since (in the background, or after a
+        // login) may have.
+        if self.env.mcp.iter().any(|c| c.has_resources()) {
+            tools.extend(self.env.tools.hidden_specs(&|n| {
+                crate::mcp::RESOURCE_TOOLS.contains(&n) && self.tool_allowed(n)
+            }));
+        }
         let mut mcp_tools: Vec<(llm::ToolSpec, bool)> = Vec::new();
         for c in self.env.mcp.iter().chain(&self.sub.mcp) {
             c.refresh_if_stale().await;
