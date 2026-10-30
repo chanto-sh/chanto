@@ -1,7 +1,8 @@
 //! Tests for the text (no-native-tool) protocol rendering.
 
-use super::protocol::to_text_protocol;
-use crate::llm::{Message, Role, extract_text_tool_calls};
+use super::to_text_protocol;
+use crate::message::{Message, Role};
+use crate::model::extract_text_tool_calls;
 
 fn tool_result(name: &str, content: &str) -> Message {
     let mut m = Message::new(Role::Tool, content);

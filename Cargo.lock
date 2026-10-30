@@ -547,6 +547,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "chanto-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chanto-core",
+ "futures",
+ "js-sys",
+ "serde_json",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"

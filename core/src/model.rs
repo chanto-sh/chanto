@@ -405,21 +405,73 @@ pub fn extract_text_tool_calls(text: &str, known: &[String]) -> (String, Vec<Too
         }
     }
     if calls.is_empty() {
-        // Bare JSON object as the entire message.
+        // Bare JSON objects as the entire message: one call, or several one
+        // after another, as small models write them. Any prose, or an object
+        // that isn't a call to a known tool, and none of it counts.
         let t = text.trim();
         let t = t
             .strip_prefix("```json")
             .or_else(|| t.strip_prefix("```"))
             .map(|s| s.trim_end_matches("```").trim())
             .unwrap_or(t);
-        if t.starts_with('{')
-            && t.ends_with('}')
-            && let Some(c) = parse_call_json(t, known)
-        {
-            return (String::new(), vec![c]);
+        if let Some(objects) = json_objects(t) {
+            let parsed: Vec<ToolCall> = objects
+                .iter()
+                .filter_map(|o| parse_call_json(o, known))
+                .collect();
+            if !parsed.is_empty() && parsed.len() == objects.len() {
+                return (String::new(), parsed);
+            }
         }
     }
     (remaining.trim().to_string(), calls)
+}
+
+/// `text` as consecutive top-level JSON objects separated only by
+/// whitespace (or code fences), or None if anything else is there.
+fn json_objects(text: &str) -> Option<Vec<&str>> {
+    let mut out = Vec::new();
+    let mut rest = text.trim();
+    while !rest.is_empty() {
+        rest = rest
+            .trim_start_matches("```json")
+            .trim_start_matches("```")
+            .trim_start();
+        if rest.is_empty() {
+            break;
+        }
+        if !rest.starts_with('{') {
+            return None;
+        }
+        let (mut depth, mut in_str, mut escaped, mut end) = (0usize, false, false, None);
+        for (i, ch) in rest.char_indices() {
+            if in_str {
+                match ch {
+                    _ if escaped => escaped = false,
+                    '\\' => escaped = true,
+                    '"' => in_str = false,
+                    _ => {}
+                }
+                continue;
+            }
+            match ch {
+                '"' => in_str = true,
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end?;
+        out.push(&rest[..end]);
+        rest = rest[end..].trim_start();
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// The byte offset where a text-protocol tool call begins in a reply, or
