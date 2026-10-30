@@ -7,4 +7,5 @@ pub mod limits;
 pub mod message;
 pub mod model;
 pub mod read;
+pub mod search;
 pub mod text;

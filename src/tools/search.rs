@@ -13,58 +13,7 @@ use std::time::SystemTime;
 
 const MAX_RESULTS: usize = 200;
 
-/// Keeps only the entries needed for the first `limit` output lines, in key
-/// order, while counting every line: a broad search can match millions of
-/// lines without holding them all.
-struct Bounded<K: Ord> {
-    limit: usize,
-    entries: std::collections::BTreeMap<K, (usize, String)>,
-    kept_lines: usize,
-    total_lines: usize,
-}
-
-impl<K: Ord> Bounded<K> {
-    fn new(limit: usize) -> Self {
-        Self {
-            limit: limit.max(1),
-            entries: Default::default(),
-            kept_lines: 0,
-            total_lines: 0,
-        }
-    }
-    fn push(&mut self, key: K, text: String) {
-        let n = text.lines().count().max(1);
-        self.total_lines += n;
-        if self.kept_lines >= self.limit {
-            // Full: only worth keeping if it sorts before the last entry.
-            match self.entries.last_key_value() {
-                Some((last, _)) if key < *last => {}
-                _ => return,
-            }
-        }
-        self.kept_lines += n;
-        self.entries.insert(key, (n, text));
-        // Drop trailing entries no longer needed for the first `limit` lines.
-        while let Some((_, (ln, _))) = self.entries.last_key_value() {
-            if self.kept_lines - ln >= self.limit {
-                let (_, (ln, _)) = self.entries.pop_last().unwrap();
-                self.kept_lines -= ln;
-            } else {
-                break;
-            }
-        }
-    }
-    fn into_text(self) -> (String, usize) {
-        let mut s = String::new();
-        for (_, (_, t)) in self.entries {
-            s.push_str(&t);
-            if !t.ends_with('\n') {
-                s.push('\n');
-            }
-        }
-        (s, self.total_lines)
-    }
-}
+use chanto_core::search::{Bounded, GrepOptions};
 
 pub struct Glob;
 
@@ -122,8 +71,19 @@ Results come back newest-modified first."
             }
         }
         let r2 = root.clone();
+        let fs = ctx.env.fs();
         let (files, total) = tokio::task::spawn_blocking(move || {
-            glob_files(&r2, &pattern, MAX_RESULTS, WALK_BUDGET)
+            if fs.on_disk() {
+                glob_files(&r2, &pattern, MAX_RESULTS, WALK_BUDGET)
+            } else {
+                Ok(chanto_core::search::glob(
+                    fs.as_ref(),
+                    &r2,
+                    &pattern,
+                    MAX_RESULTS,
+                    WALK_BUDGET,
+                )?)
+            }
         })
         .await??;
         if total == 0 {
@@ -299,14 +259,19 @@ Reach for this instead of grep/rg in Bash."
         let head = arg_u64(&args, "head_limit")
             .map(|n| n as usize)
             .unwrap_or(if mode == "content" { 400 } else { MAX_RESULTS });
-        // Both paths keep only what's needed for the first `head` lines.
-        let (out, total, warn) = if which_rg().is_some() {
+        let fs = ctx.env.fs();
+        // Every path keeps only what's needed for the first `head` lines.
+        let (out, total, warn) = if fs.on_disk() && which_rg().is_some() {
             run_rg(&args, &pattern, &path, &mode, &cwd, head).await?
         } else {
-            let a2 = args.clone();
+            let opts = grep_options(&args, &mode, head);
             let c2 = cwd.clone();
             let (o, t) = tokio::task::spawn_blocking(move || {
-                builtin_grep(&a2, &pattern, &path, &mode, &c2, head)
+                if fs.on_disk() {
+                    builtin_grep(&opts, &pattern, &path, &c2)
+                } else {
+                    chanto_core::search::grep(fs.as_ref(), &path, &pattern, &opts, &|p| rel(&c2, p))
+                }
             })
             .await??;
             (o, t, None)
@@ -502,52 +467,57 @@ async fn newest_first(cwd: &Path, paths: Vec<String>, head: usize) -> String {
     .unwrap_or_default()
 }
 
-/// Search without ripgrep. Keeps only the entries needed for the first `head`
-/// lines (newest files first for paths; path order otherwise). Returns (text, total lines).
+/// What Grep's arguments ask for, besides the pattern and path.
+fn grep_options(args: &Value, mode: &str, head: usize) -> GrepOptions {
+    GrepOptions {
+        mode: mode.to_string(),
+        case_insensitive: arg_bool(args, "-i"),
+        multiline: arg_bool(args, "multiline"),
+        glob: args["glob"].as_str().map(str::to_string),
+        file_type: args["type"].as_str().map(str::to_string),
+        before: arg_u64(args, "-B").or(arg_u64(args, "-C")).unwrap_or(0) as usize,
+        after: arg_u64(args, "-A").or(arg_u64(args, "-C")).unwrap_or(0) as usize,
+        head,
+    }
+}
+
+/// Search the disk without ripgrep, in parallel. Keeps only the entries
+/// needed for the first `head` lines (newest files first for paths; path
+/// order otherwise). Returns (text, total lines).
 fn builtin_grep(
-    args: &Value,
+    opts: &GrepOptions,
     pattern: &str,
     root: &Path,
-    mode: &str,
     cwd: &Path,
-    head: usize,
 ) -> Result<(String, usize)> {
-    let re = regex::bytes::RegexBuilder::new(pattern)
-        .case_insensitive(arg_bool(args, "-i"))
-        .multi_line(true)
-        .dot_matches_new_line(arg_bool(args, "multiline"))
-        .build()?;
-    let glob = match args["glob"].as_str() {
+    let re = opts.regex(pattern)?;
+    let glob = match &opts.glob {
         Some(g) => Some(globset::Glob::new(g)?.compile_matcher()),
         None => None,
     };
-    let ext_filter: Option<Vec<&str>> = args["type"].as_str().map(|t| match t {
-        "rust" | "rs" => vec!["rs"],
-        "py" | "python" => vec!["py", "pyi"],
-        "js" => vec!["js", "jsx", "mjs", "cjs"],
-        "ts" => vec!["ts", "tsx", "mts", "cts"],
-        "go" => vec!["go"],
-        "java" => vec!["java"],
-        "c" => vec!["c", "h"],
-        "cpp" => vec!["cpp", "cc", "cxx", "hpp", "hh", "h"],
-        "md" | "markdown" => vec!["md", "markdown"],
-        other => vec![Box::leak(other.to_string().into_boxed_str()) as &str],
-    });
-    let before = arg_u64(args, "-B").or(arg_u64(args, "-C")).unwrap_or(0) as usize;
-    let after = arg_u64(args, "-A").or(arg_u64(args, "-C")).unwrap_or(0) as usize;
+    let exts = opts
+        .file_type
+        .as_deref()
+        .map(chanto_core::search::type_extensions);
     type Key = (Option<std::cmp::Reverse<SystemTime>>, PathBuf);
-    let results: Arc<Mutex<Bounded<Key>>> = Arc::new(Mutex::new(Bounded::new(head)));
-    let walker = ignore::WalkBuilder::new(root)
+    let results: Arc<Mutex<Bounded<Key>>> = Arc::new(Mutex::new(Bounded::new(opts.head)));
+    let single = root.is_file();
+    let mut walker = ignore::WalkBuilder::new(root);
+    walker
         .hidden(false)
         .filter_entry(|e| e.file_name() != ".git")
-        .threads(num_threads())
-        .build_parallel();
-    walker.run(|| {
+        .threads(num_threads());
+    // A `glob` overrides the ignore files, as in ripgrep.
+    if let Some(g) = &opts.glob {
+        let mut o = ignore::overrides::OverrideBuilder::new(root);
+        o.add(g)?;
+        walker.overrides(o.build()?);
+    }
+    walker.build_parallel().run(|| {
         let results = results.clone();
         let re = re.clone();
         let glob = glob.clone();
-        let ext_filter = ext_filter.clone();
-        let mode = mode.to_string();
+        let exts = exts.clone();
         let cwd = cwd.to_path_buf();
         Box::new(move |entry| {
             let Ok(e) = entry else {
@@ -557,68 +527,19 @@ fn builtin_grep(
                 return ignore::WalkState::Continue;
             }
             let p = e.path();
-            if let Some(g) = &glob
-                && !g.is_match(e.file_name())
-                && !g.is_match(p)
-            {
+            if !chanto_core::search::grep_filters(p, glob.as_ref(), exts.as_deref()) {
                 return ignore::WalkState::Continue;
-            }
-            if let Some(exts) = &ext_filter {
-                let ext = p.extension().and_then(|x| x.to_str()).unwrap_or("");
-                if !exts.contains(&ext) {
-                    return ignore::WalkState::Continue;
-                }
             }
             let Ok(bytes) = std::fs::read(p) else {
                 return ignore::WalkState::Continue;
             };
-            if bytes.iter().take(8000).any(|&b| b == 0) || !re.is_match(&bytes) {
+            let shown = rel(&cwd, p);
+            let shown = (!single || opts.mode == "files_with_matches").then_some(shown.as_str());
+            let Some(out) = chanto_core::search::grep_file(&bytes, shown, &re, opts) else {
                 return ignore::WalkState::Continue;
-            }
-            let relp = rel(&cwd, p);
-            let out = match mode.as_str() {
-                "content" => {
-                    let lines: Vec<&[u8]> = bytes.split(|&b| b == b'\n').collect();
-                    let mut keep = vec![false; lines.len()];
-                    let mut hit = vec![false; lines.len()];
-                    for (i, l) in lines.iter().enumerate() {
-                        if re.is_match(l) {
-                            hit[i] = true;
-                            for k in keep
-                                .iter_mut()
-                                .take(i.saturating_add(after).saturating_add(1).min(lines.len()))
-                                .skip(i.saturating_sub(before))
-                            {
-                                *k = true;
-                            }
-                        }
-                    }
-                    let mut s = String::new();
-                    let mut last = None;
-                    for i in 0..lines.len() {
-                        if keep[i] {
-                            if let Some(l) = last
-                                && i > l + 1
-                            {
-                                s.push_str("--\n");
-                            }
-                            let sep = if hit[i] { ':' } else { '-' };
-                            let text = String::from_utf8_lossy(lines[i]);
-                            s.push_str(&format!(
-                                "{relp}{sep}{}{sep}{}\n",
-                                i + 1,
-                                crate::util::truncate(&text, 500)
-                            ));
-                            last = Some(i);
-                        }
-                    }
-                    s
-                }
-                "count" => format!("{relp}:{}\n", re.find_iter(&bytes).count()),
-                _ => format!("{relp}\n"),
             };
             // files_with_matches: newest first; otherwise path order.
-            let key = if mode == "files_with_matches" {
+            let key = if opts.mode == "files_with_matches" {
                 let mt = e
                     .metadata()
                     .ok()
@@ -636,7 +557,7 @@ fn builtin_grep(
         .map_err(|_| anyhow::anyhow!("grep walker still running"))?
         .into_inner()
         .unwrap();
-    Ok(b.into_text())
+    Ok(chanto_core::search::finish(b))
 }
 
 pub struct Ls;
@@ -681,7 +602,11 @@ impl Tool for Ls {
             .unwrap_or(cwd.clone());
         let depth = arg_u64(&args, "depth").unwrap_or(2) as usize;
         let r2 = root.clone();
+        let fs = ctx.env.fs();
         let out = tokio::task::spawn_blocking(move || {
+            if !fs.on_disk() {
+                return chanto_core::search::tree(fs.as_ref(), &r2, depth);
+            }
             let mut lines = vec![format!("{}/", r2.display())];
             let walker = ignore::WalkBuilder::new(&r2)
                 .hidden(false)
@@ -775,9 +700,11 @@ mod tests {
             .unwrap();
         }
         let args = json!({"pattern": "needle", "output_mode": "content"});
-        let (text, total) = builtin_grep(&args, "needle", &d, "content", &d, 5).unwrap();
-        // Two matches and a `--` separator per file, as before.
-        assert_eq!(total, 150, "every output line is counted");
+        let (text, total) =
+            builtin_grep(&grep_options(&args, "content", 5), "needle", &d, &d).unwrap();
+        // Two matches per file, with no `--` between them (no context was
+        // asked for, as with ripgrep).
+        assert_eq!(total, 100, "every output line is counted");
         let lines: Vec<&str> = text.lines().collect();
         assert!(
             lines.len() <= 6,
@@ -786,12 +713,17 @@ mod tests {
         );
         assert!(lines[0].starts_with("f00.txt:1:needle one"), "{}", lines[0]);
         assert!(
-            lines[3].starts_with("f01.txt:1:"),
+            lines[2].starts_with("f01.txt:1:"),
             "path order: {}",
-            lines[3]
+            lines[2]
         );
-        let (text, total) =
-            builtin_grep(&json!({"pattern": "needle"}), "needle", &d, "count", &d, 3).unwrap();
+        let (text, total) = builtin_grep(
+            &grep_options(&json!({"pattern": "needle"}), "count", 3),
+            "needle",
+            &d,
+            &d,
+        )
+        .unwrap();
         assert_eq!((text.lines().count(), total), (3, 50));
         let (files, total) = glob_files(&d, "*.txt", 10, WALK_BUDGET).unwrap();
         assert_eq!((files.len(), total), (10, 50));
@@ -799,6 +731,108 @@ mod tests {
         // whole tree (what stops `/**` from walking the entire filesystem).
         let (_, capped) = glob_files(&d, "*.txt", 100, 3).unwrap();
         assert!(capped < 50, "the budget did not bound the walk: {capped}");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// The same tree on disk and in memory searches the same, ignore files
+    /// included: what the browser build sees is what the CLI would.
+    #[tokio::test]
+    async fn searching_memory_matches_searching_the_disk() {
+        let d = std::env::temp_dir().join(format!("chanto-parity-{}", uuid::Uuid::new_v4()));
+        let mem = std::sync::Arc::new(chanto_core::fs::MemFs::new());
+        let files = [
+            (".gitignore", "target/\n*.log\n!keep.log\n"),
+            ("src/main.rs", "fn main() {\n    let needle = 1;\n}\n"),
+            ("src/lib.rs", "pub fn needle() {}\n// Needle in a comment\n"),
+            ("src/deep/mod.rs", "needle\nhay\nhay\nneedle\n"),
+            ("src/deep/.ignore", "skip.rs\n"),
+            ("src/deep/skip.rs", "needle\n"),
+            ("target/out.rs", "needle\n"),
+            ("debug.log", "needle\n"),
+            ("keep.log", "needle\n"),
+            ("README.md", "No match here.\n"),
+            (".hidden/notes.md", "needle\n"),
+            (".git/config", "needle\n"),
+        ];
+        for (p, text) in files {
+            let path = d.join(p);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, text).unwrap();
+            mem.insert(&path, text);
+        }
+        // The CLI's walker only honours .gitignore inside a repository.
+        std::fs::create_dir_all(d.join(".git")).unwrap();
+        let env = crate::agent::tests::make_env(
+            "http://localhost:1",
+            &d,
+            crate::permissions::Mode::Default,
+            32768,
+        );
+        let disk = Ctx {
+            env,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            depth: 0,
+            call_id: None,
+            cwd_override: None,
+            reads: None,
+        };
+        let env = crate::agent::tests::make_env(
+            "http://localhost:1",
+            &d,
+            crate::permissions::Mode::Default,
+            32768,
+        );
+        env.set_fs(mem.clone());
+        let memory = Ctx {
+            env,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            depth: 0,
+            call_id: None,
+            cwd_override: None,
+            reads: None,
+        };
+        let sorted = |s: String| {
+            let mut l: Vec<String> = s.lines().map(str::to_string).collect();
+            l.sort();
+            l
+        };
+        for args in [
+            json!({"pattern": "**/*.rs"}),
+            json!({"pattern": "*.log"}),
+            json!({"pattern": "*.md"}),
+        ] {
+            let a = Glob.run(args.clone(), &disk).await.unwrap().content;
+            let b = Glob.run(args.clone(), &memory).await.unwrap().content;
+            // Same files; their order follows modification times, which differ.
+            assert_eq!(sorted(a), sorted(b), "Glob {args}");
+        }
+        for args in [
+            json!({"pattern": "needle", "output_mode": "content"}),
+            json!({"pattern": "needle", "output_mode": "content", "-C": 1}),
+            json!({"pattern": "NEEDLE", "-i": true, "output_mode": "count"}),
+            json!({"pattern": "needle", "glob": "*.rs", "output_mode": "content"}),
+            json!({"pattern": "needle", "type": "rust", "output_mode": "count"}),
+            json!({"pattern": "needle", "path": "src/deep", "output_mode": "content"}),
+            json!({"pattern": "needle", "path": "src/lib.rs", "output_mode": "content"}),
+        ] {
+            let a = Grep.run(args.clone(), &disk).await.unwrap().content;
+            let b = Grep.run(args.clone(), &memory).await.unwrap().content;
+            assert_eq!(sorted(a.clone()), sorted(b), "Grep {args}");
+            // The fallback for a machine without ripgrep agrees too.
+            let path = args["path"].as_str().map_or(d.clone(), |p| d.join(p));
+            let opts = grep_options(&args, args["output_mode"].as_str().unwrap(), 400);
+            let (c, _) = builtin_grep(&opts, args["pattern"].as_str().unwrap(), &path, &d).unwrap();
+            assert_eq!(sorted(a), sorted(c), "built-in Grep {args}");
+        }
+        let files_with = json!({"pattern": "needle"});
+        let a = Grep.run(files_with.clone(), &disk).await.unwrap().content;
+        let b = Grep.run(files_with, &memory).await.unwrap().content;
+        assert_eq!(sorted(a), sorted(b), "Grep files_with_matches");
+        for args in [json!({}), json!({"depth": 1}), json!({"path": "src"})] {
+            let a = Ls.run(args.clone(), &disk).await.unwrap().content;
+            let b = Ls.run(args.clone(), &memory).await.unwrap().content;
+            assert_eq!(a, b, "Ls {args}");
+        }
         let _ = std::fs::remove_dir_all(&d);
     }
 }
