@@ -13,6 +13,19 @@ impl Agent {
         // A full disk makes every write fail in confusing ways, so refuse
         // space-consuming calls while there is little left.
         let free = self.disk_free();
+        // Something here may change files: start the turn's snapshot now, so
+        // it runs while permission is asked and read-only calls run, before
+        // the first change waits for it.
+        if calls.iter().any(|c| {
+            self.lookup_tool(&c.name).is_none_or(|t| {
+                !matches!(
+                    t.kind_for(&c.arguments),
+                    ToolKind::ReadOnly | ToolKind::Network
+                )
+            })
+        }) {
+            self.env.start_snapshot();
+        }
         // 1. Authorize sequentially (may prompt the user). The last field is
         // hook context to fold into that call's result.
         let mut plan: Vec<PlannedCall> = Vec::new();

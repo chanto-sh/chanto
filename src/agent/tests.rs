@@ -6501,3 +6501,60 @@ async fn a_model_switch_doesnt_wait_for_a_slow_lookup() {
     assert!(!env.vision());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn a_read_only_turn_takes_no_snapshot_but_still_rewinds() {
+    let dir = tmpdir("lazy-snapshot");
+    std::fs::write(dir.join("shell"), "before\n").unwrap();
+    let (base, _) = mock_server(vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "shell"}))}),
+        json!({"content": "It says before."}),
+        json!({"content": "Nothing to do."}),
+        json!({"tool_calls": tc("Bash", json!({"command": "echo after > shell"}))}),
+        json!({"content": "done"}),
+    ])
+    .await;
+    let env = make_env_with(&base, &dir, Mode::Bypass, 32768, |c| {
+        c.sandbox.enabled = false;
+        c.history.timeout_ms = 10000;
+    });
+    let mut agent = Agent::new(env.clone());
+    for prompt in ["what does shell say?", "anything to do?"] {
+        agent
+            .run_turn(prompt, vec![], CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        env.snapshot_attempts.load(Ordering::Relaxed),
+        0,
+        "turns that only read take no snapshot"
+    );
+    agent
+        .run_turn("change it", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shell")).unwrap(),
+        "after\n"
+    );
+    // The changing turn took one, before the change; the read-only turns
+    // before it share it, since nothing changed in between.
+    let trees: Vec<_> = env
+        .checkpoints
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.tree.clone())
+        .collect();
+    assert!(trees[2].is_some(), "{trees:?}");
+    assert!(trees.iter().all(|t| *t == trees[2]), "{trees:?}");
+    assert!(env.snapshot_attempts.load(Ordering::Relaxed) >= 1);
+    // So rewinding to the first, read-only turn undoes the shell's change.
+    agent.rewind_mode(0, "both").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shell")).unwrap(),
+        "before\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
