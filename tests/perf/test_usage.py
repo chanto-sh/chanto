@@ -40,8 +40,16 @@ class UsageTest(unittest.TestCase):
 
     def test_more_work_costs_more_cpu(self):
         idle, _ = run("pass")
-        busy, _ = run("sum(range(4000000))")
-        self.assertGreater(busy.cpu_ms, idle.cpu_ms)
+        # Spin for 300 ms of the child's own CPU time rather than a fixed
+        # amount of work: Windows counts CPU in 15.6 ms ticks, and on a fast
+        # runner a fixed sum took as many ticks as starting Python did.
+        busy, _ = run(
+            "import time\n"
+            "end = time.process_time() + 0.3\n"
+            "while time.process_time() < end:\n"
+            "    pass"
+        )
+        self.assertGreater(busy.cpu_ms, idle.cpu_ms + 150)
 
     def test_the_exit_code_is_reported(self):
         _, code = run("raise SystemExit(3)")
