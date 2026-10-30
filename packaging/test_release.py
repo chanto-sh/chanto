@@ -98,10 +98,9 @@ class CratesPublishedTests(unittest.TestCase):
         }
         self.assertTrue(path_deps, "expected chanto's workspace crates among its dependencies")
         workflow = (ROOT / ".github/workflows/release.yml").read_text()
-        listed = set(
-            (name, path)
-            for path, name in re.findall(r"(\w+):(chanto-[\w-]+)", re.search(r'CRATES="([^"]+)"', workflow).group(1))
-        )
+        crates = re.search(r'CRATES="([^"]+)"', workflow)
+        self.assertIsNotNone(crates, "release.yml's crates job lists the crates it publishes in CRATES")
+        listed = {(name, path) for path, name in re.findall(r"(\w+):(chanto-[\w-]+)", crates.group(1))}
         self.assertEqual(path_deps, listed)
 
 class ChangelogFragmentTests(unittest.TestCase):
