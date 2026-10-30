@@ -223,6 +223,20 @@ class MarkdownTest(unittest.TestCase):
         self.assertIn("fail (over ceiling)", text)
         self.assertIn("CPU per request (ms)", text)
 
+    def test_a_one_shot_that_started_git_fails_and_says_what_ran(self):
+        report = self.report("pass")
+        report["helpers"] = ["git -c core.hooksPath=/dev/null init --bare /x"]
+        report["ok"] = False
+        text = gate.markdown(report)
+        self.assertIn("| Helper programs (git) | | 1 | | 0 | fail |", text)
+        self.assertIn("started a helper program", text)
+        self.assertIn("`git -c core.hooksPath=/dev/null init --bare /x`", text)
+
+    def test_no_helper_calls_pass(self):
+        report = self.report("pass")
+        report["helpers"] = []
+        self.assertIn("| Helper programs (git) | | 0 | | 0 | pass |", gate.markdown(report))
+
     def test_a_missing_base_is_named(self):
         report = self.report("pass")
         report["base"] = None
