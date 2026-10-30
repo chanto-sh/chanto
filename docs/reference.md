@@ -507,13 +507,13 @@ Besides the `✓`/spinner tab title (OSC 0), Chanto reports what the TUI session
 
 ### Keeping the machine awake
 
-A long turn, a `/loop` or a background run stops when the computer idles into sleep. By default Chanto prevents idle sleep while it's working, and releases it as soon as it's waiting for you. At an idle prompt, the status line shows `awake` if a background job or the `always` setting is still preventing sleep.
+A long turn, a `/loop` or a background run stops when the computer idles into sleep. By default Chanto prevents idle sleep while it's working, and releases it as soon as it's waiting for you. It starts after 20 seconds of work, since no system idles into sleep sooner, so quick answers never take it. At an idle prompt, the status line shows `awake` if a background job or the `always` setting is still preventing sleep.
 
 ```toml
 keep_awake = "working"   # default; or "never", or "always" (the whole session)
 ```
 
-It uses `caffeinate -i` on macOS, `systemd-inhibit` on Linux (skipped where that isn't installed) and `SetThreadExecutionState` on Windows. None of them can stop a closed laptop lid from sleeping (unless a Mac is on power with an external display), so for overnight work use a machine that stays on, `chanto --bg` on a server, or cloud runs.
+It takes a power assertion on macOS (what `caffeinate -i` takes, without starting a process), `systemd-inhibit` on Linux (skipped where that isn't installed) and `SetThreadExecutionState` on Windows. None of them can stop a closed laptop lid from sleeping (unless a Mac is on power with an external display), so for overnight work use a machine that stays on, `chanto --bg` on a server, or cloud runs.
 
 ### Themes
 
