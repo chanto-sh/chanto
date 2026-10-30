@@ -427,6 +427,9 @@ pub struct Env {
     pub provider: RwLock<Provider>,
     /// The model's metadata lookup when startup didn't wait for it.
     pub pending_model_info: Mutex<Option<PendingModelInfo>>,
+    /// MCP servers an interactive session started without waiting for: the
+    /// first model request waits for whichever are still connecting.
+    pub pending_mcp: Mutex<Option<tokio::task::JoinHandle<()>>>,
     model: RwLock<String>,
     mode: RwLock<Mode>,
     /// The mode an edit's "always allow" switched away from to accept edits.
@@ -795,6 +798,7 @@ impl Env {
             effort: RwLock::new(effort),
             vision: AtomicBool::new(i.vision),
             pending_model_info: Mutex::new(None),
+            pending_mcp: Mutex::new(None),
             text_tools: AtomicBool::new(false),
             cwd: RwLock::new(i.cwd),
             read_files: Default::default(),
@@ -1127,6 +1131,23 @@ impl Env {
         if let Some(w) = warning {
             self.frontend.emit(Event::Warn(w));
         }
+    }
+    /// Wait for the MCP servers startup left connecting, so the first request
+    /// has their tools. True the first time, when there were any.
+    pub async fn settle_mcp(&self) -> bool {
+        let pending = self.pending_mcp.lock().unwrap().take();
+        let Some(p) = pending else { return false };
+        if !p.is_finished()
+            && self
+                .mcp
+                .iter()
+                .any(|c| c.status() == crate::mcp::Status::Connecting)
+        {
+            self.frontend
+                .emit(Event::Info("Waiting for MCP servers to connect…".into()));
+        }
+        let _ = p.await;
+        true
     }
     pub fn set_vision(&self, b: bool) {
         self.vision.store(b, Ordering::Relaxed)

@@ -470,6 +470,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     let fe = crate::remote::mirror_tui(Arc::new(TuiFrontend { tx: tx.clone() }));
     // The TUI fires /loop iterations and scheduled tasks between turns.
     crate::cron::set_frontend_drives();
+    crate::mcp::connect_in_background();
     let Setup {
         env,
         agent,

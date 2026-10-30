@@ -40,6 +40,9 @@ pub struct McpPromptDef {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Status {
     Connected,
+    /// Started at launch and not finished connecting yet: its tools appear
+    /// once it has.
+    Connecting,
     /// HTTP server that wants OAuth and has no (valid) token: `/mcp login <name>`.
     NeedsLogin,
     /// Couldn't connect (or start); `/mcp reconnect <name>` tries again.
@@ -48,6 +51,21 @@ pub enum Status {
     /// blocked by policy. The text says which.
     Off(String),
 }
+
+static IN_BACKGROUND: AtomicBool = AtomicBool::new(false);
+
+/// An interactive frontend (the TUI, the REPL) shows its prompt without
+/// waiting for MCP servers to connect.
+pub fn connect_in_background() {
+    IN_BACKGROUND.store(true, Ordering::Relaxed);
+}
+
+pub(crate) fn connects_in_background() -> bool {
+    IN_BACKGROUND.load(Ordering::Relaxed)
+}
+
+/// The tools that list and read MCP resources.
+pub const RESOURCE_TOOLS: [&str; 2] = ["ListMcpResources", "ReadMcpResource"];
 
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
@@ -2373,18 +2391,41 @@ pub(crate) fn resolved(
 pub async fn connect_all(
     servers: &std::collections::BTreeMap<String, McpServerConfig>,
 ) -> (Vec<Arc<McpClient>>, Vec<String>) {
-    let futs = servers
+    let (clients, connecting) = start_all(servers);
+    let errs = connecting.await;
+    (clients, errs)
+}
+
+/// Every configured server's client at once, and the connecting itself: the
+/// clients that should run start out `Status::Connecting` and gain their
+/// tools as the returned future connects them. It finishes when each has
+/// connected, failed or timed out, with the startup warnings.
+pub fn start_all(
+    servers: &std::collections::BTreeMap<String, McpServerConfig>,
+) -> (
+    Vec<Arc<McpClient>>,
+    impl std::future::Future<Output = Vec<String>> + Send + 'static,
+) {
+    let clients: Vec<Arc<McpClient>> = servers
         .iter()
-        .filter(|(_, c)| off_reason(c).is_none())
-        .map(|(n, c)| async move {
-            let r = tokio::time::timeout(
-                Duration::from_secs_f64(startup_secs(c)),
-                McpClient::connect(n, c),
-            )
-            .await;
+        .map(|(n, c)| {
+            let status = off_reason(c).map_or(Status::Connecting, Status::Off);
+            McpClient::offline(n, c, status)
+        })
+        .collect();
+    let starting: Vec<Arc<McpClient>> = clients
+        .iter()
+        .filter(|c| c.status() == Status::Connecting)
+        .cloned()
+        .collect();
+    let connecting = async move {
+        let futs = starting.into_iter().map(|c| async move {
+            let secs = startup_secs(&c.cfg);
+            let r = tokio::time::timeout(Duration::from_secs_f64(secs), c.start(true)).await;
             if crate::util::timing_on() {
                 crate::util::timing(&format!(
-                    "mcp {n} {}",
+                    "mcp {} {}",
+                    c.name,
                     match &r {
                         Ok(Ok(_)) => "connected",
                         Ok(Err(_)) => "failed",
@@ -2392,30 +2433,43 @@ pub async fn connect_all(
                     }
                 ));
             }
-            (n.clone(), c, r)
+            // A failure before the handshake (a missing `${VAR}`, a command
+            // that won't start) hasn't said why yet; a timeout leaves the
+            // server running.
+            match &r {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => c.shutdown(Status::Failed(crate::util::one_line(
+                    &format!("{e:#}"),
+                    200,
+                ))),
+                Err(_) => c.shutdown(Status::Failed(format!(
+                    "timed out after {secs}s during startup"
+                ))),
+            }
+            (c, r)
         });
-    let mut ok: Vec<Arc<McpClient>> = servers
-        .iter()
-        .filter_map(|(n, c)| Some(McpClient::offline(n, c, Status::Off(off_reason(c)?))))
-        .collect();
+        startup_warnings(futures::future::join_all(futs).await)
+    };
+    (clients, connecting)
+}
+
+/// A server that tried to connect at startup: its client, and whether it
+/// connected (the outer error is the startup time limit).
+type Started = (
+    Arc<McpClient>,
+    Result<Result<()>, tokio::time::error::Elapsed>,
+);
+
+/// What to tell the user about the servers that just tried to connect.
+fn startup_warnings(results: Vec<Started>) -> Vec<String> {
     let mut errs = Vec::new();
     let mut imported_failed = Vec::new();
     let mut needs_login = Vec::new();
     let mut imported_login = Vec::new();
     let mut missing_env = Vec::new();
-    for (n, cfg, r) in futures::future::join_all(futs).await {
-        let origin = cfg.imported_from.clone();
-        if let Some(why) = match &r {
-            Ok(Ok(_)) => None,
-            Ok(Err(e)) => Some(crate::util::one_line(&format!("{e:#}"), 200)),
-            Err(_) => Some(format!(
-                "timed out after {}s during startup",
-                startup_secs(cfg)
-            )),
-        } {
-            ok.push(McpClient::offline(&n, cfg, Status::Failed(why)));
-        }
-        match (r, origin) {
+    for (c, r) in results {
+        let n = &c.name;
+        match (r, c.cfg.imported_from.clone()) {
             // A `${VAR}` the server needs isn't set: say which, rather than "failed".
             (Ok(Err(e)), o) if e.downcast_ref::<MissingEnv>().is_some() => {
                 let var = &e.downcast_ref::<MissingEnv>().unwrap().0;
@@ -2428,15 +2482,14 @@ pub async fn connect_all(
                     None => errs.push(msg),
                 }
             }
-            (Ok(Ok(c)), o) => {
+            (Ok(Ok(())), o) => {
                 if c.status() == Status::NeedsLogin {
                     if o.is_some() {
-                        imported_login.push(n)
+                        imported_login.push(n.clone())
                     } else {
-                        needs_login.push(n)
+                        needs_login.push(n.clone())
                     }
                 }
-                ok.push(c)
             }
             (_, Some(o)) => imported_failed.push(format!("{n} ({o})")),
             (Ok(Err(e)), None) => errs.push(format!("MCP server `{n}` failed: {e}")),
@@ -2484,8 +2537,8 @@ pub async fn connect_all(
             imported_failed.join(", ")
         ));
     }
-    (ok, errs)
+    errs
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

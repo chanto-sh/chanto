@@ -211,7 +211,16 @@ impl Registry {
     }
 
     pub fn specs(&self, filter: &dyn Fn(&str) -> bool) -> Vec<ToolSpec> {
-        self.tools
+        Self::specs_of(&self.tools, filter)
+    }
+
+    /// The hidden tools' definitions, for advertising some after all.
+    pub fn hidden_specs(&self, filter: &dyn Fn(&str) -> bool) -> Vec<ToolSpec> {
+        Self::specs_of(&self.hidden, filter)
+    }
+
+    fn specs_of(tools: &[Arc<dyn Tool>], filter: &dyn Fn(&str) -> bool) -> Vec<ToolSpec> {
+        tools
             .iter()
             .filter(|t| filter(&t.name()))
             .map(|t| ToolSpec {

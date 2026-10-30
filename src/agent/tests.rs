@@ -6403,3 +6403,62 @@ async fn the_shell_snapshot_is_taken_during_the_first_model_call() {
     assert!(agent.env.shell_snapshot.initialized());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[tokio::test]
+async fn the_first_request_waits_for_mcp_servers_still_connecting() {
+    let dir = tmpdir("mcp-background");
+    let servers: std::collections::BTreeMap<String, crate::config::McpServerConfig> =
+        [("slow".to_string(), crate::mcp::tests::slow_server(0.5))].into();
+    let (clients, connecting) = crate::mcp::start_all(&servers);
+    let (base, seen) = mock_server(vec![json!({"content": "done"})]).await;
+    let mut tools = Registry::builtin();
+    tools.hidden.extend::<[Arc<dyn crate::tools::Tool>; 2]>([
+        Arc::new(crate::mcp::ListMcpResources),
+        Arc::new(crate::mcp::ReadMcpResource),
+    ]);
+    let mut config = Config::default();
+    config.provider = ProviderKind::Openai;
+    let env = Env::new(EnvInit {
+        config,
+        provider: Provider::new(ProviderKind::Openai, &base, None, 32768),
+        model: "mock".into(),
+        mode: Mode::Bypass,
+        vision: false,
+        cwd: dir.clone(),
+        tools,
+        mcp: clients.clone(),
+        frontend: Arc::new(NullFrontend),
+        interactive: true,
+    });
+    *env.pending_mcp.lock().unwrap() = Some(tokio::spawn(async move {
+        connecting.await;
+    }));
+    // The session is ready before the server is.
+    let mut agent = Agent::new(env);
+    assert_eq!(clients[0].status(), crate::mcp::Status::Connecting);
+    let end = agent
+        .run_turn("hi", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        matches!(end, TurnEnd::Done(ref t) if t == "done"),
+        "{end:?}"
+    );
+    let req = seen.lock().unwrap()[0].clone();
+    let names: Vec<&str> = req["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    assert!(names.contains(&"mcp__slow__echo"), "{names:?}");
+    assert!(names.contains(&"ListMcpResources"), "{names:?}");
+    // Startup wrote the prompt before the server connected; the request
+    // names it all the same.
+    assert!(
+        req["messages"].to_string().contains("## slow"),
+        "the prompt names the server"
+    );
+    clients[0].shutdown(crate::mcp::Status::Off("test over".into()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
