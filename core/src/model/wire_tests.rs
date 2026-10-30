@@ -325,15 +325,22 @@ fn line_buf_splits_across_reads_and_scans_long_lines_once() {
     assert_eq!(l.next_line(), Some(&b"data: bc\n"[..]));
     assert_eq!(l.next_line(), Some(&b"\n"[..]));
     assert_eq!(l.next_line(), None);
-    // A 20 MB line in 16 KB reads: linear, so this is instant.
+    // A 20 MB line in 16 KB reads: linear, so this is instant. Node's WASI,
+    // which runs the WebAssembly tests, exits without a word once memory
+    // grows to about 40 MB, so there it is 2 MB.
+    let reads = if cfg!(target_family = "wasm") {
+        128
+    } else {
+        1280
+    };
     let mut l = LineBuf::default();
     let t = std::time::Instant::now();
-    for _ in 0..1280 {
+    for _ in 0..reads {
         l.push(&[b'y'; 16384]);
         assert_eq!(l.next_line(), None);
     }
     l.push(b"\n");
-    assert_eq!(l.next_line().map(|v| v.len()), Some(1280 * 16384 + 1));
+    assert_eq!(l.next_line().map(|v| v.len()), Some(reads * 16384 + 1));
     assert!(
         t.elapsed() < std::time::Duration::from_secs(5),
         "{:?}",

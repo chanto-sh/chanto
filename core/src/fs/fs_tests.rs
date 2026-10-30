@@ -30,6 +30,8 @@ fn memory_files_and_directories() {
 }
 
 /// The same tree on disk and in memory reads the same.
+// The disk: not in a WebAssembly build.
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn memory_reads_like_the_disk() {
     let dir =
@@ -74,6 +76,8 @@ fn memory_reads_like_the_disk() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// The disk: not in a WebAssembly build.
+#[cfg(not(target_family = "wasm"))]
 #[test]
 fn atomic_write_keeps_the_original_on_failure() {
     let dir = std::env::temp_dir().join(format!("chanto-atomic-{}", std::process::id()));

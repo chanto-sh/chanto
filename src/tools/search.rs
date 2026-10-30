@@ -5,13 +5,13 @@ use super::{Ctx, Tool, ToolKind, ToolOutput, arg_bool, arg_str, arg_u64};
 use crate::util::{rel, resolve};
 use anyhow::Result;
 use async_trait::async_trait;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
-const MAX_RESULTS: usize = 200;
+use chanto_core::tools::{MAX_RESULTS, WALK_BUDGET, grep_options};
 
 use chanto_core::search::{Bounded, GrepOptions};
 
@@ -23,19 +23,10 @@ impl Tool for Glob {
         "Glob".into()
     }
     fn description(&self) -> String {
-        "Find files by name pattern (`.gitignore` respected), e.g. `**/*.rs` or `src/**/*.{ts,tsx}`. \
-Results come back newest-modified first."
-            .into()
+        chanto_core::tools::GLOB_DESCRIPTION.into()
     }
     fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string", "description": "Glob pattern"},
-                "path": {"type": "string", "description": "Directory to search (default: cwd)"}
-            },
-            "required": ["pattern"]
-        })
+        chanto_core::tools::glob_schema()
     }
     fn kind(&self) -> ToolKind {
         ToolKind::ReadOnly
@@ -86,30 +77,19 @@ Results come back newest-modified first."
             }
         })
         .await??;
+        let out = chanto_core::tools::glob_output(files.iter().map(|(p, _)| rel(&cwd, p)), total);
         if total == 0 {
-            return Ok(ToolOutput::ok("No files found").display("No files found"));
+            return Ok(ToolOutput::ok(out).display("No files found"));
         }
-        let mut out: Vec<String> = files.iter().map(|(p, _)| rel(&cwd, p)).collect();
-        if total > MAX_RESULTS {
-            out.push(format!(
-                "… ({} more; use a more specific pattern)",
-                total - MAX_RESULTS
-            ));
-        }
-        Ok(ToolOutput::ok(out.join("\n"))
-            .display(format!("Found {}", crate::util::plural(total, "file"))))
+        Ok(ToolOutput::ok(out).display(format!("Found {}", crate::util::plural(total, "file"))))
     }
 }
 
 /// Matches collected newest-first and bounded while the tree is walked.
 type NewestFirst = Arc<Mutex<Bounded<(std::cmp::Reverse<SystemTime>, PathBuf)>>>;
 
-/// The `limit` most recently modified matches (newest first), and how many matched in all.
-/// Stop the walk after this many visited entries: the result cap bounds what is
-/// kept, not what is traversed, so an absolute pattern like `/**` would
-/// otherwise walk the whole filesystem (and hang on huge or slow trees).
-const WALK_BUDGET: usize = 400_000;
-
+/// The `limit` most recently modified matches (newest first), and how many
+/// matched in all, stopping after `budget` visited entries.
 fn glob_files(
     root: &Path,
     pattern: &str,
@@ -196,31 +176,10 @@ impl Tool for Grep {
         "Grep".into()
     }
     fn description(&self) -> String {
-        "Search file contents with a regex (ripgrep syntax; `.gitignore` respected). `output_mode` decides \
-the result: `content` gives the matching lines (with `-n`, `-A`, `-B`, `-C` context), `files_with_matches` \
-just the paths (default), `count` the totals. Narrow by `glob` (e.g. `*.rs`) or `type` (e.g. `rust`, `py`, `js`). \
-Reach for this instead of grep/rg in Bash."
-            .into()
+        chanto_core::tools::GREP_DESCRIPTION.into()
     }
     fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "pattern": {"type": "string", "description": "Regular expression"},
-                "path": {"type": "string", "description": "File or directory (default: cwd)"},
-                "glob": {"type": "string", "description": "Glob filter, e.g. `*.{ts,tsx}`"},
-                "type": {"type": "string", "description": "File type filter, e.g. rust, py, js, go"},
-                "output_mode": {"type": "string", "enum": ["content", "files_with_matches", "count"]},
-                "-i": {"type": "boolean", "description": "Case insensitive"},
-                "-n": {"type": "boolean", "description": "Show line numbers (content mode, default true)"},
-                "-A": {"type": "integer"},
-                "-B": {"type": "integer"},
-                "-C": {"type": "integer"},
-                "multiline": {"type": "boolean", "description": "Allow patterns to span lines"},
-                "head_limit": {"type": "integer", "description": "Limit output to first N lines/entries"}
-            },
-            "required": ["pattern"]
-        })
+        chanto_core::tools::grep_schema()
     }
     fn kind(&self) -> ToolKind {
         ToolKind::ReadOnly
@@ -276,23 +235,10 @@ Reach for this instead of grep/rg in Bash."
             .await??;
             (o, t, None)
         };
+        let s = chanto_core::tools::grep_output(&out, total, head, warn.as_deref());
         if total == 0 {
-            return Ok(
-                ToolOutput::ok(warn.unwrap_or_else(|| "No matches found".into()))
-                    .display("No matches"),
-            );
+            return Ok(ToolOutput::ok(s).display("No matches"));
         }
-        let mut s = out.lines().take(head).collect::<Vec<_>>().join("\n");
-        if total > head {
-            s.push_str(&format!(
-                "\n… ({} more lines; narrow the search or raise head_limit)",
-                total - head
-            ));
-        }
-        if let Some(w) = warn {
-            s.push_str(&format!("\n{w}"));
-        }
-        let s = crate::util::truncate(&s, 60_000);
         Ok(ToolOutput::ok(s).display(format!(
             "Found {}",
             crate::util::plural(
@@ -467,20 +413,6 @@ async fn newest_first(cwd: &Path, paths: Vec<String>, head: usize) -> String {
     .unwrap_or_default()
 }
 
-/// What Grep's arguments ask for, besides the pattern and path.
-fn grep_options(args: &Value, mode: &str, head: usize) -> GrepOptions {
-    GrepOptions {
-        mode: mode.to_string(),
-        case_insensitive: arg_bool(args, "-i"),
-        multiline: arg_bool(args, "multiline"),
-        glob: args["glob"].as_str().map(str::to_string),
-        file_type: args["type"].as_str().map(str::to_string),
-        before: arg_u64(args, "-B").or(arg_u64(args, "-C")).unwrap_or(0) as usize,
-        after: arg_u64(args, "-A").or(arg_u64(args, "-C")).unwrap_or(0) as usize,
-        head,
-    }
-}
-
 /// Search the disk without ripgrep, in parallel. Keeps only the entries
 /// needed for the first `head` lines (newest files first for paths; path
 /// order otherwise). Returns (text, total lines).
@@ -568,16 +500,10 @@ impl Tool for Ls {
         "Ls".into()
     }
     fn description(&self) -> String {
-        "List a directory as a tree (respects .gitignore), up to `depth` levels (default 2).".into()
+        chanto_core::tools::LS_DESCRIPTION.into()
     }
     fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "path": {"type": "string"},
-                "depth": {"type": "integer"}
-            }
-        })
+        chanto_core::tools::ls_schema()
     }
     fn kind(&self) -> ToolKind {
         ToolKind::ReadOnly
@@ -639,6 +565,7 @@ impl Tool for Ls {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn bounded_keeps_only_the_first_lines_but_counts_all() {
