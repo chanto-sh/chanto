@@ -9,9 +9,20 @@
 //! dies). Linux: `systemd-inhibit --what=idle:sleep`. Windows:
 //! `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` on a thread that lives as long
 //! as the hold. None of these can stop a laptop lid from forcing sleep.
+//!
+//! A hold only takes effect once work has gone on for [`DELAY`]: no system
+//! idles into sleep sooner (the shortest setting is a minute), so a quick
+//! turn, like a one-shot question, never pays for one.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
+
+/// How long work goes on before the machine is kept awake (short in tests).
+#[cfg(not(test))]
+const DELAY: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const DELAY: Duration = Duration::from_millis(100);
 
 /// `keep_awake` in config: while working (default), never, or for the whole session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,12 +53,29 @@ struct State {
     inhibitor: Option<Inhibitor>,
     /// The hold `Always` takes for the whole session.
     session: bool,
+    /// Counts the times holding started from none, so a delayed start meant
+    /// for work that has since ended doesn't fire.
+    epoch: u64,
+    /// Inhibitors started, in tests, which never start a real one.
+    #[cfg(test)]
+    started: u64,
 }
 static STATE: Mutex<State> = Mutex::new(State {
     holders: 0,
     inhibitor: None,
     session: false,
+    epoch: 0,
+    #[cfg(test)]
+    started: 0,
 });
+
+fn state() -> std::sync::MutexGuard<'static, State> {
+    lock(&STATE)
+}
+
+fn lock(cell: &'static Mutex<State>) -> std::sync::MutexGuard<'static, State> {
+    cell.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Set the policy from config; `Always` takes a hold that lasts until exit.
 pub fn init(policy: Policy) {
@@ -59,10 +87,10 @@ pub fn init(policy: Policy) {
         },
         Ordering::Relaxed,
     );
-    let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = state();
     if policy == Policy::Always && !s.session {
         s.session = true;
-        acquire(&mut s);
+        acquire(&STATE, &mut s, Duration::ZERO);
     }
 }
 
@@ -76,16 +104,14 @@ pub fn hold() -> Guard {
     if POLICY.load(Ordering::Relaxed) == NEVER {
         return Guard { held: false };
     }
-    let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
-    acquire(&mut s);
+    acquire(&STATE, &mut state(), DELAY);
     Guard { held: true }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
         if self.held {
-            let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
-            release(&mut s);
+            release(&mut state());
         }
     }
 }
@@ -98,9 +124,36 @@ pub fn active() -> bool {
         .unwrap_or(false)
 }
 
-fn acquire(s: &mut State) {
+/// Take a hold on `cell` (locked as `s`); the first one starts the inhibitor
+/// after `delay`, if work is still going on then.
+fn acquire(cell: &'static Mutex<State>, s: &mut State, delay: Duration) {
     s.holders += 1;
-    if s.holders == 1 && !cfg!(test) {
+    if s.holders != 1 {
+        return;
+    }
+    s.epoch += 1;
+    if delay.is_zero() {
+        start(s);
+        return;
+    }
+    let epoch = s.epoch;
+    let _ = std::thread::Builder::new()
+        .name("keep-awake".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            let mut s = lock(cell);
+            if s.holders > 0 && s.epoch == epoch && s.inhibitor.is_none() {
+                start(&mut s);
+            }
+        });
+}
+
+fn start(s: &mut State) {
+    #[cfg(test)]
+    {
+        s.started += 1;
+    }
+    if !cfg!(test) {
         s.inhibitor = Inhibitor::start();
     }
 }
@@ -276,6 +329,41 @@ mod tests {
         assert!(listed(), "pmset lists the assertion while it's held");
         drop(i);
         assert!(!listed(), "released on drop");
+    }
+
+    #[test]
+    fn a_short_hold_never_starts_the_inhibitor() {
+        // Its own state: turns in other tests take holds on the shared one.
+        static CELL: Mutex<State> = Mutex::new(State {
+            holders: 0,
+            inhibitor: None,
+            session: false,
+            epoch: 0,
+            started: 0,
+        });
+        let take = || acquire(&CELL, &mut lock(&CELL), DELAY);
+        let drop_one = || release(&mut lock(&CELL));
+        let started = || lock(&CELL).started;
+        take();
+        drop_one();
+        std::thread::sleep(DELAY * 3);
+        assert_eq!(started(), 0, "a hold dropped before the delay started one");
+        // One that lasts past the delay does, once.
+        take();
+        take();
+        std::thread::sleep(DELAY * 3);
+        assert_eq!(started(), 1);
+        drop_one();
+        drop_one();
+        // A later hold starts its own after the delay, not at once.
+        take();
+        assert_eq!(started(), 1);
+        std::thread::sleep(DELAY * 3);
+        assert_eq!(started(), 2);
+        drop_one();
+        // `keep_awake = "always"` starts at once.
+        acquire(&CELL, &mut lock(&CELL), Duration::ZERO);
+        assert_eq!(started(), 3);
     }
 
     #[test]
