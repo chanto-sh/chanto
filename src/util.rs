@@ -490,9 +490,11 @@ pub fn strip_terminal_escapes(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::{append_private, free_bytes, write_private};
     use super::{
-        append_private, duration, free_bytes, is_image_path, plural, short_num,
-        strip_terminal_escapes, unescape_path, write_atomic, write_private,
+        duration, is_image_path, plural, short_num, strip_terminal_escapes, unescape_path,
+        write_atomic,
     };
     use std::path::Path;
 

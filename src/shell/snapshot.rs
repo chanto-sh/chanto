@@ -228,7 +228,7 @@ pub fn create(
 }
 
 /// Run `shell` as an interactive login shell and collect what it set up.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn capture(shell: &Path, home: Option<&Path>, timeout: Duration) -> Result<Captured, Error> {
     let dir = private_dir().map_err(|e| Error::Failed(e.to_string()))?;
     let r = capture_in(&dir, shell, home, timeout);

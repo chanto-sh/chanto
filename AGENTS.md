@@ -4,7 +4,7 @@
 - Build: `cargo build` (release: `cargo build --release`, binary at `target/release/chanto`)
 - Test: `cargo test` (single test: `cargo test <name>`); agent-loop tests use a mock OpenAI server in `src/agent/tests.rs`
 - Format: `cargo fmt --all` (CI runs `cargo fmt --all --check`); enable the hooks (pre-commit checks, commit-msg format) once with `git config core.hooksPath .githooks`, and don't bypass them with `--no-verify`
-- Lint: `cargo clippy --workspace --all-targets` must stay warning-free (CI runs it with `-D warnings`)
+- Lint: `cargo clippy --workspace --all-targets` must stay warning-free (CI runs it with `-D warnings` on Linux and Windows). Code under `cfg(windows)`, or used only by Unix-gated tests, is only linted on Windows; check it from macOS or Linux with the MinGW toolchain (`brew install mingw-w64` or `apt install mingw-w64`, then `rustup target add x86_64-pc-windows-gnu`): `cargo clippy --workspace --all-targets --target x86_64-pc-windows-gnu -- -D warnings`
 - Real-model smoke: `tests/real-model/smoke.sh <chanto> <base-url> <model> [provider]` has Chanto fix a one-line bug and checks the result; `.github/workflows/real-model.yml` runs it on every PR on the runner's CPU (no secrets, not required checks): Qwen3.5-4B, LFM3-1.7B and Gemma 4 E4B through llama-server's OpenAI API, and Qwen3.5-4B through Ollama's native and Anthropic APIs. `hosted-model.yml` runs it nightly against free OpenRouter models, Groq and Google AI Studio's Gemma 4 when `OPENROUTER_API_KEY` / `GROQ_API_KEY` / `GEMINI_API_KEY` secrets are set.
   - Locally: `SMOKE_FLAGS=--no-think tests/real-model/smoke.sh target/debug/chanto http://localhost:11434 qwen3.5:4b ollama`
 - Debug a tool without a model: `chanto --run-tool <Tool> '<json args>'`
