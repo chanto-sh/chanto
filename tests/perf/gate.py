@@ -6,6 +6,8 @@ Two measurements are taken against the instant mock model in
 time is zero:
 
   startup   one `-p` request: process CPU and peak RSS of a one-shot run.
+            It must also start no `git`: a question that changes nothing
+            needs no checkpoint (Unix; a logging `git` leads PATH).
   turns     40 requests that each read a 40 KB file, the same workload the
             published benchmark uses: CPU per request and peak RSS.
 
@@ -268,6 +270,53 @@ def pinned(binary, cpus):
         raise GateError("taskset is needed to simulate a small device")
     cores = ",".join(str(i) for i in range(cpus))
     return taskset, ["-c", cores, binary]
+
+
+# Programs a one-shot question that changes nothing must not start. Each gets
+# a stub ahead of the real one on PATH that logs its arguments and then runs
+# the real program, so the run behaves as it would without the stub.
+HELPERS = ("git",)
+
+
+def helper_calls(bench, binary, runs=3):
+    """The helper programs `runs` one-shot requests started, as `name args`
+    lines. The runs share a home of their own: another binary's leftovers
+    (the base's checkpoint repository) would start legitimate maintenance,
+    and a later run catches work an earlier one exited before starting.
+
+    None on Windows, where a stub would have to be a `.cmd` file found
+    through PATHEXT, and the run would differ from a real one.
+    """
+    if sys.platform == "win32":
+        return None
+    stubs = bench.work / "helper-stubs"
+    stubs.mkdir(exist_ok=True)
+    log = bench.work / "helper-calls.log"
+    log.write_text("")
+    path = bench.env["PATH"]
+    for name in HELPERS:
+        real = shutil.which(name, path=path)
+        stub = stubs / name
+        stub.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"{name} $*\" >> '{log}'\n"
+            + (f"exec '{real}' \"$@\"\n" if real else "exit 127\n")
+        )
+        stub.chmod(0o755)
+    home = bench.work / "helper-home"
+    shutil.rmtree(home, ignore_errors=True)
+    env = dict(
+        bench.env,
+        PATH=f"{stubs}{os.pathsep}{path}",
+        HOME=str(home),
+        CHANTO_HOME=str(home / "chanto"),
+        CHANTO_COMPAT_HOME=str(home / "compat"),
+    )
+    for _ in range(runs):
+        _, code = wait_with_usage(binary, ["-p", "hello", "--cwd", str(bench.work)], env)
+        if code != 0:
+            raise GateError(f"{binary} exited {code} on a one-shot run")
+    return [line for line in log.read_text().splitlines() if line]
 
 
 class StartupBench:
@@ -544,6 +593,7 @@ def run(head, base, config, device=False):
                     if i >= warmup:
                         samples[name]["startup_cpu_ms"].append(usage.cpu_ms)
                         samples[name]["startup_rss_mb"].append(usage.rss_mb)
+            helpers = helper_calls(bench, head)
         finally:
             bench.close()
 
@@ -589,6 +639,7 @@ def run(head, base, config, device=False):
         "workload": cfg["workload"],
         "reps": reps,
         "metrics": metrics,
+        "helpers": helpers,
     }
     if device_metrics is not None:
         report["device"] = {
@@ -596,7 +647,7 @@ def run(head, base, config, device=False):
             "reps": cfg["device"]["reps"],
             "metrics": device_metrics,
         }
-    report["ok"] = all(
+    report["ok"] = not helpers and all(
         m["verdict"] == "pass"
         for group in (report["metrics"], report.get("device", {}).get("metrics", {}))
         for m in group.values()
@@ -641,6 +692,12 @@ def markdown(report):
             f"| {label(metric)} | {number(m['base'])} | {number(m['head'])} | "
             f"{change} | {number(m['budget'])} | {verdict} |"
         )
+    helpers = report.get("helpers")
+    if helpers is not None:
+        lines.append(
+            f"| Helper programs ({', '.join(HELPERS)}) | | {len(helpers)} | | 0 | "
+            f"{'pass' if not helpers else 'fail'} |"
+        )
     passing = [label(k) for k, m in report["metrics"].items() if m["verdict"] == "pass"]
     device = report.get("device", {})
     if report["ok"]:
@@ -653,6 +710,9 @@ def markdown(report):
         lines += [""]
         if failed:
             lines += ["**A metric regressed:** " + ", ".join(failed)]
+        if helpers:
+            lines += ["**A one-shot question started a helper program it doesn't need:** "
+                      + "; ".join(f"`{c}`" for c in helpers[:5])]
         if failed_device:
             lines += ["**The small device could not keep up:** "
                       + ", ".join(failed_device)]
