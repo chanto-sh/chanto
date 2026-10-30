@@ -917,6 +917,40 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_stale_capture_is_removed_and_a_fresh_one_kept() {
+        let _home_lock = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = crate::config::home_dir().join("shell-snapshots");
+        let (stale, fresh) = (
+            base.join(format!("stale-{}", uuid::Uuid::new_v4().simple())),
+            base.join(format!("fresh-{}", uuid::Uuid::new_v4().simple())),
+        );
+        for d in [&stale, &fresh] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("capture"), "E\0GITHUB_TOKEN\0ghp_x\0").unwrap();
+            std::fs::write(d.join("snapshot.sh"), "").unwrap();
+        }
+        // Left by a crash an hour ago; the other is a capture under way.
+        std::fs::File::options()
+            .write(true)
+            .open(stale.join("capture"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+        let dir = private_dir().unwrap();
+        assert!(!stale.join("capture").exists(), "the stale capture stayed");
+        assert!(stale.join("snapshot.sh").exists(), "only the capture goes");
+        assert!(
+            fresh.join("capture").exists(),
+            "a capture under way was removed"
+        );
+        for d in [&stale, &fresh, &dir] {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+
+    #[test]
     fn functions_load_on_first_call_without_aliases_rewriting_them() {
         let dir = std::env::temp_dir().join(format!("chanto-lazy-fn-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
