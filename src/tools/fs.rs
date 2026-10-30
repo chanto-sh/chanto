@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use async_trait::async_trait;
 use base64::Engine;
 use chanto_core::edit::{apply_edit, changed_snippet, count_changes};
-use chanto_core::fs::NativeFs;
+use chanto_core::fs::Fs;
 use chanto_core::read::{MAX_READ_BYTES, not_utf8, read_window, render_notebook, similar_files};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -51,6 +51,18 @@ fn path_label(name: &str, args: &Value, ctx_cwd: Option<&Path>) -> String {
         None => p.to_string(),
     };
     format!("{name}({shown})")
+}
+
+/// Run `f` with the session's file system on a blocking thread: a read or
+/// write can be large, and on the disk it is real I/O.
+async fn with_fs<T: Send + 'static>(
+    ctx: &Ctx,
+    f: impl FnOnce(&dyn Fs) -> std::io::Result<T> + Send + 'static,
+) -> std::io::Result<T> {
+    let fs = ctx.env.fs();
+    tokio::task::spawn_blocking(move || f(fs.as_ref()))
+        .await
+        .map_err(std::io::Error::other)?
 }
 
 fn cwd_now() -> std::path::PathBuf {
@@ -123,10 +135,10 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
                 .collect();
             return Ok(ToolOutput::ok(crate::util::truncate(&out, MAX_READ_BYTES)));
         }
-        let meta = match tokio::fs::metadata(&path).await {
+        let meta = match ctx.env.fs().metadata(&path) {
             Ok(m) => m,
             Err(_) => {
-                let hint = similar_files(&NativeFs, &path);
+                let hint = similar_files(ctx.env.fs().as_ref(), &path);
                 return Ok(ToolOutput::err(format!(
                     "File does not exist: {}{hint}",
                     path.display()
@@ -161,18 +173,19 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
         if matches!(
             ext.as_str(),
             "png" | "jpg" | "jpeg" | "gif" | "webp" | "pdf" | "ipynb"
-        ) && meta.len() > MAX_BLOB_BYTES
+        ) && meta.len > MAX_BLOB_BYTES
         {
             return Ok(ToolOutput::err(format!(
                 "{} is {} bytes; a {} file is read in full, which is capped at {} MiB.",
                 path.display(),
-                meta.len(),
+                meta.len,
                 ext,
                 MAX_BLOB_BYTES / (1024 * 1024)
             )));
         }
         if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp") {
-            let bytes = tokio::fs::read(&path).await?;
+            let p = path.clone();
+            let bytes = with_fs(ctx, move |fs| fs.read(&p)).await?;
             ctx.env.mark_read(&path);
             let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
             if !ctx.env.vision() {
@@ -212,7 +225,8 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
             });
         }
         if ext == "ipynb" {
-            let bytes = tokio::fs::read(&path).await?;
+            let p = path.clone();
+            let bytes = with_fs(ctx, move |fs| fs.read(&p)).await?;
             ctx.env.mark_read(&path);
             return Ok(ToolOutput::ok(render_notebook(&bytes)));
         }
@@ -221,7 +235,7 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
             .map(|l| l as usize)
             .unwrap_or(DEFAULT_LIMIT);
         let key = (crate::permissions::normalize(&path), offset, limit);
-        let stamp = meta.modified().ok().map(|t| (t, meta.len()));
+        let stamp = meta.modified.map(|t| (t, meta.len));
         if let (Some(log), Some(stamp)) = (&ctx.reads, stamp)
             && log.unchanged(&key, stamp)
         {
@@ -234,13 +248,11 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
         }
         // Stream the file: only the requested lines are kept, so a small
         // window into a huge log doesn't load the whole file.
-        let p2 = path.clone();
-        let w = tokio::task::spawn_blocking(move || {
-            let f = std::fs::File::open(&p2)?;
-            let size = f.metadata()?.len();
-            read_window(f, size, offset, limit)
+        let (p, size) = (path.clone(), meta.len);
+        let w = with_fs(ctx, move |fs| {
+            read_window(fs.open(&p)?, size, offset, limit)
         })
-        .await??;
+        .await?;
         if w.binary {
             return Ok(ToolOutput::err(format!(
                 "{} appears to be a binary file ({} bytes).",
@@ -283,7 +295,8 @@ fn check_fresh(ctx: &Ctx, path: &Path) -> Option<String> {
 }
 
 fn stale(ctx: &Ctx, path: &Path) -> Option<String> {
-    if !path.exists() {
+    let fs = ctx.env.fs();
+    if !fs.exists(path) {
         return None;
     }
     match ctx.env.read_time(path) {
@@ -292,7 +305,7 @@ fn stale(ctx: &Ctx, path: &Path) -> Option<String> {
             path.display()
         )),
         Some(t) => {
-            let m = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
+            let m = fs.metadata(path).ok()?.modified?;
             if m > t {
                 Some(format!(
                     "{} was modified since you last read it (by the user or a tool). Read it again before editing.",
@@ -344,9 +357,6 @@ must Read it first. Prefer Edit for modifying existing files; use Write for new 
             return Ok(ToolOutput::err(e));
         }
         let old = read_text(ctx, &path).await.ok();
-        if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent).await?;
-        }
         write_text(ctx, &path, old.as_deref(), content).await?;
         ctx.env.mark_read(&path);
         let n = content.lines().count();
@@ -473,14 +483,12 @@ impl Tool for MultiEdit {
 async fn edit_file(ctx: &Ctx, p: &str, edits: Vec<(String, String, bool)>) -> Result<ToolOutput> {
     let cwd = ctx.cwd();
     let path = resolve(&cwd, p);
-    if !path.exists() {
+    if !ctx.env.fs().exists(&path) {
         if edits.len() == 1 && edits[0].0.is_empty() {
             // Creating a new file via Edit with empty old_string.
-            if let Some(parent) = path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
-            }
             ctx.env.snapshot_file(&path);
-            crate::util::write_atomic(&path, edits[0].1.as_bytes()).await?;
+            let (p, text) = (path.clone(), edits[0].1.clone());
+            with_fs(ctx, move |fs| fs.write(&p, text.as_bytes())).await?;
             ctx.env.mark_read(&path);
             return Ok(ToolOutput::ok(format!("Created {}", path.display())));
         }
@@ -587,7 +595,8 @@ pub(crate) async fn read_text(ctx: &Ctx, path: &Path) -> Result<String> {
     match ctx.env.frontend.read_text_file(path).await {
         Some(r) => r,
         None => {
-            let bytes = tokio::fs::read(path).await?;
+            let p = path.to_path_buf();
+            let bytes = with_fs(ctx, move |fs| fs.read(&p)).await?;
             String::from_utf8(bytes).map_err(|e| anyhow::anyhow!(not_utf8(path, e.as_bytes())))
         }
     }
@@ -612,7 +621,10 @@ pub(crate) async fn write_text(
     }
     match ctx.env.frontend.write_text_file(path, text).await {
         Some(r) => r?,
-        None => crate::util::write_atomic(path, text.as_bytes()).await?,
+        None => {
+            let (p, text) = (path.to_path_buf(), text.to_string());
+            with_fs(ctx, move |fs| fs.write(&p, text.as_bytes())).await?
+        }
     }
     ctx.env
         .frontend
@@ -679,6 +691,78 @@ pub(crate) fn notebook_preview(original: &str, args: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn the_file_tools_work_on_a_file_system_in_memory() {
+        let dir = std::env::temp_dir().join(format!("chanto-memfs-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let env = crate::agent::tests::make_env(
+            "http://localhost:1",
+            &dir,
+            crate::permissions::Mode::Default,
+            32768,
+        );
+        // A real absolute path on every platform, never created on disk.
+        let root = std::env::temp_dir().join(format!("chanto-mem-{}", uuid::Uuid::new_v4()));
+        let at = |rel: &str| root.join(rel).display().to_string();
+        let mem = std::sync::Arc::new(chanto_core::fs::MemFs::new());
+        mem.insert(at("p/a.txt"), "one\ntwo\n");
+        env.set_fs(mem.clone());
+        let ctx = Ctx {
+            env,
+            cancel: tokio_util::sync::CancellationToken::new(),
+            depth: 0,
+            call_id: None,
+            cwd_override: None,
+            reads: None,
+        };
+        let text = |p: &str| String::from_utf8(mem.read(Path::new(&at(p))).unwrap()).unwrap();
+        let out = Read
+            .run(json!({"file_path": at("p/a.txt")}), &ctx)
+            .await
+            .unwrap();
+        assert!(out.content.contains("2\ttwo"), "{}", out.content);
+        let out = Read
+            .run(json!({"file_path": at("p/a.tx")}), &ctx)
+            .await
+            .unwrap();
+        assert!(
+            out.is_error && out.content.contains("Did you mean one of: a.txt"),
+            "{}",
+            out.content
+        );
+        let out = Edit
+            .run(
+                json!({"file_path": at("p/a.txt"), "old_string": "two", "new_string": "three"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(text("p/a.txt"), "one\nthree\n");
+        let out = Write
+            .run(
+                json!({"file_path": at("p/new/b.txt"), "content": "hi\n"}),
+                &ctx,
+            )
+            .await
+            .unwrap();
+        assert!(!out.is_error, "{}", out.content);
+        assert_eq!(text("p/new/b.txt"), "hi\n");
+        // A file changed behind the agent's back must be read again first.
+        mem.insert(at("p/a.txt"), "changed elsewhere\n");
+        let out = Write
+            .run(json!({"file_path": at("p/a.txt"), "content": "x\n"}), &ctx)
+            .await
+            .unwrap();
+        assert!(
+            out.is_error && out.content.contains("modified since you last read it"),
+            "{}",
+            out.content
+        );
+        assert!(!root.exists(), "nothing reached the disk");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[cfg(unix)]
     #[tokio::test]

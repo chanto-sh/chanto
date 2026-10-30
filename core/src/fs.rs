@@ -46,6 +46,13 @@ pub trait Fs: Send + Sync {
     fn open(&self, p: &Path) -> io::Result<Box<dyn io::Read + Send>>;
     /// The names in a directory, in no particular order.
     fn read_dir(&self, p: &Path) -> io::Result<Vec<Entry>>;
+    /// Replace the file's contents, creating it and its parent directories.
+    /// A failed write leaves the old contents as they were.
+    fn write(&self, p: &Path, bytes: &[u8]) -> io::Result<()>;
+    fn create_dir_all(&self, p: &Path) -> io::Result<()>;
+    fn exists(&self, p: &Path) -> bool {
+        self.metadata(p).is_ok()
+    }
 }
 
 /// The operating system's file system.
@@ -75,6 +82,12 @@ impl Fs for NativeFs {
     fn open(&self, p: &Path) -> io::Result<Box<dyn io::Read + Send>> {
         Ok(Box::new(std::fs::File::open(p)?))
     }
+    fn write(&self, p: &Path, bytes: &[u8]) -> io::Result<()> {
+        write_atomic(p, bytes)
+    }
+    fn create_dir_all(&self, p: &Path) -> io::Result<()> {
+        std::fs::create_dir_all(p)
+    }
     fn read_dir(&self, p: &Path) -> io::Result<Vec<Entry>> {
         Ok(std::fs::read_dir(p)?
             .filter_map(|e| e.ok())
@@ -88,6 +101,75 @@ impl Fs for NativeFs {
     }
 }
 
+/// A unique sibling temp path for an atomic write, so two writers never collide.
+#[cfg(not(target_family = "wasm"))]
+pub fn temp_sibling(path: &Path) -> PathBuf {
+    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    path.with_file_name(format!(".{name}.{}.{nanos}.tmp", std::process::id()))
+}
+
+/// Write a file atomically: stage the bytes in a sibling temp file, flush them
+/// to disk, then rename over the target. A crash, full disk or kill mid-write
+/// leaves the original untouched rather than a truncated file — the failure
+/// mode that turns "the agent edited my file" into "the agent ate my file".
+#[cfg(not(target_family = "wasm"))]
+pub fn write_atomic(path: &Path, data: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    // A symlink (CLAUDE.md -> AGENTS.md) is written through, as editors do:
+    // renaming over it replaced the link with a copy and left its target stale.
+    // Permission checks already judged the resolved path.
+    let resolved;
+    let path = match std::fs::symlink_metadata(path) {
+        Ok(md) if md.file_type().is_symlink() => match std::fs::canonicalize(path) {
+            Ok(target) => {
+                resolved = target;
+                resolved.as_path()
+            }
+            Err(_) => path,
+        },
+        _ => path,
+    };
+    // Renaming over a read-only file would succeed (only the directory's
+    // permissions count), silently defeating a `chmod a-w` meant to keep it.
+    if std::fs::metadata(path).is_ok_and(|m| m.permissions().readonly()) {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{} is read-only", path.display()),
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let tmp = temp_sibling(path);
+    let res = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(data)?;
+        f.sync_all()?;
+        drop(f);
+        // And check what reached the disk before replacing anything.
+        let written = std::fs::metadata(&tmp)?.len();
+        if written != data.len() as u64 {
+            return Err(io::Error::other(format!(
+                "short write: {written} of {} bytes",
+                data.len()
+            )));
+        }
+        // Keep the original's permissions (an executable stays executable).
+        if let Ok(md) = std::fs::metadata(path) {
+            let _ = std::fs::set_permissions(&tmp, md.permissions());
+        }
+        std::fs::rename(&tmp, path)
+    })();
+    if res.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    res
+}
+
 enum Node {
     File {
         bytes: Vec<u8>,
@@ -99,8 +181,10 @@ enum Node {
 /// A file system held in memory, for the browser and for tests. The root
 /// always exists; writing a file creates its parent directories.
 ///
-/// Modification times count up from the Unix epoch, one tick per write: the
-/// browser has no `SystemTime::now`, and the tools only compare them.
+/// Modification times count up from the Unix epoch, one millisecond per
+/// write: the browser has no `SystemTime::now`, and the tools only compare
+/// them. Not finer: Windows keeps `SystemTime` in 100 ns units, where
+/// nanosecond steps would all compare equal.
 #[derive(Default)]
 pub struct MemFs {
     nodes: Mutex<BTreeMap<PathBuf, Node>>,
@@ -141,7 +225,7 @@ impl MemFs {
     fn tick(&self) -> SystemTime {
         let mut t = self.ticks.lock().unwrap();
         *t += 1;
-        SystemTime::UNIX_EPOCH + Duration::from_nanos(*t)
+        SystemTime::UNIX_EPOCH + Duration::from_millis(*t)
     }
 }
 
@@ -191,6 +275,20 @@ impl Fs for MemFs {
     }
     fn open(&self, p: &Path) -> io::Result<Box<dyn io::Read + Send>> {
         Ok(Box::new(io::Cursor::new(self.read(p)?)))
+    }
+    fn write(&self, p: &Path, bytes: &[u8]) -> io::Result<()> {
+        if self.metadata(p).is_ok_and(|m| m.is_dir()) {
+            return Err(io::Error::new(
+                io::ErrorKind::IsADirectory,
+                format!("{} is a directory", p.display()),
+            ));
+        }
+        self.insert(p, bytes);
+        Ok(())
+    }
+    fn create_dir_all(&self, p: &Path) -> io::Result<()> {
+        self.mkdir_p(p);
+        Ok(())
     }
     fn read_dir(&self, p: &Path) -> io::Result<Vec<Entry>> {
         if !self.metadata(p)?.is_dir() {
