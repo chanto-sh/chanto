@@ -312,13 +312,10 @@ type Walk = (
 static LAST_WALK: std::sync::Mutex<Option<Walk>> = std::sync::Mutex::new(None);
 
 /// Do the first prompt's refresh ahead of time, in the background: its env
-/// files, and the pattern set compiled, which otherwise costs the first
-/// redaction a couple of milliseconds on the turn's own thread.
+/// files, and the literals that decide which token patterns to run. Each
+/// pattern itself compiles the first time a text could match it.
 pub fn warm(root: &Path) {
-    for (_, re, _) in patterns() {
-        let _ = re.is_match("");
-    }
-    let _ = assignment().is_match("");
+    let _ = candidates("");
     refresh(root);
 }
 
@@ -508,43 +505,179 @@ pub fn refresh(root: &Path) {
     *st = Arc::new(build(cur.base.clone(), extra, stamps));
 }
 
-/// Token formats worth masking wherever they appear: (label, regex, group to mask).
-/// A token whose alphabet has `-` can end in one, where `\b` can't match, so
-/// those end at the first character outside the alphabet instead.
-fn patterns() -> &'static [(&'static str, Regex, usize)] {
-    static P: OnceLock<Vec<(&'static str, Regex, usize)>> = OnceLock::new();
-    P.get_or_init(|| {
-        let p = |label: &'static str, re: &str, group: usize| (label, Regex::new(re).unwrap(), group);
-        vec![
-            p("PRIVATE_KEY", r"-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY( BLOCK)?-----|$)", 0),
-            p("AWS_ACCESS_KEY", r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", 0),
-            p("AWS_SECRET", r#"(?i)aws_?secret_?access_?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})"#, 1),
-            p("GITHUB_TOKEN", r"\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})\b", 0),
-            p("GITLAB_TOKEN", r"\bglpat-[A-Za-z0-9_-]{20,}", 0),
-            p("SLACK_TOKEN", r"\bxox[abposr]-[A-Za-z0-9-]{10,}", 0),
-            p("SLACK_WEBHOOK", r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+", 0),
-            p("STRIPE_KEY", r"\b(sk|rk)_(live|test)_[A-Za-z0-9]{16,}\b", 0),
-            p("ANTHROPIC_KEY", r"\bsk-ant-[A-Za-z0-9_-]{20,}", 0),
-            p("OPENAI_KEY", r"\bsk-(proj-|svcacct-)?[A-Za-z0-9_-]{32,}", 0),
-            p("GOOGLE_API_KEY", r"\b(AIza[0-9A-Za-z_-]{35})(?:[^0-9A-Za-z_-]|$)", 1),
-            p("NPM_TOKEN", r"\bnpm_[A-Za-z0-9]{36}\b", 0),
-            p("PYPI_TOKEN", r"\bpypi-AgE[A-Za-z0-9_-]{50,}", 0),
-            p("HF_TOKEN", r"\bhf_[A-Za-z]{34,}\b", 0),
-            p("SENDGRID_KEY", r"\b(SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)", 1),
-            p("DIGITALOCEAN_TOKEN", r"\bdop_v1_[a-f0-9]{64}\b", 0),
-            p("JWT", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", 0),
-            p("URL_PASSWORD", r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@", 1),
-            p("BEARER_TOKEN", r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{20,}=*)", 1),
-        ]
-    })
+/// Token formats worth masking wherever they appear: (label, regex, group to
+/// mask, literals). A token whose alphabet has `-` can end in one, where `\b`
+/// can't match, so those end at the first character outside the alphabet
+/// instead.
+///
+/// The literals are what a match can't do without, compared ignoring ASCII
+/// case: text with none of them can't match, so the regex isn't run (or even
+/// compiled). `ASSIGNMENT` has its own entry, the last one.
+const PATTERNS: [(&str, &str, usize, &[&str]); 20] = [
+    (
+        "PRIVATE_KEY",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY( BLOCK)?-----|$)",
+        0,
+        &["-----BEGIN "],
+    ),
+    (
+        "AWS_ACCESS_KEY",
+        r"\b(AKIA|ASIA)[0-9A-Z]{16}\b",
+        0,
+        &["AKIA", "ASIA"],
+    ),
+    (
+        "AWS_SECRET",
+        r#"(?i)aws_?secret_?access_?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})"#,
+        1,
+        &["aws"],
+    ),
+    (
+        "GITHUB_TOKEN",
+        r"\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})\b",
+        0,
+        &["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"],
+    ),
+    (
+        "GITLAB_TOKEN",
+        r"\bglpat-[A-Za-z0-9_-]{20,}",
+        0,
+        &["glpat-"],
+    ),
+    (
+        "SLACK_TOKEN",
+        r"\bxox[abposr]-[A-Za-z0-9-]{10,}",
+        0,
+        &["xox"],
+    ),
+    (
+        "SLACK_WEBHOOK",
+        r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+",
+        0,
+        &["hooks.slack.com/services/"],
+    ),
+    (
+        "STRIPE_KEY",
+        r"\b(sk|rk)_(live|test)_[A-Za-z0-9]{16,}\b",
+        0,
+        &["_live_", "_test_"],
+    ),
+    (
+        "ANTHROPIC_KEY",
+        r"\bsk-ant-[A-Za-z0-9_-]{20,}",
+        0,
+        &["sk-ant-"],
+    ),
+    (
+        "OPENAI_KEY",
+        r"\bsk-(proj-|svcacct-)?[A-Za-z0-9_-]{32,}",
+        0,
+        &["sk-"],
+    ),
+    (
+        "GOOGLE_API_KEY",
+        r"\b(AIza[0-9A-Za-z_-]{35})(?:[^0-9A-Za-z_-]|$)",
+        1,
+        &["AIza"],
+    ),
+    ("NPM_TOKEN", r"\bnpm_[A-Za-z0-9]{36}\b", 0, &["npm_"]),
+    (
+        "PYPI_TOKEN",
+        r"\bpypi-AgE[A-Za-z0-9_-]{50,}",
+        0,
+        &["pypi-AgE"],
+    ),
+    ("HF_TOKEN", r"\bhf_[A-Za-z]{34,}\b", 0, &["hf_"]),
+    (
+        "SENDGRID_KEY",
+        r"\b(SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)",
+        1,
+        &["SG."],
+    ),
+    (
+        "DIGITALOCEAN_TOKEN",
+        r"\bdop_v1_[a-f0-9]{64}\b",
+        0,
+        &["dop_v1_"],
+    ),
+    (
+        "JWT",
+        r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+        0,
+        &["eyJ"],
+    ),
+    (
+        "URL_PASSWORD",
+        r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@",
+        1,
+        &["://"],
+    ),
+    (
+        "BEARER_TOKEN",
+        r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{20,}=*)",
+        1,
+        &["bearer"],
+    ),
+    // `NAME_SECRET=value` / `"api_key": "value"` with a credential-looking value.
+    (
+        "ASSIGNMENT",
+        r#"(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY)[A-Z0-9_]*)["']?\s*[=:]\s*["']?([A-Za-z0-9/+_.=-]{16,})"#,
+        0,
+        &[
+            "secret",
+            "token",
+            "passw",
+            "apikey",
+            "api_key",
+            "accesskey",
+            "access_key",
+            "privatekey",
+            "private_key",
+        ],
+    ),
+];
+/// How many of `PATTERNS` are token formats; `ASSIGNMENT` follows them.
+const TOKENS: usize = 19;
+const ASSIGNMENT: usize = TOKENS;
+
+/// Pattern `i`, compiled the first time it's needed.
+fn pattern(i: usize) -> &'static Regex {
+    static RE: [OnceLock<Regex>; PATTERNS.len()] = [const { OnceLock::new() }; PATTERNS.len()];
+    RE[i].get_or_init(|| Regex::new(PATTERNS[i].1).unwrap())
 }
 
-/// `NAME_SECRET=value` / `"api_key": "value"` with a credential-looking value.
-fn assignment() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r#"(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY)[A-Z0-9_]*)["']?\s*[=:]\s*["']?([A-Za-z0-9/+_.=-]{16,})"#).unwrap()
-    })
+/// Which of `PATTERNS` could match `s`: those whose literals appear in it.
+fn candidates(s: &str) -> [bool; PATTERNS.len()] {
+    static AC: OnceLock<(AhoCorasick, Vec<usize>)> = OnceLock::new();
+    let (ac, owner) = AC.get_or_init(|| {
+        let mut lits = Vec::new();
+        let mut owner = Vec::new();
+        for (i, (_, _, _, l)) in PATTERNS.iter().enumerate() {
+            for lit in l.iter() {
+                lits.push(*lit);
+                owner.push(i);
+            }
+        }
+        let ac = AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(&lits)
+            .unwrap();
+        (ac, owner)
+    });
+    let mut hit = [false; PATTERNS.len()];
+    #[cfg(test)]
+    if tests::UNFILTERED.with(|u| u.get()) {
+        return [true; PATTERNS.len()];
+    }
+    // Case-insensitive regexes fold `ſ` to `s` and the Kelvin sign to `k`,
+    // which no ASCII comparison sees: text with either runs every pattern.
+    if s.contains(['\u{17f}', '\u{212a}']) {
+        return [true; PATTERNS.len()];
+    }
+    for m in ac.find_overlapping_iter(s) {
+        hit[owner[m.pattern().as_usize()]] = true;
+    }
+    hit
 }
 
 /// Mask secrets in `s`. Returns the text and the labels of what was masked.
@@ -581,13 +714,20 @@ fn redact_impl(s: &str) -> (Cow<'_, str>, Vec<String>) {
         buf.push_str(&out[last..]);
         out = Cow::Owned(buf);
     }
-    for (label, re, group) in patterns() {
+    // Which patterns could match; worked out again whenever a replacement
+    // changes the text, since later patterns run on the result.
+    let mut hit = candidates(out.as_ref());
+    for (i, &(label, _, group, _)) in PATTERNS[..TOKENS].iter().enumerate() {
+        if !hit[i] {
+            continue;
+        }
+        let re = pattern(i);
         if re.is_match(out.as_ref()) {
             let replaced = re
                 .replace_all(out.as_ref(), |c: &regex::Captures| {
                     labels.push(label.to_string());
                     let whole = c.get(0).unwrap();
-                    match c.get(*group).filter(|_| *group > 0) {
+                    match c.get(group).filter(|_| group > 0) {
                         Some(g) => format!(
                             "{}[REDACTED:{label}]{}",
                             &whole.as_str()[..g.start() - whole.start()],
@@ -598,10 +738,11 @@ fn redact_impl(s: &str) -> (Cow<'_, str>, Vec<String>) {
                 })
                 .into_owned();
             out = Cow::Owned(replaced);
+            hit = candidates(out.as_ref());
         }
     }
-    let re = assignment();
-    if re.is_match(out.as_ref()) {
+    let re = pattern(ASSIGNMENT);
+    if hit[ASSIGNMENT] && re.is_match(out.as_ref()) {
         let replaced = re
             .replace_all(out.as_ref(), |c: &regex::Captures| {
                 let whole = c.get(0).unwrap().as_str();
@@ -629,9 +770,13 @@ pub fn redact_always(s: &str) -> Cow<'_, str> {
 /// Storage checks remain enabled even when display redaction is disabled.
 pub fn contains_secret(s: &str) -> bool {
     let r = state().read().unwrap().clone();
+    let hit = candidates(s);
     r.ac.as_ref().is_some_and(|ac| ac.is_match(s))
-        || patterns().iter().any(|(_, re, _)| re.is_match(s))
-        || assignment().captures_iter(s).any(|c| high_entropy(&c[2]))
+        || (0..TOKENS).any(|i| hit[i] && pattern(i).is_match(s))
+        || (hit[ASSIGNMENT]
+            && pattern(ASSIGNMENT)
+                .captures_iter(s)
+                .any(|c| high_entropy(&c[2])))
 }
 
 /// Sharing must redact even when local transcript redaction is disabled.
@@ -1102,6 +1247,91 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    thread_local! {
+        /// Every pattern runs, as before the literal check: the reference.
+        pub(super) static UNFILTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+
+    fn unfiltered<T>(f: impl FnOnce() -> T) -> T {
+        UNFILTERED.with(|u| u.set(true));
+        let r = f();
+        UNFILTERED.with(|u| u.set(false));
+        r
+    }
+
+    #[test]
+    fn the_literal_check_changes_no_redaction() {
+        let pieces: &[&str] = &[
+            "ghp_0123456789abcdefghijABCDEFGHIJ012345",
+            "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyzABCDEFGHIJ",
+            "AKIAIOSFODNN7EXAMPLE",
+            "aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "AWS_SECRET_ACCESS_KEY=\"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\"",
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIEow\n-----END RSA PRIVATE KEY-----",
+            "glpat-abcdefghij0123456789",
+            "xoxb-1234567890-abcdefghij",
+            "https://hooks.slack.com/services/T000/B000/XXXX",
+            "sk_live_0123456789abcdefABCD",
+            "sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
+            "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789AB",
+            "AIzaSyA-0123456789abcdefghijklmnopqrstu ",
+            "npm_abcdefghijklmnopqrstuvwxyz0123456789",
+            "pypi-AgEIcHlwaS5vcmcCJGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1Njc4OQ",
+            concat!("hf_", "abcdefghijklmnopqrstuvwxyzABCDEFGH"),
+            concat!(
+                "SG.",
+                "abcdefghijklmnopqrstuv.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQ "
+            ),
+            concat!(
+                "dop_v1_",
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+            ),
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N",
+            "postgres://user:hunter2pass@db.example.com/app",
+            "Authorization: Bearer abcdefghijklmnopqrstuvwxyz012345",
+            "API_KEY=Zx8kQ2vN7pL4mR9tW3yB6cF1",
+            "\"client_secret\": \"Zx8kQ2vN7pL4mR9tW3yB6cF1hJ\"",
+            "my_Token: Zx8kQ2vN7pL4mR9tW3yB6cF1",
+            // Near misses, mixed case and the two non-ASCII case folds.
+            "GHP_0123456789abcdefghijABCDEFGHIJ012345",
+            "BEARER abcdefghijklmnopqrstuvwxyz012345",
+            "AWS_\u{17f}ECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            "API_\u{212a}EY=Zx8kQ2vN7pL4mR9tW3yB6cF1",
+            "Bearer\u{17f}",
+            "toKen = short",
+            "sk-short",
+            "eyJ only",
+            "https://example.com/path",
+            "fn main() { println!(\"hello\"); }",
+            "plain words, é and ü, nothing secret",
+            "\n",
+            " ",
+        ];
+        let mut seed = 0x9e3779b97f4a7c15u64;
+        let mut next = |n: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed % n as u64) as usize
+        };
+        let mut redacted = 0;
+        for _ in 0..4000 {
+            let text: String = (0..1 + next(6))
+                .map(|_| pieces[next(pieces.len())])
+                .collect();
+            let filtered = redact_always_with_labels(&text);
+            let full = unfiltered(|| redact_always_with_labels(&text));
+            assert_eq!(filtered, full, "{text:?}");
+            assert_eq!(
+                contains_secret(&text),
+                unfiltered(|| contains_secret(&text)),
+                "{text:?}"
+            );
+            redacted += usize::from(filtered.0.contains("[REDACTED"));
+        }
+        assert!(redacted > 1000, "the corpus barely has secrets: {redacted}");
+    }
 
     #[test]
     fn plain_key_values_need_entropy_and_public_keys_are_not_secret() {
