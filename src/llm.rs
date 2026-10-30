@@ -416,13 +416,7 @@ impl Provider {
     }
 
     pub fn new(kind: ProviderKind, base_url: &str, api_key: Option<String>, num_ctx: u32) -> Self {
-        let http = crate::http::builder()
-            .connect_timeout(Duration::from_secs(10))
-            .pool_idle_timeout(Duration::from_secs(300))
-            // Plans used from third-party tools (Kimi Code) ask clients to identify themselves truthfully.
-            .user_agent(concat!("chanto/", env!("CARGO_PKG_VERSION")))
-            .build()
-            .expect("http client");
+        let http = crate::http::model_client(base_url);
         // Hosted APIs fall back to their usual environment variable for the key.
         let api_key = api_key.or_else(|| {
             kind.key_env()
