@@ -11,6 +11,7 @@ keywords = ["chanto"]
 
 [dependencies]
 anyhow = "1.0.104"
+futures = { version = "0.3.34", default-features = false, features = ["std", "executor"] }
 globset = "0.4.20"
 ignore = "0.4.33"
 memchr = "2.8.3"

@@ -247,21 +247,7 @@ pub fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing required string parameter `{key}`"))
 }
 
-pub fn arg_bool(args: &Value, key: &str) -> bool {
-    match args.get(key) {
-        Some(Value::Bool(b)) => *b,
-        Some(Value::String(s)) => s == "true",
-        _ => false,
-    }
-}
-
-pub fn arg_u64(args: &Value, key: &str) -> Option<u64> {
-    match args.get(key) {
-        Some(Value::Number(n)) => n.as_u64().or_else(|| n.as_f64().map(|f| f as u64)),
-        Some(Value::String(s)) => s.parse().ok(),
-        _ => None,
-    }
-}
+pub use chanto_core::tools::{arg_bool, arg_u64};
 
 #[cfg(test)]
 mod tests {

@@ -77,21 +77,10 @@ impl Tool for Read {
         "Read".into()
     }
     fn description(&self) -> String {
-        "Read a file from disk, numbered `cat -n` style (line number, tab, line). The default is the first \
-2000 lines; pass offset/limit for big files. Handles images (png/jpg/gif/webp, shown to vision models), \
-PDFs (text extracted) and notebooks. Read before editing, and fetch several files in parallel."
-            .into()
+        chanto_core::tools::READ_DESCRIPTION.into()
     }
     fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "file_path": {"type": "string", "description": "Absolute or project-relative path"},
-                "offset": {"type": "integer", "description": "1-based line number to start from"},
-                "limit": {"type": "integer", "description": "Number of lines to read"}
-            },
-            "required": ["file_path"]
-        })
+        chanto_core::tools::read_schema()
     }
     fn kind(&self) -> ToolKind {
         ToolKind::ReadOnly
@@ -326,19 +315,10 @@ impl Tool for Write {
         "Write".into()
     }
     fn description(&self) -> String {
-        "Write a file (creating parent directories), overwriting any existing file. If the file exists you \
-must Read it first. Prefer Edit for modifying existing files; use Write for new files or full rewrites."
-            .into()
+        chanto_core::tools::WRITE_DESCRIPTION.into()
     }
     fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "file_path": {"type": "string"},
-                "content": {"type": "string"}
-            },
-            "required": ["file_path", "content"]
-        })
+        chanto_core::tools::write_schema()
     }
     fn kind(&self) -> ToolKind {
         ToolKind::Edit
@@ -390,22 +370,10 @@ impl Tool for Edit {
         "Edit".into()
     }
     fn description(&self) -> String {
-        "Replace an exact string in a file. You must Read the file first. old_string must match the file \
-exactly (including indentation; do not include the line-number prefix from Read output) and be unique \
-unless replace_all is true. Include enough surrounding lines to make it unique."
-            .into()
+        chanto_core::tools::EDIT_DESCRIPTION.into()
     }
     fn schema(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "file_path": {"type": "string"},
-                "old_string": {"type": "string", "description": "Exact text to replace"},
-                "new_string": {"type": "string", "description": "Replacement text"},
-                "replace_all": {"type": "boolean", "description": "Replace every occurrence (default false)"}
-            },
-            "required": ["file_path", "old_string", "new_string"]
-        })
+        chanto_core::tools::edit_schema()
     }
     fn kind(&self) -> ToolKind {
         ToolKind::Edit
