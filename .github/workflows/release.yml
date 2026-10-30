@@ -361,10 +361,13 @@ jobs:
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
 
-  # crates.io: `cargo install chanto`. chanto-proto (the wire types) is
-  # published first, and only when its version is new. No stored token:
-  # crates.io trusted publishing swaps this workflow's OIDC identity for a
-  # short-lived one (both crates list chanto-sh/chanto release.yml).
+  # crates.io: `cargo install chanto`. The workspace crates chanto depends
+  # on (CRATES below: chanto-proto, the wire types; chanto-core, the shared
+  # agent code) are published first, each only when its version is new.
+  # packaging/test_release.py checks that list against Cargo.toml. No stored
+  # token: crates.io trusted publishing swaps this workflow's OIDC identity
+  # for a short-lived one (every crate lists chanto-sh/chanto release.yml;
+  # a new crate's first version has to be published by hand to set that up).
   crates:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
@@ -387,10 +390,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          proto=$(sed -n 's/^version = "\(.*\)"$/\1/p' proto/Cargo.toml | head -1)
-          code=$(curl -s -o /dev/null -w '%{http_code}' -A 'chanto-release (https://github.com/chanto-sh/chanto)' \
-            "https://crates.io/api/v1/crates/chanto-proto/$proto")
-          if [ "$code" != 200 ]; then cargo publish --locked -p chanto-proto; fi
+          CRATES="proto:chanto-proto core:chanto-core"
+          for entry in $CRATES; do
+            dir=${entry%%:*}
+            name=${entry#*:}
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$dir/Cargo.toml" | head -1)
+            code=$(curl -s -o /dev/null -w '%{http_code}' -A 'chanto-release (https://github.com/chanto-sh/chanto)' \
+              "https://crates.io/api/v1/crates/$name/$version")
+            if [ "$code" != 200 ]; then cargo publish --locked -p "$name"; fi
+          done
           cargo publish --locked -p chanto
 
   # npm: see npm.yml.

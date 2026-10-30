@@ -85,6 +85,24 @@ class ReleaseMetadataTests(unittest.TestCase):
             check(self.root, self.tag)
 
 
+class CratesPublishedTests(unittest.TestCase):
+    def test_every_workspace_crate_chanto_depends_on_is_published(self):
+        """`cargo publish -p chanto` fails on a path dependency crates.io
+        doesn't have (v0.1.9 did, on chanto-core): release.yml publishes each."""
+        import re
+        manifest = (ROOT / "Cargo.toml").read_text()
+        deps = manifest.split("[dependencies]", 1)[1].split("\n[", 1)[0]
+        path_deps = {
+            (m.group(1), m.group(2))
+            for m in re.finditer(r'^([A-Za-z0-9_-]+)\s*=\s*\{[^}]*path\s*=\s*"([^"]+)"', deps, re.M)
+        }
+        self.assertTrue(path_deps, "expected chanto's workspace crates among its dependencies")
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        crates = re.search(r'CRATES="([^"]+)"', workflow)
+        self.assertIsNotNone(crates, "release.yml's crates job lists the crates it publishes in CRATES")
+        listed = {(name, path) for path, name in re.findall(r"(\w+):(chanto-[\w-]+)", crates.group(1))}
+        self.assertEqual(path_deps, listed)
+
 class ChangelogFragmentTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
