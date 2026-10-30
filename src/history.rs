@@ -52,11 +52,7 @@ impl Shadow {
     /// Open the shadow repository for `root` under `base` (normally `~/.chanto/history`).
     pub fn in_dir(base: &Path, root: &Path, config: &HistoryConfig) -> Result<Self> {
         let root = root.canonical()?;
-        let mut hash = 0xcbf29ce484222325u64;
-        for b in root.as_os_str().as_encoded_bytes() {
-            hash = (hash ^ *b as u64).wrapping_mul(0x100000001b3);
-        }
-        let repo = base.join(format!("{hash:016x}"));
+        let repo = repo_dir(base, &root);
         #[cfg(unix)]
         {
             use std::os::unix::fs::DirBuilderExt;
@@ -591,6 +587,15 @@ impl Shadow {
     }
 }
 
+/// Where the shadow repository of the project at `root` (canonical) lives.
+fn repo_dir(base: &Path, root: &Path) -> PathBuf {
+    let mut hash = 0xcbf29ce484222325u64;
+    for b in root.as_os_str().as_encoded_bytes() {
+        hash = (hash ^ *b as u64).wrapping_mul(0x100000001b3);
+    }
+    base.join(format!("{hash:016x}"))
+}
+
 /// Shadow repositories this process created: every checkpoint in one belongs
 /// to a session still running here, so there is nothing to prune in it yet.
 static CREATED: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
@@ -598,6 +603,12 @@ static CREATED: std::sync::Mutex<std::collections::BTreeSet<PathBuf>> =
 
 /// Prune unreachable checkpoint refs after saving, at most once a day per project.
 pub fn maintain(root: &Path, config: &HistoryConfig) -> Result<()> {
+    // No snapshot taken in this project yet (its turns only read): nothing
+    // to prune, and no reason to create the repository just to look.
+    let base = crate::config::home_dir().join("history");
+    if !repo_dir(&base, &root.canonical()?).join("HEAD").exists() {
+        return Ok(());
+    }
     let shadow = Shadow::new(root, config)?;
     let marker = shadow.repo.join("maintenance");
     if std::fs::metadata(&marker)
@@ -1282,5 +1293,32 @@ mod tests {
         assert!(limited.snapshot().is_err());
         std::fs::remove_dir_all(dir).unwrap();
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn maintenance_leaves_a_project_without_snapshots_alone() {
+        let _guard = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let previous = std::env::var_os("CHANTO_HOME");
+        let home =
+            std::env::temp_dir().join(format!("chanto-maint-{}", uuid::Uuid::new_v4().simple()));
+        let dir = home.join("project");
+        std::fs::create_dir_all(&dir).unwrap();
+        unsafe { std::env::set_var("CHANTO_HOME", &home) };
+        maintain(&dir, &HistoryConfig::default()).unwrap();
+        let repo = repo_dir(&home.join("history"), &dir.canonical().unwrap());
+        assert!(!repo.exists(), "maintenance created a repository");
+        // Once a snapshot made one, maintenance runs as before.
+        Shadow::new(&dir, &HistoryConfig::default()).unwrap();
+        maintain(&dir, &HistoryConfig::default()).unwrap();
+        assert!(repo.join("maintenance").exists());
+        unsafe {
+            match previous {
+                Some(p) => std::env::set_var("CHANTO_HOME", p),
+                None => std::env::remove_var("CHANTO_HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
     }
 }

@@ -257,9 +257,6 @@ impl Agent {
             content.push_str(r);
         }
         if self.depth == 0 {
-            // Nothing changes files before the model's first reply, so the
-            // snapshot runs alongside the model call; file-changing tools wait.
-            self.env.wait_snapshot().await;
             let id = uuid::Uuid::new_v4().to_string();
             // A new prompt ends what /redo can bring back.
             self.env.redo.lock().unwrap().clear();
@@ -271,28 +268,10 @@ impl Agent {
                 prompt: input.lines().next().unwrap_or("").to_string(),
                 files: HashMap::new(),
             });
-            let env = self.env.clone();
-            *self.env.pending_snapshot.lock().unwrap() =
-                Some(tokio::task::spawn_blocking(move || {
-                    crate::util::timing("snapshot start");
-                    // After `/cd` out of the project, a snapshot of the old project
-                    // says nothing about this turn's files (and restoring it would
-                    // revert the user's own changes there): rewind uses the
-                    // turn's per-file copies instead.
-                    let moved = !permissions::normalize(&env.cwd())
-                        .starts_with(permissions::normalize(&env.root));
-                    let tree = if moved { None } else { env.shadow_snapshot() };
-                    crate::util::timing("snapshot done");
-                    if let Some(cp) = env
-                        .checkpoints
-                        .lock()
-                        .unwrap()
-                        .iter_mut()
-                        .find(|c| c.id == id)
-                    {
-                        cp.tree = tree;
-                    }
-                }));
+            // Nothing changes files before the model asks to, so the snapshot
+            // waits until then (`execute_calls`); a turn that only reads or
+            // answers never takes one.
+            self.env.defer_snapshot(id).await;
         }
         // Merge into a trailing user message (e.g. `!cmd` output, an interrupted turn)
         // so roles keep alternating for strict chat templates.

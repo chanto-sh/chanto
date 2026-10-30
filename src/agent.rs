@@ -469,6 +469,13 @@ pub struct Env {
     /// The per-prompt working-tree snapshot, taken in the background; tools
     /// that change files wait for it first.
     pub pending_snapshot: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// The checkpoint whose snapshot hasn't been taken yet: it is taken when
+    /// something may change files (`start_snapshot`), so a turn that only
+    /// reads never pays for one.
+    deferred_snapshot: Mutex<Option<String>>,
+    /// Checkpoints of turns that changed nothing, so never took a snapshot:
+    /// they get the next one taken, which records the same files.
+    unsnapped: Mutex<Vec<String>>,
     /// Where this session's shadow snapshots live, fixed when the session starts.
     pub history_dir: PathBuf,
     /// The user's shell setup for Bash commands, captured on first use.
@@ -760,6 +767,8 @@ impl Env {
             commands: RwLock::new(commands),
             checkpoints: Default::default(),
             pending_snapshot: Default::default(),
+            deferred_snapshot: Default::default(),
+            unsnapped: Default::default(),
             history_dir: crate::config::home_dir().join("history"),
             shell_snapshot: Default::default(),
             rewind_undo: Default::default(),
@@ -1211,8 +1220,55 @@ impl Env {
         }
     }
 
-    /// Wait for the background per-prompt snapshot, if one is running.
-    pub async fn wait_snapshot(&self) {
+    /// A new prompt's checkpoint: its snapshot waits until something may
+    /// change files. The previous prompt's, if nothing needed it, gets the
+    /// next one taken.
+    pub async fn defer_snapshot(&self, id: String) {
+        // A snapshot the previous turn started has to finish first.
+        let running = self.pending_snapshot.lock().unwrap().take();
+        if let Some(h) = running {
+            let _ = h.await;
+        }
+        if let Some(previous) = self.deferred_snapshot.lock().unwrap().replace(id) {
+            self.unsnapped.lock().unwrap().push(previous);
+        }
+    }
+
+    /// Start the deferred snapshot in the background, if there is one.
+    pub fn start_snapshot(self: &Arc<Self>) {
+        let Some(id) = self.deferred_snapshot.lock().unwrap().take() else {
+            return;
+        };
+        let env = self.clone();
+        *self.pending_snapshot.lock().unwrap() = Some(tokio::task::spawn_blocking(move || {
+            crate::util::timing("snapshot start");
+            // After `/cd` out of the project, a snapshot of the old project
+            // says nothing about this turn's files (and restoring it would
+            // revert the user's own changes there): rewind uses the
+            // turn's per-file copies instead.
+            let moved =
+                !permissions::normalize(&env.cwd()).starts_with(permissions::normalize(&env.root));
+            let tree = if moved { None } else { env.shadow_snapshot() };
+            crate::util::timing("snapshot done");
+            let mut ids = vec![id];
+            if tree.is_some() {
+                ids.append(&mut env.unsnapped.lock().unwrap());
+            }
+            for cp in env
+                .checkpoints
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .filter(|c| ids.contains(&c.id))
+            {
+                cp.tree = tree.clone();
+            }
+        }));
+    }
+
+    /// Wait for the per-prompt snapshot, taking it first if it was deferred.
+    pub async fn wait_snapshot(self: &Arc<Self>) {
+        self.start_snapshot();
         let h = self.pending_snapshot.lock().unwrap().take();
         if let Some(h) = h {
             let _ = h.await;
