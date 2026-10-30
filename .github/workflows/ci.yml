@@ -188,12 +188,18 @@ jobs:
         with:
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+      # The clippy job runs on Linux, which never compiles the Windows-only
+      # paths and compiles the Unix-only ones; code left unused here would
+      # otherwise only show as warnings in a release build. The desktop app
+      # is part of the workspace, so this also checks it.
+      - run: cargo clippy --locked -j 2 --workspace --all-targets -- -D warnings
       - run: cargo build --locked -j 2
-      - run: cargo check --locked -p chanto-desktop
       - run: cargo test --locked -j 2 --quiet
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
