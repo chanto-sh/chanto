@@ -702,8 +702,11 @@ mod tests {
             crate::permissions::Mode::Default,
             32768,
         );
+        // A real absolute path on every platform, never created on disk.
+        let root = std::env::temp_dir().join(format!("chanto-mem-{}", uuid::Uuid::new_v4()));
+        let at = |rel: &str| root.join(rel).display().to_string();
         let mem = std::sync::Arc::new(chanto_core::fs::MemFs::new());
-        mem.insert("/mem/p/a.txt", "one\ntwo\n");
+        mem.insert(at("p/a.txt"), "one\ntwo\n");
         env.set_fs(mem.clone());
         let ctx = Ctx {
             env,
@@ -713,14 +716,14 @@ mod tests {
             cwd_override: None,
             reads: None,
         };
-        let text = |p: &str| String::from_utf8(mem.read(Path::new(p)).unwrap()).unwrap();
+        let text = |p: &str| String::from_utf8(mem.read(Path::new(&at(p))).unwrap()).unwrap();
         let out = Read
-            .run(json!({"file_path": "/mem/p/a.txt"}), &ctx)
+            .run(json!({"file_path": at("p/a.txt")}), &ctx)
             .await
             .unwrap();
         assert!(out.content.contains("2\ttwo"), "{}", out.content);
         let out = Read
-            .run(json!({"file_path": "/mem/p/a.tx"}), &ctx)
+            .run(json!({"file_path": at("p/a.tx")}), &ctx)
             .await
             .unwrap();
         assert!(
@@ -730,26 +733,26 @@ mod tests {
         );
         let out = Edit
             .run(
-                json!({"file_path": "/mem/p/a.txt", "old_string": "two", "new_string": "three"}),
+                json!({"file_path": at("p/a.txt"), "old_string": "two", "new_string": "three"}),
                 &ctx,
             )
             .await
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
-        assert_eq!(text("/mem/p/a.txt"), "one\nthree\n");
+        assert_eq!(text("p/a.txt"), "one\nthree\n");
         let out = Write
             .run(
-                json!({"file_path": "/mem/p/new/b.txt", "content": "hi\n"}),
+                json!({"file_path": at("p/new/b.txt"), "content": "hi\n"}),
                 &ctx,
             )
             .await
             .unwrap();
         assert!(!out.is_error, "{}", out.content);
-        assert_eq!(text("/mem/p/new/b.txt"), "hi\n");
+        assert_eq!(text("p/new/b.txt"), "hi\n");
         // A file changed behind the agent's back must be read again first.
-        mem.insert("/mem/p/a.txt", "changed elsewhere\n");
+        mem.insert(at("p/a.txt"), "changed elsewhere\n");
         let out = Write
-            .run(json!({"file_path": "/mem/p/a.txt", "content": "x\n"}), &ctx)
+            .run(json!({"file_path": at("p/a.txt"), "content": "x\n"}), &ctx)
             .await
             .unwrap();
         assert!(
@@ -757,7 +760,7 @@ mod tests {
             "{}",
             out.content
         );
-        assert!(!Path::new("/mem").exists(), "nothing reached the disk");
+        assert!(!root.exists(), "nothing reached the disk");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
