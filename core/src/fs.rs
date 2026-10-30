@@ -53,6 +53,11 @@ pub trait Fs: Send + Sync {
     fn exists(&self, p: &Path) -> bool {
         self.metadata(p).is_ok()
     }
+    /// The operating system's own file system, which the CLI can search
+    /// with its faster tools (a parallel walk, ripgrep).
+    fn on_disk(&self) -> bool {
+        false
+    }
 }
 
 /// The operating system's file system.
@@ -84,6 +89,9 @@ impl Fs for NativeFs {
     }
     fn write(&self, p: &Path, bytes: &[u8]) -> io::Result<()> {
         write_atomic(p, bytes)
+    }
+    fn on_disk(&self) -> bool {
+        true
     }
     fn create_dir_all(&self, p: &Path) -> io::Result<()> {
         std::fs::create_dir_all(p)
