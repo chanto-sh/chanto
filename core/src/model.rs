@@ -827,3 +827,6 @@ impl OpenaiDecoder {
         Ok(self.out)
     }
 }
+
+#[cfg(test)]
+mod wire_tests;
