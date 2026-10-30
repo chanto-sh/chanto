@@ -1,1 +1,0 @@
-- **Faster shell commands.** Every Bash command used to define all the shell functions your startup files set up before running, about 20 ms each with nvm installed. They now load the first time a command calls one of them, so a command that doesn't (nearly all of them) skips that work: 47 to 26 ms per command in one measurement.
