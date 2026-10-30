@@ -181,8 +181,10 @@ enum Node {
 /// A file system held in memory, for the browser and for tests. The root
 /// always exists; writing a file creates its parent directories.
 ///
-/// Modification times count up from the Unix epoch, one tick per write: the
-/// browser has no `SystemTime::now`, and the tools only compare them.
+/// Modification times count up from the Unix epoch, one millisecond per
+/// write: the browser has no `SystemTime::now`, and the tools only compare
+/// them. Not finer: Windows keeps `SystemTime` in 100 ns units, where
+/// nanosecond steps would all compare equal.
 #[derive(Default)]
 pub struct MemFs {
     nodes: Mutex<BTreeMap<PathBuf, Node>>,
@@ -223,7 +225,7 @@ impl MemFs {
     fn tick(&self) -> SystemTime {
         let mut t = self.ticks.lock().unwrap();
         *t += 1;
-        SystemTime::UNIX_EPOCH + Duration::from_nanos(*t)
+        SystemTime::UNIX_EPOCH + Duration::from_millis(*t)
     }
 }
 
