@@ -123,7 +123,7 @@ mod envfile;
 pub use envfile::{bash_prelude, plain_env_vars, prepare_env_file};
 use envfile::{env_file_for, env_files};
 mod worktree;
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use worktree::worktree_remove_detached;
 pub use worktree::{finish_hook_worktree, worktree_create, worktree_create_detached};
 

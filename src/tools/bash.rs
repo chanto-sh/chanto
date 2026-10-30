@@ -1416,7 +1416,7 @@ mod cwd_tests {
 #[cfg(test)]
 mod profile_tests;
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 fn test_sandbox_available() -> bool {
     if !sandbox_available() {
         return false;

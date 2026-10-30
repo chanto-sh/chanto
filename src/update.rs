@@ -623,6 +623,7 @@ mod tests {
 
     /// A release server: the GitHub API's latest-release answer, SHA256SUMS
     /// and the archive, all from a local port.
+    #[cfg(unix)]
     async fn serve(files: Vec<(String, Vec<u8>)>) -> String {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();

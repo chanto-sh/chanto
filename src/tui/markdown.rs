@@ -68,6 +68,7 @@ fn luminance((r, g, b): (f64, f64, f64)) -> f64 {
 
 /// The colour in an OSC 11 reply (`\x1b]11;rgb:RRRR/GGGG/BBBB\x07`; 1-4 hex
 /// digits per channel), as 0..1 components.
+#[cfg(any(unix, test))]
 pub(crate) fn parse_osc11(reply: &str) -> Option<(f64, f64, f64)> {
     let rgb = &reply[reply.find("rgb:")? + 4..];
     let mut parts = rgb.split('/').map(|p| {
@@ -100,6 +101,7 @@ pub fn take_typeahead() -> Vec<u8> {
 
 /// Split what was read after the OSC 11 query into the terminal's reply
 /// (when complete) and everything else, which is the user typing.
+#[cfg(any(unix, test))]
 pub(crate) fn split_osc11(buf: &[u8]) -> (Option<String>, Vec<u8>) {
     let Some(start) = buf.windows(5).position(|w| w == b"\x1b]11;") else {
         return (None, buf.to_vec());

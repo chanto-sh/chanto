@@ -135,7 +135,7 @@ fn windows_bash() -> Option<PathBuf> {
     from_path.or_else(|| {
         ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
             .iter()
-            .filter_map(|k| std::env::var_os(k))
+            .filter_map(std::env::var_os)
             .map(|d| PathBuf::from(d).join("Git").join("bin").join("bash.exe"))
             .find(|p| is_exec(p))
     })

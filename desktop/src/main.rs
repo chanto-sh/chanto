@@ -823,7 +823,7 @@ fn main() {
     #[cfg(windows)]
     {
         use tao::platform::windows::WindowExtWindows;
-        let _ = unsafe { menu.init_for_hwnd(window.hwnd() as isize) };
+        let _ = unsafe { menu.init_for_hwnd(window.hwnd()) };
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
