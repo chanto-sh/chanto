@@ -7,7 +7,8 @@
 //! compaction, shells); this one shares its wire format, decoder and tools.
 
 use crate::message::{ChatRequest, Delta, Message};
-use crate::model::{OpenaiBody, OpenaiDecoder, OpenaiMessages};
+use crate::model::{OpenaiBody, OpenaiDecoder, OpenaiMessages, extract_text_tool_calls};
+use crate::protocol::{normalize_args, to_text_protocol};
 use crate::tools::{Workspace, specs};
 use futures::stream::{Stream, StreamExt};
 use serde_json::{Value, json};
@@ -40,13 +41,23 @@ pub struct ModelConfig {
     pub api_key: Option<String>,
 }
 
-/// What a turn reports while it runs.
-#[derive(Debug, Clone, PartialEq)]
+/// What a turn reports while it runs. A host that timestamps them can split
+/// each step into waiting for the model and the agent's own work.
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
+    /// Step `step` (from 1) is about to ask the model.
+    Request { step: usize },
+    /// The model's reply to step `step` has fully arrived.
+    Reply {
+        step: usize,
+        prompt_tokens: u64,
+        completion_tokens: u64,
+    },
     /// Reply text as it streams in.
-    Text(String),
+    Text { text: String },
     /// Reasoning as it streams in.
-    Reasoning(String),
+    Reasoning { text: String },
     /// The model called a tool.
     ToolCall { name: String, arguments: Value },
     /// A tool finished.
@@ -63,6 +74,10 @@ pub struct Agent {
     pub messages: Vec<Message>,
     /// Model requests one turn may make before it stops.
     pub max_steps: usize,
+    /// Describe the tools in the system prompt and read `<tool_call>` blocks
+    /// from the reply, for models without native tool calls (small local
+    /// ones), as the CLI's `tool_protocol = "text"` does.
+    pub text_tools: bool,
 }
 
 impl Agent {
@@ -71,6 +86,7 @@ impl Agent {
             config,
             messages: vec![Message::system(system_prompt)],
             max_steps: 50,
+            text_tools: false,
         }
     }
 
@@ -84,8 +100,9 @@ impl Agent {
         on_event: &mut dyn FnMut(Event),
     ) -> anyhow::Result<String> {
         self.messages.push(Message::user(input));
-        for _ in 0..self.max_steps {
-            let reply = self.ask(transport, on_event).await?;
+        for step in 1..=self.max_steps {
+            on_event(Event::Request { step });
+            let reply = self.ask(step, transport, on_event).await?;
             let calls = reply.tool_calls.clone();
             let text = reply.content.to_string();
             self.messages.push(reply);
@@ -115,6 +132,7 @@ impl Agent {
     /// One streamed model request; its reply as an assistant message.
     async fn ask(
         &self,
+        step: usize,
         transport: &dyn Transport,
         on_event: &mut dyn FnMut(Event),
     ) -> anyhow::Result<Message> {
@@ -128,16 +146,30 @@ impl Agent {
             max_tokens: None,
             json: false,
         };
-        let fields = json!({
+        let mut fields = json!({
             "model": req.model,
             "stream": true,
             "stream_options": {"include_usage": true},
-            "tools": req.tools.iter().map(|t| json!({"type": "function", "function": t})).collect::<Vec<_>>(),
         });
+        let text_msgs;
+        let msgs = if self.text_tools {
+            text_msgs = to_text_protocol(&self.messages, &req.tools);
+            // A small model that writes a call and then makes up its result
+            // stops where the made-up result would start: the call runs.
+            fields["stop"] = json!(["<tool_response"]);
+            &text_msgs
+        } else {
+            fields["tools"] = req
+                .tools
+                .iter()
+                .map(|t| json!({"type": "function", "function": t}))
+                .collect();
+            &self.messages
+        };
         let body = serde_json::to_vec(&OpenaiBody {
             fields: &fields,
             messages: OpenaiMessages {
-                msgs: &self.messages,
+                msgs,
                 model: &req.model,
             },
         })?;
@@ -153,8 +185,8 @@ impl Agent {
         let mut decoder = OpenaiDecoder::new(&req);
         let mut on_delta = |d: Delta| {
             on_event(match d {
-                Delta::Text(t) => Event::Text(t),
-                Delta::Reasoning(t) => Event::Reasoning(t),
+                Delta::Text(text) => Event::Text { text },
+                Delta::Reasoning(text) => Event::Reasoning { text },
             })
         };
         while let Some(chunk) = stream.next().await {
@@ -163,10 +195,38 @@ impl Agent {
             }
         }
         let resp = decoder.finish()?;
-        let mut msg = Message::assistant(resp.text);
-        msg.tool_calls = resp.tool_calls;
+        on_event(Event::Reply {
+            step,
+            prompt_tokens: resp.usage.prompt_tokens,
+            completion_tokens: resp.usage.completion_tokens,
+        });
+        let (text, mut calls) = if resp.tool_calls.is_empty() && self.text_tools {
+            let names: Vec<String> = req.tools.iter().map(|t| t.name.clone()).collect();
+            extract_text_tool_calls(without_stop_fragment(&resp.text), &names)
+        } else {
+            (resp.text, resp.tool_calls)
+        };
+        // Small models misname arguments (`path` for `file_path`) and quote
+        // numbers: repaired against each tool's schema, as the CLI does.
+        for c in &mut calls {
+            if let Some(t) = req.tools.iter().find(|t| t.name == c.name) {
+                c.arguments = normalize_args(&t.parameters, &c.arguments);
+            }
+        }
+        let mut msg = Message::assistant(text.trim());
+        msg.tool_calls = calls;
         msg.provider_items = resp.provider_items;
         Ok(msg)
+    }
+}
+
+/// `text` without the start of the stop sequence some servers stream before
+/// they notice the match (`…}\n<tool`).
+fn without_stop_fragment(text: &str) -> &str {
+    const STOP: &str = "<tool_response";
+    match text.rfind('<') {
+        Some(i) if STOP.starts_with(text[i..].trim_end()) => text[..i].trim_end(),
+        _ => text,
     }
 }
 

@@ -108,8 +108,10 @@ fn a_turn_reads_edits_checks_and_answers() {
     let summary: Vec<String> = events
         .iter()
         .map(|e| match e {
-            Event::Text(t) => format!("text {t}"),
-            Event::Reasoning(t) => format!("reasoning {t}"),
+            Event::Request { step } => format!("request {step}"),
+            Event::Reply { step, .. } => format!("reply {step}"),
+            Event::Text { text } => format!("text {text}"),
+            Event::Reasoning { text } => format!("reasoning {text}"),
             Event::ToolCall { name, .. } => format!("call {name}"),
             Event::ToolResult {
                 name,
@@ -127,13 +129,21 @@ fn a_turn_reads_edits_checks_and_answers() {
     assert_eq!(
         summary,
         [
+            "request 1",
+            "reply 1",
             "call Read",
             "Read ok 1\tfn main() {",
+            "request 2",
+            "reply 2",
             "call Edit",
             "Edit ok The file /p/src/main.rs has been updated (1 replacement). Snippet of the result:",
+            "request 3",
+            "reply 3",
             "call Grep",
             "Grep ok src/main.rs:2:    println!(\"hello\");",
+            "request 4",
             "text Fixed the typo in src/main.rs.",
+            "reply 4",
         ]
     );
     let sent = model.sent.borrow();
@@ -206,4 +216,75 @@ fn a_model_that_never_answers_stops_at_the_step_limit() {
         err.to_string().contains("stopped after 3 model requests"),
         "{err}"
     );
+}
+
+/// A model without native tool calls (a small local one) reads the tools in
+/// its system prompt and answers with `<tool_call>` blocks, near-miss
+/// argument names included.
+#[test]
+fn text_tool_mode_reads_tagged_calls_and_repairs_their_arguments() {
+    let fs = MemFs::new();
+    fs.insert("/p/notes.txt", "remember the milk\n");
+    let model = Scripted {
+        replies: RefCell::new(vec![
+            text(
+                "Let me look.\n<tool_call>\n{\"name\": \"Read\", \"arguments\": {\"path\": \"notes.txt\"}}\n</tool_call>",
+            ),
+            text("It says to remember the milk."),
+        ]),
+        sent: RefCell::new(vec![]),
+    };
+    let mut agent = Agent::new(
+        ModelConfig {
+            base_url: "http://local/v1".into(),
+            model: "small".into(),
+            api_key: Some("k".into()),
+        },
+        "You are a coding agent.",
+    );
+    agent.text_tools = true;
+    let mut workspace = Workspace::new(&fs, "/p");
+    let mut results = Vec::new();
+    let answer = futures::executor::block_on(agent.run_turn(
+        "what do my notes say?",
+        &model,
+        &mut workspace,
+        &mut |e| {
+            if let Event::ToolResult { content, .. } = e {
+                results.push(content)
+            }
+        },
+    ))
+    .unwrap();
+    assert_eq!(answer, "It says to remember the milk.");
+    assert_eq!(results, ["1\tremember the milk\n"]);
+    let sent = model.sent.borrow();
+    // No native tools: they are in the system prompt instead, and the
+    // reply stops before any result the model would invent.
+    assert!(sent[0].1.get("tools").is_none());
+    assert_eq!(sent[0].1["stop"], json!(["<tool_response"]));
+    let system = sent[0].1["messages"][0]["content"].as_str().unwrap();
+    assert!(
+        system.contains("<tool_call>") && system.contains("\"name\":\"Read\""),
+        "{system}"
+    );
+    // The call and its result go back as tagged text, not tool messages.
+    let msgs = sent[1].1["messages"].as_array().unwrap();
+    let roles: Vec<&str> = msgs.iter().map(|m| m["role"].as_str().unwrap()).collect();
+    assert_eq!(roles, ["system", "user", "assistant", "user"]);
+    assert!(msgs[2]["content"].as_str().unwrap().contains("<tool_call>"));
+    assert!(
+        msgs[3]["content"]
+            .as_str()
+            .unwrap()
+            .starts_with("<tool_response name=\"Read\">")
+    );
+}
+
+#[test]
+fn a_streamed_piece_of_the_stop_sequence_is_dropped() {
+    assert_eq!(without_stop_fragment("{\"a\":1}\n\n<tool"), "{\"a\":1}");
+    assert_eq!(without_stop_fragment("x <tool_response"), "x");
+    assert_eq!(without_stop_fragment("a < b"), "a < b");
+    assert_eq!(without_stop_fragment("<div>"), "<div>");
 }

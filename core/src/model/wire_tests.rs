@@ -353,3 +353,29 @@ fn repairs_truncated_json() {
     let v: Value = serde_json::from_str(&repair_json("{\"a\": [1, 2, {\"b\": \"x")).unwrap();
     assert_eq!(v["a"][2]["b"], "x");
 }
+
+#[test]
+fn several_bare_calls_count_only_when_they_are_the_whole_reply() {
+    let known = vec!["Read".to_string(), "Edit".to_string()];
+    let reply = "{\"name\":\"Read\",\"arguments\":{\"file_path\":\"a.py\"}}\n{\"name\":\"Edit\",\"arguments\":{\"file_path\":\"a.py\",\"old_string\":\"{x}\",\"new_string\":\"y\"}}";
+    let (rest, calls) = extract_text_tool_calls(reply, &known);
+    assert_eq!(rest, "");
+    let names: Vec<&str> = calls.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, ["Read", "Edit"]);
+    assert_eq!(
+        calls[1].arguments["old_string"], "{x}",
+        "braces inside strings"
+    );
+    // Fenced, too.
+    let (_, calls) = extract_text_tool_calls(&format!("```json\n{reply}\n```"), &known);
+    assert_eq!(calls.len(), 2);
+    // Prose around them, or an object that isn't a known call: nothing runs.
+    for text in [
+        format!("Here is how I would do it:\n{reply}"),
+        format!("{reply}\n{{\"name\":\"Bash\",\"arguments\":{{}}}}"),
+        "{\"note\": \"not a call\"}".to_string(),
+    ] {
+        let (_, calls) = extract_text_tool_calls(&text, &known);
+        assert!(calls.is_empty(), "{text}");
+    }
+}
