@@ -5,6 +5,8 @@
 #   (the main ruleset requires this check before merging);
 # - a Developer Certificate of Origin sign-off on every commit in a pull
 #   request, from the commit's author (bots excepted);
+# - a changelog.d fragment for a user-visible pull request (feat, fix,
+#   perf), or a `Changelog: none (<why>)` line in its description;
 # - every commit pushed to main, which catches a direct push that bypassed
 #   the pull request flow.
 name: commits
@@ -85,6 +87,27 @@ jobs:
               print(f"::error::The PR description needs a filled-in '## {s}' section (see .github/pull_request_template.md).")
           sys.exit(1 if missing or credits else 0)
           PY
+
+  # A pull request whose title says users can notice it (feat, fix, perf)
+  # adds a changelog.d fragment, or its description says why it needs none
+  # (`Changelog: none (<why>)`). Reruns when the description is edited.
+  changelog:
+    name: changelog entry
+    if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      # The title and body go through the environment, never into the script.
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 packaging/changelog.py --require --base "$BASE" --head "$HEAD"
 
   sign-off:
     name: DCO sign-off

@@ -133,5 +133,36 @@ class ChangelogFragmentTests(unittest.TestCase):
         self.assertRegex(text, r"## Unreleased\n\n## v0.2.0 \(October 28, 2026\)\n")
 
 
+
+class RequireFragmentTests(unittest.TestCase):
+    def need(self, title, body="", changed=()):
+        return changelog["require_fragment"](title, body, list(changed))
+
+    def test_user_visible_types_need_a_fragment(self):
+        for title in ["feat: add X", "fix(tui): wrap Y", "perf(http)!: share Z"]:
+            self.assertIsNotNone(self.need(title, changed=["src/x.rs"]), title)
+            self.assertIsNone(self.need(title, changed=["src/x.rs", "changelog.d/x.md"]), title)
+
+    def test_other_types_do_not(self):
+        for title in ["refactor: move X", "ci(perf): tighten Y", "docs: fix a typo",
+                      "chore(release): v0.2.0", "test(core): cover Z", "build(deps): bump w"]:
+            self.assertIsNone(self.need(title, changed=["src/x.rs"]), title)
+
+    def test_the_readme_is_not_a_fragment(self):
+        self.assertIsNotNone(self.need("fix: x", changed=["changelog.d/README.md"]))
+
+    def test_opting_out_takes_a_reason_outside_the_template_comments(self):
+        for body in ["Changelog: none (CI only)", "## Notes\nchangelog: none - Windows-only warnings",
+                     "Changelog: none: a test fix"]:
+            self.assertIsNone(self.need("fix: x", body), body)
+        for body in ["Changelog: none", "<!-- Changelog: none (template) -->",
+                     "no changelog needed", "Changelog: none ()"]:
+            self.assertIsNotNone(self.need("fix: x", body), body)
+
+    def test_the_message_says_how_to_fix_it(self):
+        why = self.need("perf: faster", changed=["src/x.rs"])
+        self.assertIn("changelog.d/<name>.md", why)
+        self.assertIn("Changelog: none", why)
+
 if __name__ == "__main__":
     unittest.main()
