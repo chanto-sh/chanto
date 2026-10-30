@@ -26,6 +26,10 @@
 # GitHub gives the repository one budget shared by every ref, so a pull
 # request that stored its own copy evicted the one it and the other pull
 # requests restored, and each run started from an empty target directory.
+#
+# That push also keeps its release binary, keyed by commit and compiler, so a
+# pull request based on it restores its base instead of building it again.
+# A miss (a merge that changed no Rust, an evicted entry) builds it as before.
 name: perf
 on:
   push:
@@ -146,7 +150,21 @@ jobs:
             echo "BENCH_TEMP=$temp"
             echo "BENCH_TARGET=$target"
             echo "BENCH_BIN=$bin"
+            # Part of the saved binary's key: a new stable Rust between main's
+            # build and the pull request's would otherwise be measured as a
+            # change in the pull request.
+            echo "RUSTC_VERSION=$(rustc --version | cut -d' ' -f2)"
           } >> "$GITHUB_ENV"
+      # The base is usually a commit main's own run already built: reuse that
+      # binary rather than spend the job's other half building it again.
+      # Measuring still happens here, on this runner, next to the head.
+      - name: Restore the base build
+        id: base-bin
+        if: ${{ env.MEASURE == 'true' && (env.BASE_SHA != '') }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/perf-bin
+          key: perf-bin-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ env.BASE_SHA }}
       # The gate's own tests are pure Python: run them before the builds.
       - name: Test the gate
         if: env.MEASURE == 'true'
@@ -156,10 +174,24 @@ jobs:
         run: |
           cargo build --release --locked ${{ matrix.cargo_flags }}
           cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-head"
+      # A push to main keeps its build for the pull requests based on it.
+      - name: Keep the build for pull requests
+        if: ${{ env.MEASURE == 'true' && github.event_name == 'push' }}
+        run: |
+          mkdir -p "$BENCH_TEMP/perf-bin"
+          cp "$BENCH_TEMP/chanto-head" "$BENCH_TEMP/perf-bin/chanto"
+      - if: ${{ env.MEASURE == 'true' && github.event_name == 'push' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/perf-bin
+          key: perf-bin-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ github.sha }}
+      - name: Use the saved base build
+        if: steps.base-bin.outputs.cache-hit == 'true'
+        run: cp "$BENCH_TEMP/perf-bin/chanto" "$BENCH_TEMP/chanto-base"
       # Built second, in the same target directory: the dependencies are
       # already compiled, so this is mostly the crate itself.
       - name: Build the base commit
-        if: ${{ env.MEASURE == 'true' && (env.BASE_SHA != '') }}
+        if: ${{ env.MEASURE == 'true' && (env.BASE_SHA != '') && steps.base-bin.outputs.cache-hit != 'true' }}
         run: |
           git worktree add --detach "$BENCH_TEMP/base" "$BASE_SHA"
           cargo build --release --locked ${{ matrix.cargo_flags }} \
