@@ -627,3 +627,203 @@ impl Serialize for OpenaiMessages<'_> {
 pub fn new_call_id() -> String {
     format!("call_{}", &uuid::Uuid::new_v4().simple().to_string()[..12])
 }
+
+/// Decodes an OpenAI-compatible chat completion stream (Server-Sent Events)
+/// into a [`ChatResponse`], passing text and reasoning to `on_delta` as they
+/// arrive. Feed it the response body's chunks in order, then [`Self::finish`].
+pub struct OpenaiDecoder {
+    think_off: bool,
+    model: String,
+    out: ChatResponse,
+    watch: ReasoningWatch,
+    /// The reasoning came as `reasoning_content`, which these servers want back.
+    replay_reasoning: bool,
+    /// (wire index, id, name, args, extra_content), in order of first appearance.
+    /// The wire index is a key, not a position: a server sending index 4e9
+    /// mustn't make us allocate four billion slots.
+    partial: Vec<(u64, String, String, String, Value)>,
+    /// `[DONE]` arrived: the server finished, rather than the connection just closing.
+    done: bool,
+    lines: LineBuf,
+}
+
+impl OpenaiDecoder {
+    pub fn new(req: &ChatRequest) -> Self {
+        OpenaiDecoder {
+            think_off: req.think == Some(false),
+            model: req.model.clone(),
+            out: ChatResponse::default(),
+            watch: ReasoningWatch::default(),
+            replay_reasoning: false,
+            partial: Vec::new(),
+            done: false,
+            lines: LineBuf::default(),
+        }
+    }
+
+    /// Decode the next chunk of the body. True once the server sent `[DONE]`:
+    /// the rest of the body is then ignored.
+    pub fn feed(&mut self, chunk: &[u8], on_delta: &mut dyn FnMut(Delta)) -> anyhow::Result<bool> {
+        self.lines.push(chunk);
+        while let Some(line) = self.lines.next_line() {
+            let line = String::from_utf8_lossy(line).into_owned();
+            let line = line.trim();
+            let Some(data) = line.strip_prefix("data:") else {
+                if line.starts_with('{') && ollama_shaped(line) {
+                    anyhow::bail!(
+                        "This looks like an Ollama server (it streams NDJSON with `message` and `done`, not OpenAI's Server-Sent Events); set provider = \"ollama\" (or kind = \"ollama\" in its [providers.<name>] section), or point base_url at its OpenAI endpoint (…/v1)"
+                    );
+                }
+                continue;
+            };
+            let data = data.trim();
+            if data == "[DONE]" {
+                self.done = true;
+                return Ok(true);
+            }
+            let v: Value = match serde_json::from_str(data) {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            if let Some(e) = v.get("error") {
+                anyhow::bail!("API error: {e}");
+            }
+            let out = &mut self.out;
+            if let Some(u) = v.get("usage").filter(|u| !u.is_null()) {
+                out.usage.prompt_tokens = u["prompt_tokens"].as_u64().unwrap_or(0);
+                out.usage.completion_tokens = u["completion_tokens"].as_u64().unwrap_or(0);
+                out.usage.cached_tokens = u["prompt_tokens_details"]["cached_tokens"]
+                    .as_u64()
+                    .or_else(|| u["prompt_cache_hit_tokens"].as_u64())
+                    .unwrap_or(0);
+                out.usage.cost = u["cost"].as_f64();
+            }
+            let Some(choice) = v["choices"].get(0) else {
+                continue;
+            };
+            let d = &choice["delta"];
+            if let Some(t) = d["refusal"].as_str().filter(|t| !t.is_empty()) {
+                out.text.push_str(t);
+                on_delta(Delta::Text(t.to_string()));
+                out.finish_reason = Some("refusal".into());
+            }
+            // Some servers send the same text under both names.
+            let reasoning = ["reasoning_content", "reasoning"]
+                .iter()
+                .find_map(|k| d[*k].as_str().filter(|t| !t.is_empty()).map(|t| (*k, t)));
+            if let Some((key, t)) = reasoning {
+                self.replay_reasoning |= key == "reasoning_content";
+                out.reasoning.push_str(t);
+                on_delta(Delta::Reasoning(t.to_string()));
+                if !self.think_off && self.watch.looping(&out.reasoning) {
+                    return Err(ReasoningLoop {
+                        chars: out.reasoning.len(),
+                    }
+                    .into());
+                }
+            }
+            if let Some(t) = d["content"].as_str()
+                && !t.is_empty()
+            {
+                out.text.push_str(t);
+                on_delta(Delta::Text(t.to_string()));
+            }
+            if let Some(tcs) = d["tool_calls"].as_array() {
+                let partial = &mut self.partial;
+                for tc in tcs {
+                    let slot = match tc["index"].as_u64() {
+                        Some(i) => partial.iter().position(|p| p.0 == i),
+                        // No index: a new id starts a new call, otherwise continue the last one.
+                        None => match tc["id"].as_str() {
+                            Some(id) if partial.last().map(|p| p.1 != id).unwrap_or(true) => None,
+                            _ => partial.len().checked_sub(1),
+                        },
+                    };
+                    let slot = slot.unwrap_or_else(|| {
+                        let key = tc["index"]
+                            .as_u64()
+                            .unwrap_or_else(|| partial.iter().map(|p| p.0 + 1).max().unwrap_or(0));
+                        partial.push((
+                            key,
+                            String::new(),
+                            String::new(),
+                            String::new(),
+                            Value::Null,
+                        ));
+                        partial.len() - 1
+                    });
+                    let p = &mut partial[slot];
+                    if let Some(id) = tc["id"].as_str() {
+                        p.1 = id.to_string();
+                    }
+                    if let Some(n) = tc["function"]["name"].as_str() {
+                        p.2.push_str(n);
+                    }
+                    match &tc["function"]["arguments"] {
+                        Value::String(a) => p.3.push_str(a),
+                        Value::Object(_) => p.3 = tc["function"]["arguments"].to_string(),
+                        _ => {}
+                    }
+                    if let Some(e) = tc.get("extra_content").filter(|e| !e.is_null()) {
+                        p.4 = e.clone();
+                    }
+                }
+            }
+            if let Some(f) = choice["finish_reason"].as_str()
+                && (out.finish_reason.as_deref() != Some("refusal") || f == "content_filter")
+            {
+                out.finish_reason = Some(f.to_string());
+            }
+        }
+        Ok(false)
+    }
+
+    /// The whole response, once the body has ended or sent `[DONE]`.
+    pub fn finish(mut self) -> anyhow::Result<ChatResponse> {
+        // The connection closed mid-call (no finish_reason, no [DONE]): the
+        // arguments may be cut short, and repairing them would run, say, a
+        // truncated Write. Fail the request instead.
+        if !self.done
+            && self.out.finish_reason.is_none()
+            && self.partial.iter().any(|p| !p.2.is_empty())
+        {
+            anyhow::bail!(
+                "the connection closed before the model finished its tool call (no finish_reason or [DONE])"
+            );
+        }
+        self.partial.sort_by_key(|p| p.0);
+        let mut extras = Vec::new();
+        for (_, id, name, args, extra) in self.partial {
+            if name.is_empty() {
+                continue;
+            }
+            let id = if id.is_empty() { new_call_id() } else { id };
+            if !extra.is_null() {
+                extras.push(json!({"id": id, "extra_content": extra}));
+            }
+            let arguments = if args.trim().is_empty() {
+                json!({})
+            } else {
+                parse_tool_args(&args)
+            };
+            self.out.tool_calls.push(ToolCall {
+                id,
+                name,
+                arguments,
+            });
+        }
+        // DeepSeek's thinking mode (and servers like it) reject a follow-up
+        // request unless the assistant turn carries its `reasoning_content` again.
+        if self.replay_reasoning && !self.out.reasoning.is_empty() {
+            extras.push(json!({"reasoning_content": self.out.reasoning}));
+        }
+        if !extras.is_empty() {
+            self.out.provider_items = Some(ProviderItems {
+                kind: ProviderKind::Openai,
+                model: self.model,
+                items: extras,
+            });
+        }
+        Ok(self.out)
+    }
+}
