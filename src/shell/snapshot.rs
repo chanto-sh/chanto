@@ -294,6 +294,9 @@ fn capture_in(
         }
     };
     let bytes = std::fs::read(&out).unwrap_or_default();
+    // It holds every exported variable, secrets included, which the
+    // snapshot itself withholds: don't leave it beside the snapshot.
+    let _ = std::fs::remove_file(&out);
     parse(&bytes).ok_or_else(|| {
         Error::Failed(format!(
             "{} exited ({status}) without reporting its setup",
@@ -742,12 +745,25 @@ fn private_dir() -> std::io::Result<PathBuf> {
     let base = crate::config::home_dir().join("shell-snapshots");
     std::fs::create_dir_all(&base)?;
     if let Ok(rd) = std::fs::read_dir(&base) {
-        let old = std::time::SystemTime::now() - Duration::from_secs(2 * 86400);
+        let now = std::time::SystemTime::now();
+        let old = now - Duration::from_secs(2 * 86400);
         for e in rd.flatten() {
-            if e.metadata()
-                .is_ok_and(|m| m.is_dir() && m.modified().is_ok_and(|t| t < old) && owned_by_me(&m))
-            {
+            let Ok(m) = e.metadata() else { continue };
+            if !m.is_dir() || !owned_by_me(&m) {
+                continue;
+            }
+            if m.modified().is_ok_and(|t| t < old) {
                 let _ = std::fs::remove_dir_all(e.path());
+                continue;
+            }
+            // A raw capture a crashed or older Chanto left behind; one still
+            // being written is younger than any capture's timeout.
+            let capture = e.path().join("capture");
+            if std::fs::metadata(&capture)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age > 10 * TIMEOUT))
+            {
+                let _ = std::fs::remove_file(capture);
             }
         }
     }
@@ -850,6 +866,13 @@ pub(crate) mod tests {
             !text.contains("_hx_completion") && !text.contains("noisy"),
             "{text}"
         );
+        // Nothing else stays beside the snapshot, the raw capture included.
+        let mut left: Vec<_> = std::fs::read_dir(p.parent().unwrap())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["functions.sh", "snapshot.sh"]);
         let out = run_with(
             &p,
             "hx-only-tool && hxgreet && hxfn x && echo \"$HX_SNAP_VAR\" && echo \"tok=${GITHUB_TOKEN:-unset}\"",
@@ -888,6 +911,40 @@ pub(crate) mod tests {
                 || crate::config::home_dir().starts_with(std::env::temp_dir())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_stale_capture_is_removed_and_a_fresh_one_kept() {
+        let _home_lock = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let base = crate::config::home_dir().join("shell-snapshots");
+        let (stale, fresh) = (
+            base.join(format!("stale-{}", uuid::Uuid::new_v4().simple())),
+            base.join(format!("fresh-{}", uuid::Uuid::new_v4().simple())),
+        );
+        for d in [&stale, &fresh] {
+            std::fs::create_dir_all(d).unwrap();
+            std::fs::write(d.join("capture"), "E\0GITHUB_TOKEN\0ghp_x\0").unwrap();
+            std::fs::write(d.join("snapshot.sh"), "").unwrap();
+        }
+        // Left by a crash an hour ago; the other is a capture under way.
+        std::fs::File::options()
+            .write(true)
+            .open(stale.join("capture"))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(3600))
+            .unwrap();
+        let dir = private_dir().unwrap();
+        assert!(!stale.join("capture").exists(), "the stale capture stayed");
+        assert!(stale.join("snapshot.sh").exists(), "only the capture goes");
+        assert!(
+            fresh.join("capture").exists(),
+            "a capture under way was removed"
+        );
+        for d in [&stale, &fresh, &dir] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     #[test]
