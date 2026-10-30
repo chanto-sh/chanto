@@ -150,14 +150,15 @@ jobs:
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-llvm-cov@0.6.21
-      - run: cargo llvm-cov --locked --quiet --lcov --output-path lcov.info
+      # chanto-core's own tests too: code that moved there is tested there.
+      - run: cargo llvm-cov --locked --quiet -p chanto -p chanto-core --lcov --output-path lcov.info
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
       # Product code only: test files would inflate the figure.
       - name: Summary
         run: |
-          cargo llvm-cov report --summary-only \
+          cargo llvm-cov report --summary-only -p chanto -p chanto-core \
             --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' > coverage.txt
           tail -n 1 coverage.txt
           {
@@ -177,7 +178,7 @@ jobs:
       # for 80% line coverage.
       - name: Coverage floor
         run: |
-          cargo llvm-cov report --summary-only \
+          cargo llvm-cov report --summary-only -p chanto -p chanto-core \
             --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' \
             --fail-under-lines 80 > /dev/null
   # Exercise the native sandbox and process-tree tests on Windows.

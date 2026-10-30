@@ -11,8 +11,10 @@ keywords = ["chanto"]
 
 [dependencies]
 anyhow = "1.0.104"
+memchr = "2.8.3"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.152"
+similar = "3.2.0"
 uuid = { version = "1.28.0", features = ["v4"] }
 
 # Tool call ids are random: in the browser the randomness comes from crypto.getRandomValues.

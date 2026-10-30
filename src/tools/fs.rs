@@ -5,12 +5,13 @@ use crate::util::{rel, resolve};
 use anyhow::{Result, bail};
 use async_trait::async_trait;
 use base64::Engine;
+use chanto_core::edit::{apply_edit, changed_snippet, count_changes};
+use chanto_core::fs::NativeFs;
+use chanto_core::read::{MAX_READ_BYTES, not_utf8, read_window, render_notebook, similar_files};
 use serde_json::{Value, json};
 use std::path::Path;
 
-const MAX_LINE: usize = 2000;
 const DEFAULT_LIMIT: usize = 2000;
-const MAX_READ_BYTES: usize = 256 * 1024;
 
 /// Each (file, offset, limit) with the file's modification time and size.
 type ReadLogMap =
@@ -125,7 +126,7 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
         let meta = match tokio::fs::metadata(&path).await {
             Ok(m) => m,
             Err(_) => {
-                let hint = similar_files(&path);
+                let hint = similar_files(&NativeFs, &path);
                 return Ok(ToolOutput::err(format!(
                     "File does not exist: {}{hint}",
                     path.display()
@@ -234,7 +235,12 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
         // Stream the file: only the requested lines are kept, so a small
         // window into a huge log doesn't load the whole file.
         let p2 = path.clone();
-        let w = tokio::task::spawn_blocking(move || read_window(&p2, offset, limit)).await??;
+        let w = tokio::task::spawn_blocking(move || {
+            let f = std::fs::File::open(&p2)?;
+            let size = f.metadata()?.len();
+            read_window(f, size, offset, limit)
+        })
+        .await??;
         if w.binary {
             return Ok(ToolOutput::err(format!(
                 "{} appears to be a binary file ({} bytes).",
@@ -268,245 +274,6 @@ PDFs (text extracted) and notebooks. Read before editing, and fetch several file
         }
         Ok(ToolOutput::ok(out).display(format!("Read {}", crate::util::plural(shown, "line"))))
     }
-}
-
-/// Lines `offset..offset+limit` of a text file, formatted like `cat -n`.
-struct Window {
-    out: String,
-    shown: usize,
-    total: usize,
-    binary: bool,
-    size: u64,
-}
-
-/// Read a window of lines without holding the file in memory: reads in
-/// chunks, keeps at most MAX_LINE bytes of each wanted line, and counts the
-/// rest. Same lines as `str::lines` (a trailing newline doesn't start a new
-/// line; `\r\n` endings are stripped).
-fn read_window(path: &Path, offset: usize, limit: usize) -> std::io::Result<Window> {
-    use std::io::Read;
-    let mut f = std::fs::File::open(path)?;
-    let size = f.metadata()?.len();
-    let mut w = Window {
-        out: String::new(),
-        shown: 0,
-        total: 0,
-        binary: false,
-        size,
-    };
-    let mut buf = vec![0u8; 64 * 1024];
-    let first = (offset - 1, (offset - 1).saturating_add(limit));
-    let mut cur: Vec<u8> = Vec::new();
-    let mut dropped = 0usize; // bytes of the current line beyond the cap
-    let mut last = 0u8; // the current line's last byte so far
-    let (mut pending, mut stopped, mut checked) = (false, false, false);
-    let mut line = 0usize; // 0-based index of the line being read
-    let emit = |w: &mut Window, bytes: &[u8], idx: usize, stopped: &mut bool, dropped: usize| {
-        if idx < first.0 || idx >= first.1 || *stopped {
-            return;
-        }
-        if w.out.len() > MAX_READ_BYTES {
-            w.out.push_str(&format!(
-                "… [output limit reached at line {}; use offset/limit to read more]\n",
-                idx + 1
-            ));
-            *stopped = true;
-            return;
-        }
-        let text = String::from_utf8_lossy(bytes);
-        let total = bytes.len() + dropped;
-        // Say when a line was cut: a silent cut makes the model copy partial
-        // text into an Edit, which then fails to match.
-        let text = if text.len() > MAX_LINE {
-            truncated_line(&text, total)
-        } else {
-            text
-        };
-        w.out.push_str(&format!("{}\t{}\n", idx + 1, text));
-        w.shown += 1;
-    };
-    loop {
-        let n = f.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        let chunk = &buf[..n];
-        if !checked {
-            // The same binary check as before: a NUL in the first 8000 bytes.
-            checked = true;
-            if chunk.iter().take(8000).any(|&b| b == 0) {
-                w.binary = true;
-                return Ok(w);
-            }
-        }
-        let mut start = 0;
-        while start < chunk.len() {
-            let wanted = line >= first.0 && line < first.1 && !stopped;
-            match memchr::memchr(b'\n', &chunk[start..]) {
-                Some(i) => {
-                    if wanted {
-                        let take = (MAX_LINE + 4).saturating_sub(cur.len()).min(i);
-                        cur.extend_from_slice(&chunk[start..start + take]);
-                        dropped += i - take;
-                    }
-                    if i > 0 {
-                        last = chunk[start + i - 1];
-                    }
-                    // CRLF: the `\r` is not part of the line.
-                    if wanted && last == b'\r' {
-                        if dropped > 0 {
-                            dropped -= 1
-                        } else {
-                            cur.pop();
-                        }
-                    }
-                    last = 0;
-                    emit(&mut w, &cur, line, &mut stopped, dropped);
-                    cur.clear();
-                    dropped = 0;
-                    line += 1;
-                    pending = false;
-                    start += i + 1;
-                }
-                None => {
-                    if wanted {
-                        let take = (MAX_LINE + 4)
-                            .saturating_sub(cur.len())
-                            .min(chunk.len() - start);
-                        cur.extend_from_slice(&chunk[start..start + take]);
-                        dropped += (chunk.len() - start) - take;
-                    }
-                    last = chunk[chunk.len() - 1];
-                    pending = true;
-                    start = chunk.len();
-                }
-            }
-        }
-    }
-    if pending {
-        emit(&mut w, &cur, line, &mut stopped, dropped);
-        line += 1;
-    }
-    w.total = line;
-    Ok(w)
-}
-
-/// The first MAX_LINE bytes of an over-long line, marked as cut.
-fn truncated_line(text: &str, total: usize) -> std::borrow::Cow<'_, str> {
-    let cut = floor_char(text, MAX_LINE);
-    format!("{}… [line truncated: {cut} of {total} bytes]", &text[..cut]).into()
-}
-
-fn floor_char(s: &str, mut i: usize) -> usize {
-    while !s.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-fn similar_files(path: &Path) -> String {
-    let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
-        return String::new();
-    };
-    let dir = path.parent().unwrap_or_else(|| Path::new("."));
-    let mut cands = read_names(dir, false);
-    // Compare against the file name, or the directory name when the directory
-    // itself is missing (`src/agentss/mod.rs` → suggest `agents/`).
-    let mut key = name.to_string();
-    if cands.is_empty()
-        && let Some(parent) = dir.parent()
-    {
-        cands = read_names(parent, true);
-        key = dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or(name)
-            .to_string();
-    }
-    let q = key.to_ascii_lowercase();
-    let limit = (q.len() / 3).clamp(1, 4);
-    let mut scored: Vec<(usize, String)> = cands
-        .into_iter()
-        .filter(|c| c != name)
-        .filter_map(|c| {
-            let cl = c.trim_end_matches('/').to_ascii_lowercase();
-            let d = levenshtein(&cl, &q);
-            (d <= limit || cl.contains(&q) || q.contains(&cl)).then_some((d, c))
-        })
-        .collect();
-    scored.sort();
-    scored.truncate(5);
-    if scored.is_empty() {
-        String::new()
-    } else {
-        format!(
-            "\nDid you mean one of: {}?",
-            scored
-                .into_iter()
-                .map(|(_, c)| c)
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    }
-}
-
-fn read_names(dir: &Path, dirs_only: bool) -> Vec<String> {
-    let Ok(rd) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    rd.filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let is_dir = e.file_type().is_ok_and(|t| t.is_dir());
-            if dirs_only && !is_dir {
-                return None;
-            }
-            let n = e.file_name().to_str().map(String::from)?;
-            Some(if dirs_only { format!("{n}/") } else { n })
-        })
-        .collect()
-}
-
-fn levenshtein(a: &str, b: &str) -> usize {
-    let a: Vec<char> = a.chars().collect();
-    let b: Vec<char> = b.chars().collect();
-    let mut prev: Vec<usize> = (0..=b.len()).collect();
-    let mut cur = vec![0; b.len() + 1];
-    for i in 1..=a.len() {
-        cur[0] = i;
-        for j in 1..=b.len() {
-            let cost = usize::from(a[i - 1] != b[j - 1]);
-            cur[j] = (prev[j] + 1).min(cur[j - 1] + 1).min(prev[j - 1] + cost);
-        }
-        std::mem::swap(&mut prev, &mut cur);
-    }
-    prev[b.len()]
-}
-
-fn render_notebook(bytes: &[u8]) -> String {
-    let v: Value = serde_json::from_slice(bytes).unwrap_or_default();
-    let mut out = String::new();
-    for (i, cell) in v["cells"].as_array().into_iter().flatten().enumerate() {
-        let src = match &cell["source"] {
-            Value::Array(a) => a.iter().filter_map(|s| s.as_str()).collect::<String>(),
-            Value::String(s) => s.clone(),
-            _ => String::new(),
-        };
-        out.push_str(&format!(
-            "<cell {} type={}>\n{}\n",
-            i,
-            cell["cell_type"].as_str().unwrap_or("?"),
-            src
-        ));
-        for o in cell["outputs"].as_array().into_iter().flatten() {
-            if let Some(t) = o["text"].as_array() {
-                out.push_str("<output>\n");
-                out.push_str(&t.iter().filter_map(|s| s.as_str()).collect::<String>());
-                out.push_str("\n</output>\n");
-            }
-        }
-        out.push_str("</cell>\n");
-    }
-    crate::util::truncate(&out, MAX_READ_BYTES)
 }
 
 /// Ensure the model has read the current version of a file before modifying it,
@@ -603,82 +370,6 @@ must Read it first. Prefer Edit for modifying existing files; use Write for new 
         };
         Ok(ToolOutput::ok(msg).display(display))
     }
-}
-
-/// Apply a single replacement, returning the new text or a model-facing error.
-pub(crate) fn apply_edit(
-    text: &str,
-    old: &str,
-    new: &str,
-    all: bool,
-) -> std::result::Result<(String, usize), String> {
-    if old == new {
-        return Err("old_string and new_string are identical; nothing to change.".into());
-    }
-    if old.is_empty() {
-        return Err("old_string must not be empty (use Write to create a file).".into());
-    }
-    let count = text.matches(old).count();
-    if count == 0 {
-        // Tolerate CRLF files and trailing-whitespace drift.
-        if text.contains("\r\n") && !old.contains('\r') {
-            let o = old.replace('\n', "\r\n");
-            if text.contains(&o) {
-                return apply_edit(text, &o, &new.replace('\n', "\r\n"), all);
-            }
-        }
-        if let Some((s, e)) = fuzzy_find(text, old) {
-            let mut out = String::with_capacity(text.len() + new.len());
-            out.push_str(&text[..s]);
-            out.push_str(new);
-            out.push_str(&text[e..]);
-            return Ok((out, 1));
-        }
-        return Err("old_string not found in file. Make sure it matches the file contents exactly, including whitespace and indentation (Read the file again if unsure).".into());
-    }
-    if count > 1 && !all {
-        return Err(format!(
-            "old_string matches {count} locations. Provide more surrounding context to make it unique, or set replace_all=true."
-        ));
-    }
-    Ok((
-        if all {
-            text.replace(old, new)
-        } else {
-            text.replacen(old, new, 1)
-        },
-        count,
-    ))
-}
-
-/// Line-based match ignoring trailing whitespace and uniform indentation
-/// differences. Returns a byte range only if the match is unique.
-fn fuzzy_find(text: &str, old: &str) -> Option<(usize, usize)> {
-    let old_lines: Vec<&str> = old.lines().map(|l| l.trim()).collect();
-    if old_lines.len() < 2 || old_lines.iter().all(|l| l.is_empty()) {
-        return None;
-    }
-    let mut starts = Vec::new();
-    let mut off = 0;
-    for l in text.split_inclusive('\n') {
-        starts.push((off, l));
-        off += l.len();
-    }
-    let mut found = None;
-    for i in 0..starts.len() {
-        if i + old_lines.len() > starts.len() {
-            break;
-        }
-        if (0..old_lines.len()).all(|j| starts[i + j].1.trim() == old_lines[j]) {
-            if found.is_some() {
-                return None; // ambiguous
-            }
-            let last = &starts[i + old_lines.len() - 1];
-            let end = last.0 + last.1.trim_end_matches(['\n', '\r']).len();
-            found = Some((starts[i].0, end));
-        }
-    }
-    found
 }
 
 pub struct Edit;
@@ -837,53 +528,6 @@ async fn edit_file(ctx: &Ctx, p: &str, edits: Vec<(String, String, bool)>) -> Re
     .display(display))
 }
 
-fn count_changes(a: &str, b: &str) -> (usize, usize) {
-    use similar::{ChangeTag, TextDiff};
-    let (_, a, b) = crate::util::changed_region(a, b, 0);
-    let d = TextDiff::from_lines(a, b);
-    let mut adds = 0;
-    let mut dels = 0;
-    for c in d.iter_all_changes() {
-        match c.tag() {
-            ChangeTag::Insert => adds += 1,
-            ChangeTag::Delete => dels += 1,
-            _ => {}
-        }
-    }
-    (adds, dels)
-}
-
-fn changed_snippet(a: &str, b: &str) -> String {
-    // Work on the changed region (with enough unchanged context for the
-    // three-line margin below) instead of splitting the whole file.
-    let (offset, a, b) = crate::util::changed_region(a, b, 4);
-    changed_snippet_full(a, b, offset)
-}
-
-fn changed_snippet_full(a: &str, b: &str, offset: usize) -> String {
-    let al: Vec<&str> = a.lines().collect();
-    let bl: Vec<&str> = b.lines().collect();
-    let first = al
-        .iter()
-        .zip(bl.iter())
-        .position(|(x, y)| x != y)
-        .unwrap_or(al.len().min(bl.len()));
-    let tail_same = al
-        .iter()
-        .rev()
-        .zip(bl.iter().rev())
-        .take_while(|(x, y)| x == y)
-        .count();
-    let end_b = bl.len().saturating_sub(tail_same).max(first + 1);
-    let start = first.saturating_sub(3);
-    let end = (end_b + 3).min(bl.len());
-    let mut out = String::new();
-    for (i, line) in bl.iter().enumerate().take(end.min(start + 60)).skip(start) {
-        out.push_str(&format!("{}\t{}\n", i + 1 + offset, line));
-    }
-    out
-}
-
 pub struct NotebookEdit;
 
 #[async_trait]
@@ -947,37 +591,6 @@ pub(crate) async fn read_text(ctx: &Ctx, path: &Path) -> Result<String> {
             String::from_utf8(bytes).map_err(|e| anyhow::anyhow!(not_utf8(path, e.as_bytes())))
         }
     }
-}
-
-/// Why a file can't be edited as text, with a likely encoding and a
-/// conversion the model can run.
-fn not_utf8(path: &Path, b: &[u8]) -> String {
-    let (enc, iconv) = if b.starts_with(&[0xFF, 0xFE]) {
-        (
-            "UTF-16 LE (it starts with a UTF-16 byte-order mark)",
-            Some("UTF-16"),
-        )
-    } else if b.starts_with(&[0xFE, 0xFF]) {
-        (
-            "UTF-16 BE (it starts with a UTF-16 byte-order mark)",
-            Some("UTF-16"),
-        )
-    } else if b.iter().take(8192).any(|&c| c == 0) {
-        (
-            "binary, or UTF-16 without a byte-order mark (it contains NUL bytes)",
-            None,
-        )
-    } else {
-        ("probably Latin-1 / Windows-1252", Some("WINDOWS-1252"))
-    };
-    let p = path.display();
-    let hint = match iconv {
-        Some(from) => format!(
-            " To edit it, convert it first with Bash, e.g. `iconv -f {from} -t UTF-8 '{p}' > '{p}.utf8' && mv '{p}.utf8' '{p}'` (this changes the file's encoding), or make the change with a script that keeps the encoding."
-        ),
-        None => " Edit can't change it; use Bash if it must be modified.".to_string(),
-    };
-    format!("{p} isn't UTF-8 text: {enc}.{hint}")
 }
 
 pub(crate) async fn write_text(
@@ -1066,19 +679,6 @@ pub(crate) fn notebook_preview(original: &str, args: &Value) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_typo_suggests_close_file_names_and_directories() {
-        let dir = std::env::temp_dir().join(format!("chanto-sim-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(dir.join("src/agents")).unwrap();
-        std::fs::write(dir.join("src/agent.rs"), "x").unwrap();
-        let hint = similar_files(&dir.join("src/agnet.rs"));
-        assert!(hint.contains("agent.rs"), "{hint}");
-        let hint = similar_files(&dir.join("src/agentss/mod.rs"));
-        assert!(hint.contains("agents/"), "{hint}");
-        assert!(similar_files(&dir.join("src/zzzzzzz.rs")).is_empty());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     #[cfg(unix)]
     #[tokio::test]
@@ -1263,124 +863,5 @@ mod tests {
                 .contains("three")
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn changed_snippet_matches_whole_file_version() {
-        let base: String = (0..300).map(|i| format!("line {i}\n")).collect();
-        let cases = [
-            base.replace("line 150\n", "line 150 edited\n"),
-            base.replace("line 0\n", "start\n"),
-            base.replace("line 299\n", "end\n"),
-            base.replace("line 40\n", "line 40\nnew 1\nnew 2\n"),
-            base.replace("line 80\nline 81\nline 82\n", ""),
-            base.replace("line 5\n", "a\n").replace("line 250\n", "b\n"),
-            base.trim_end_matches('\n').to_string(),
-            base.clone(),
-        ];
-        for (i, new) in cases.iter().enumerate() {
-            assert_eq!(
-                changed_snippet(&base, new),
-                changed_snippet_full(&base, new, 0),
-                "case {i}"
-            );
-        }
-    }
-
-    /// The old whole-file implementation, as the reference.
-    fn reference(text: &str, offset: usize, limit: usize) -> (String, usize, usize) {
-        let total = text.lines().count();
-        let mut out = String::new();
-        let mut shown = 0;
-        for (i, line) in text.lines().enumerate().skip(offset - 1).take(limit) {
-            if out.len() > MAX_READ_BYTES {
-                out.push_str(&format!(
-                    "… [output limit reached at line {}; use offset/limit to read more]\n",
-                    i + 1
-                ));
-                break;
-            }
-            let line = if line.len() > MAX_LINE {
-                truncated_line(line, line.len())
-            } else {
-                line.into()
-            };
-            out.push_str(&format!("{}\t{}\n", i + 1, line));
-            shown += 1;
-        }
-        (out, shown, total)
-    }
-
-    #[test]
-    fn streaming_read_matches_whole_file_read() {
-        let dir = std::env::temp_dir().join(format!("chanto-read-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let long = "é".repeat(MAX_LINE); // multi-byte, longer than MAX_LINE bytes
-        let big: String = (1..=200_000).map(|i| format!("line {i}\n")).collect();
-        let cases: Vec<(&str, String)> = vec![
-            ("plain", "a\nb\nc\n".into()),
-            ("no-final-newline", "a\nb".into()),
-            ("crlf", "a\r\nb\r\n\r\nc".into()),
-            ("blank-lines", "\n\n\nx\n".into()),
-            ("long-lines", format!("{long}\nshort\n{long}")),
-            ("long-crlf-lines", format!("{long}\r\nshort\r\n{long}\r\n")),
-            ("big", big),
-        ];
-        for (name, text) in &cases {
-            let p = dir.join(name);
-            std::fs::write(&p, text).unwrap();
-            for (offset, limit) in [(1, 2000), (2, 1), (3, 5), (150_000, 3), (199_999, 10)] {
-                let w = read_window(&p, offset, limit).unwrap();
-                let (out, shown, total) = reference(text, offset, limit);
-                assert_eq!(
-                    (w.out.as_str(), w.shown, w.total),
-                    (out.as_str(), shown, total),
-                    "{name} offset {offset} limit {limit}"
-                );
-            }
-        }
-        std::fs::write(dir.join("bin"), b"abc\0def").unwrap();
-        assert!(read_window(&dir.join("bin"), 1, 10).unwrap().binary);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn long_lines_say_they_were_cut() {
-        let dir =
-            std::env::temp_dir().join(format!("chanto-longline-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join("min.js");
-        // Longer than one 64 KiB read chunk, so the dropped bytes span chunks.
-        std::fs::write(&p, format!("{}\r\nok\n", "x".repeat(100_000))).unwrap();
-        let w = read_window(&p, 1, 10).unwrap();
-        let first = w.out.lines().next().unwrap();
-        assert!(
-            first.ends_with("… [line truncated: 2000 of 100000 bytes]"),
-            "{}",
-            &first[first.len() - 60..]
-        );
-        assert!(w.out.contains("2\tok\n"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn edit_unique_and_ambiguous() {
-        assert_eq!(apply_edit("a b a", "b", "c", false).unwrap().0, "a c a");
-        assert!(apply_edit("a b a", "a", "c", false).is_err());
-        assert_eq!(apply_edit("a b a", "a", "c", true).unwrap().0, "c b c");
-        assert!(apply_edit("abc", "x", "y", false).is_err());
-    }
-
-    #[test]
-    fn edit_fuzzy_indentation() {
-        let text = "fn main() {\n    let x = 1;\n    let y = 2;\n}\n";
-        let (out, _) = apply_edit(text, "let x = 1;\nlet y = 2;", "    let z = 3;", false).unwrap();
-        assert_eq!(out, "fn main() {\n    let z = 3;\n}\n");
-    }
-
-    #[test]
-    fn snippet_shows_change() {
-        let s = changed_snippet("a\nb\nc\n", "a\nX\nc\n");
-        assert!(s.contains("X"));
     }
 }
