@@ -73,3 +73,53 @@ fn memory_reads_like_the_disk() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn atomic_write_keeps_the_original_on_failure() {
+    let dir = std::env::temp_dir().join(format!("chanto-atomic-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let f = dir.join("a.rs");
+    std::fs::write(&f, "one\n").unwrap();
+    write_atomic(&f, b"two\n").unwrap();
+    assert_eq!(std::fs::read_to_string(&f).unwrap(), "two\n");
+    // Writes create missing parents (the Write tool's create_dir_all).
+    let nested = dir.join("x/y/z.rs");
+    write_atomic(&nested, b"deep\n").unwrap();
+    assert_eq!(std::fs::read_to_string(&nested).unwrap(), "deep\n");
+    // No temp files are left behind on the happy path.
+    let leftovers: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
+        .collect();
+    assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
+    // A symlink is written through: it stays a link and its target changes.
+    #[cfg(unix)]
+    {
+        std::fs::write(dir.join("AGENTS.md"), "rule one\n").unwrap();
+        std::os::unix::fs::symlink("AGENTS.md", dir.join("CLAUDE.md")).unwrap();
+        write_atomic(&dir.join("CLAUDE.md"), b"rule ONE\n").unwrap();
+        assert!(
+            std::fs::symlink_metadata(dir.join("CLAUDE.md"))
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(),
+            "rule ONE\n"
+        );
+    }
+    // A read-only file is refused, not replaced.
+    let ro = dir.join("ro.txt");
+    std::fs::write(&ro, "locked\n").unwrap();
+    let mut perms = std::fs::metadata(&ro).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(&ro, perms).unwrap();
+    assert_eq!(
+        write_atomic(&ro, b"changed\n").unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    assert_eq!(std::fs::read_to_string(&ro).unwrap(), "locked\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}

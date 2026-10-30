@@ -445,6 +445,9 @@ pub struct Env {
     pub text_tools: AtomicBool,
     cwd: RwLock<PathBuf>,
     read_files: Mutex<HashMap<PathBuf, SystemTime>>,
+    /// The files the file tools read and write: the disk, or memory in the
+    /// browser build and in tests.
+    fs: RwLock<Arc<dyn chanto_core::fs::Fs>>,
     pub todos: Mutex<Vec<Todo>>,
     pub shells: Mutex<HashMap<String, Arc<BgShell>>>,
     shell_counter: AtomicU64,
@@ -818,6 +821,7 @@ impl Env {
             text_tools: AtomicBool::new(false),
             cwd: RwLock::new(i.cwd),
             read_files: Default::default(),
+            fs: RwLock::new(Arc::new(chanto_core::fs::NativeFs)),
             todos: Default::default(),
             shells: Default::default(),
             shell_counter: AtomicU64::new(1),
@@ -1196,8 +1200,15 @@ impl Env {
     pub fn next_shell_id(&self) -> u64 {
         self.shell_counter.fetch_add(1, Ordering::Relaxed)
     }
+    /// The file system the file tools use.
+    pub fn fs(&self) -> Arc<dyn chanto_core::fs::Fs> {
+        self.fs.read().unwrap().clone()
+    }
+    pub fn set_fs(&self, fs: Arc<dyn chanto_core::fs::Fs>) {
+        *self.fs.write().unwrap() = fs;
+    }
     pub fn mark_read(&self, p: &Path) {
-        if let Ok(m) = std::fs::metadata(p).and_then(|m| m.modified()) {
+        if let Some(m) = self.fs().metadata(p).ok().and_then(|m| m.modified) {
             self.read_files
                 .lock()
                 .unwrap()
@@ -1216,7 +1227,8 @@ impl Env {
         let mut cps = self.checkpoints.lock().unwrap();
         if let Some(cp) = cps.last_mut() {
             let key = permissions::normalize(p);
-            cp.files.entry(key).or_insert_with(|| std::fs::read(p).ok());
+            let fs = self.fs();
+            cp.files.entry(key).or_insert_with(|| fs.read(p).ok());
         }
     }
 

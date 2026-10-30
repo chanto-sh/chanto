@@ -72,80 +72,7 @@ pub fn unescape_path(s: &str) -> String {
     s.replace("\\ ", " ")
 }
 
-/// A unique sibling temp path for an atomic write, so two writers never collide.
-fn temp_sibling(path: &Path) -> PathBuf {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    path.with_file_name(format!(".{name}.{}.{nanos}.tmp", std::process::id()))
-}
-
-/// Write a file atomically: stage the bytes in a sibling temp file, flush them
-/// to disk, then rename over the target. A crash, full disk or kill mid-write
-/// leaves the original untouched rather than a truncated file — the failure
-/// mode that turns "the agent edited my file" into "the agent ate my file".
-pub async fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    use tokio::io::AsyncWriteExt;
-    // A symlink (CLAUDE.md -> AGENTS.md) is written through, as editors do:
-    // renaming over it replaced the link with a copy and left its target stale.
-    // Permission checks already judged the resolved path.
-    let resolved;
-    let path = match tokio::fs::symlink_metadata(path).await {
-        Ok(md) if md.file_type().is_symlink() => match tokio::fs::canonicalize(path).await {
-            Ok(target) => {
-                resolved = target;
-                resolved.as_path()
-            }
-            Err(_) => path,
-        },
-        _ => path,
-    };
-    // Renaming over a read-only file would succeed (only the directory's
-    // permissions count), silently defeating a `chmod a-w` meant to keep it.
-    if tokio::fs::metadata(path)
-        .await
-        .is_ok_and(|m| m.permissions().readonly())
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("{} is read-only", path.display()),
-        ));
-    }
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let tmp = temp_sibling(path);
-    let res = async {
-        let mut f = tokio::fs::File::create(&tmp).await?;
-        f.write_all(data).await?;
-        // tokio writes in the background and reports a failed write (a full
-        // disk) on the next write or flush, not from sync_all: without the
-        // flush, a short temp file was renamed over the original.
-        f.flush().await?;
-        f.sync_all().await?;
-        drop(f);
-        // And check what reached the disk before replacing anything.
-        let written = tokio::fs::metadata(&tmp).await?.len();
-        if written != data.len() as u64 {
-            return Err(std::io::Error::other(format!(
-                "short write: {written} of {} bytes",
-                data.len()
-            )));
-        }
-        // Keep the original's permissions (an executable stays executable).
-        if let Ok(md) = tokio::fs::metadata(path).await {
-            let _ = tokio::fs::set_permissions(&tmp, md.permissions()).await;
-        }
-        tokio::fs::rename(&tmp, path).await
-    }
-    .await;
-    if res.is_err() {
-        let _ = tokio::fs::remove_file(&tmp).await;
-    }
-    res
-}
+use chanto_core::fs::temp_sibling;
 
 /// Atomic write readable only by the owner (0600). For anything derived from a
 /// conversation — exports, histories — which can contain secrets.
@@ -432,7 +359,6 @@ mod tests {
     use super::{append_private, free_bytes, write_private};
     use super::{
         duration, is_image_path, plural, short_num, strip_terminal_escapes, unescape_path,
-        write_atomic,
     };
     use std::path::Path;
 
@@ -470,58 +396,6 @@ mod tests {
         assert_eq!(duration(3599), "59m 59s");
         assert_eq!(duration(3600), "1h 0m");
         assert_eq!(duration(7_500), "2h 5m");
-    }
-
-    #[tokio::test]
-    async fn atomic_write_keeps_the_original_on_failure() {
-        let dir = std::env::temp_dir().join(format!("chanto-atomic-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("a.rs");
-        std::fs::write(&f, "one\n").unwrap();
-        write_atomic(&f, b"two\n").await.unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "two\n");
-        // Writes create missing parents (the Write tool's create_dir_all).
-        let nested = dir.join("x/y/z.rs");
-        write_atomic(&nested, b"deep\n").await.unwrap();
-        assert_eq!(std::fs::read_to_string(&nested).unwrap(), "deep\n");
-        // No temp files are left behind on the happy path.
-        let leftovers: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
-        // A symlink is written through: it stays a link and its target changes.
-        #[cfg(unix)]
-        {
-            std::fs::write(dir.join("AGENTS.md"), "rule one\n").unwrap();
-            std::os::unix::fs::symlink("AGENTS.md", dir.join("CLAUDE.md")).unwrap();
-            write_atomic(&dir.join("CLAUDE.md"), b"rule ONE\n")
-                .await
-                .unwrap();
-            assert!(
-                std::fs::symlink_metadata(dir.join("CLAUDE.md"))
-                    .unwrap()
-                    .file_type()
-                    .is_symlink()
-            );
-            assert_eq!(
-                std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(),
-                "rule ONE\n"
-            );
-        }
-        // A read-only file is refused, not replaced.
-        let ro = dir.join("ro.txt");
-        std::fs::write(&ro, "locked\n").unwrap();
-        let mut perms = std::fs::metadata(&ro).unwrap().permissions();
-        perms.set_readonly(true);
-        std::fs::set_permissions(&ro, perms).unwrap();
-        assert_eq!(
-            write_atomic(&ro, b"changed\n").await.unwrap_err().kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(std::fs::read_to_string(&ro).unwrap(), "locked\n");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[cfg(unix)]
