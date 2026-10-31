@@ -275,14 +275,19 @@ pub fn event_json(ev: &Event) -> Option<Value> {
 }
 
 fn event_json_raw(ev: &Event) -> Option<Value> {
-    Some(match ev {
-        Event::AssistantStart => json!({"type": "assistant_start"}),
-        Event::AssistantEnd => json!({"type": "assistant_end"}),
-        Event::Text(t) => json!({"type": "text", "text": t}),
-        Event::Reasoning(t) => json!({"type": "reasoning", "text": t}),
-        Event::ToolStart { id, label, parent } => {
-            json!({"type": "tool_start", "id": id, "label": label, "parent": parent})
-        }
+    use crate::wire::{self, StreamEvent as E};
+    let todos;
+    let output;
+    let ev = match ev {
+        Event::AssistantStart => E::AssistantStart,
+        Event::AssistantEnd => E::AssistantEnd,
+        Event::Text(t) => E::Text { text: t },
+        Event::Reasoning(t) => E::Reasoning { text: t },
+        Event::ToolStart { id, label, parent } => E::ToolStart {
+            id,
+            label,
+            parent: parent.as_deref(),
+        },
         Event::ToolEnd {
             id,
             display,
@@ -291,12 +296,20 @@ fn event_json_raw(ev: &Event) -> Option<Value> {
             images,
             parent,
         } => {
-            json!({"type": "tool_end", "id": id, "is_error": is_error, "output": crate::util::truncate(&crate::secrets::redact(content), 2000), "display": display, "images": image_data_urls(images), "parent": parent})
+            output = crate::util::truncate(&crate::secrets::redact(content), 2000);
+            E::ToolEnd {
+                id,
+                is_error: *is_error,
+                output,
+                display,
+                images: image_data_urls(images),
+                parent: parent.as_deref(),
+            }
         }
-        Event::ToolProgress { id, text } => {
-            json!({"type": "tool_progress", "id": id, "text": text})
-        }
-        Event::Busy(label) => json!({"type": "busy", "label": label}),
+        Event::ToolProgress { id, text } => E::ToolProgress { id, text },
+        Event::Busy(label) => E::Busy {
+            label: label.as_deref(),
+        },
         Event::Usage {
             context_used,
             context_max,
@@ -305,29 +318,52 @@ fn event_json_raw(ev: &Event) -> Option<Value> {
             total_cost_usd,
             price_unknown,
             tps,
-        } => {
-            json!({"type": "usage", "context_used": context_used, "context_max": context_max, "total_in": total_in, "total_out": total_out, "tps": tps, "total_cost_usd": total_cost_usd, "price_unknown": price_unknown})
+        } => E::Usage {
+            context_used: *context_used,
+            context_max: *context_max,
+            total_in: *total_in,
+            total_out: *total_out,
+            tps: *tps,
+            total_cost_usd: *total_cost_usd,
+            price_unknown: *price_unknown,
+        },
+        Event::Warn(w) => E::Warning { message: w },
+        Event::Error(e) => E::Error { message: e },
+        Event::Info(i) => E::Info { message: i },
+        Event::Todos(t) => {
+            todos = t
+                .iter()
+                .map(|t| wire::Todo {
+                    content: &t.content,
+                    status: &t.status,
+                    active_form: &t.active_form,
+                })
+                .collect();
+            E::Todos { todos }
         }
-        Event::Warn(w) => json!({"type": "warning", "message": w}),
-        Event::Error(e) => json!({"type": "error", "message": e}),
-        Event::Info(i) => json!({"type": "info", "message": i}),
-        Event::Todos(t) => json!({"type": "todos", "todos": t}),
-        Event::ModeChanged(m) => json!({"type": "mode", "mode": m}),
-        Event::Compacted { before, after } => {
-            json!({"type": "compacted", "before": before, "after": after})
-        }
+        Event::ModeChanged(m) => E::Mode { mode: (*m).into() },
+        Event::Compacted { before, after } => E::Compacted {
+            before: *before,
+            after: *after,
+        },
         Event::Background {
             id,
             description,
             status,
-        } => {
-            json!({"type": "background_agent", "id": id, "description": description, "status": status})
-        }
-        Event::Limits(s) => {
-            json!({"type": "rate_limits", "summary": s.summary(), "plan": s.plan_type, "primary": s.primary, "secondary": s.secondary})
-        }
-        Event::Status { key, lines } => json!({"type": "status", "key": key, "lines": lines}),
-    })
+        } => E::BackgroundAgent {
+            id,
+            description,
+            status,
+        },
+        Event::Limits(s) => E::RateLimits {
+            summary: s.summary(),
+            plan: s.plan_type.as_deref(),
+            primary: s.primary.as_ref().map(Into::into),
+            secondary: s.secondary.as_ref().map(Into::into),
+        },
+        Event::Status { key, lines } => E::Status { key, lines },
+    };
+    Some(ev.to_value())
 }
 
 /// Base64 images as data URLs a browser can show. A tool result or message

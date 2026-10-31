@@ -23,6 +23,125 @@ fn tool_event_masks_before_truncating_output() {
     assert!(!value["output"].as_str().unwrap().contains("truncate-b"));
 }
 
+#[test]
+fn every_event_streams_as_documented() {
+    // The JSON clients and sdk/schema.json rely on, one event of each kind.
+    use chanto_core::limits::{Snapshot, Window};
+    let todo = crate::tools::misc::Todo {
+        content: "Write tests".into(),
+        status: "in_progress".into(),
+        active_form: "Writing tests".into(),
+    };
+    let cases = vec![
+        (Event::AssistantEnd, json!({"type": "assistant_end"})),
+        (
+            Event::Reasoning("hmm".into()),
+            json!({"type": "reasoning", "text": "hmm"}),
+        ),
+        (
+            Event::ToolStart {
+                id: "t".into(),
+                label: "Read(a)".into(),
+                parent: Some("p".into()),
+            },
+            json!({"type": "tool_start", "id": "t", "label": "Read(a)", "parent": "p"}),
+        ),
+        (
+            Event::ToolProgress {
+                id: "t".into(),
+                text: "50%".into(),
+            },
+            json!({"type": "tool_progress", "id": "t", "text": "50%"}),
+        ),
+        (
+            Event::Busy(Some("Thinking".into())),
+            json!({"type": "busy", "label": "Thinking"}),
+        ),
+        (
+            Event::Info("i".into()),
+            json!({"type": "info", "message": "i"}),
+        ),
+        (
+            Event::Warn("w".into()),
+            json!({"type": "warning", "message": "w"}),
+        ),
+        (
+            Event::Error("e".into()),
+            json!({"type": "error", "message": "e"}),
+        ),
+        (
+            Event::Todos(vec![todo]),
+            json!({"type": "todos", "todos": [{"content": "Write tests", "status": "in_progress", "activeForm": "Writing tests"}]}),
+        ),
+        (
+            Event::Usage {
+                context_used: 10,
+                context_max: 100,
+                total_in: 7,
+                total_out: 3,
+                total_cost_usd: 0.5,
+                price_unknown: true,
+                tps: 42.0,
+            },
+            json!({"type": "usage", "context_used": 10, "context_max": 100, "total_in": 7, "total_out": 3,
+                   "tps": 42.0, "total_cost_usd": 0.5, "price_unknown": true}),
+        ),
+        (
+            Event::Compacted {
+                before: 900,
+                after: 300,
+            },
+            json!({"type": "compacted", "before": 900, "after": 300}),
+        ),
+        (
+            Event::Background {
+                id: "b".into(),
+                description: "d".into(),
+                status: "done".into(),
+            },
+            json!({"type": "background_agent", "id": "b", "description": "d", "status": "done"}),
+        ),
+        (
+            Event::Status {
+                key: "goal".into(),
+                lines: vec!["l".into()],
+            },
+            json!({"type": "status", "key": "goal", "lines": ["l"]}),
+        ),
+    ];
+    for (event, want) in cases {
+        assert_eq!(event_json(&event).unwrap(), want);
+    }
+    for (mode, name) in [
+        (Mode::Default, "default"),
+        (Mode::AcceptEdits, "acceptEdits"),
+        (Mode::Plan, "plan"),
+        (Mode::Auto, "auto"),
+        (Mode::Bypass, "bypassPermissions"),
+    ] {
+        assert_eq!(event_json(&Event::ModeChanged(mode)).unwrap()["mode"], name);
+    }
+    let window = Window {
+        used_percent: 18.0,
+        window_minutes: Some(300),
+        resets_at: Some(1791800000),
+    };
+    let limits = event_json(&Event::Limits(Snapshot {
+        primary: Some(window),
+        secondary: None,
+        plan_type: Some("plus".into()),
+    }))
+    .unwrap();
+    assert_eq!(limits["type"], "rate_limits");
+    assert_eq!(limits["plan"], "plus");
+    assert_eq!(
+        limits["primary"],
+        json!({"used_percent": 18.0, "window_minutes": 300, "resets_at": 1791800000})
+    );
+    assert_eq!(limits["secondary"], Value::Null);
+    assert!(limits["summary"].is_string());
+}
+
 struct NullFrontend;
 #[test]
 fn checkpoint_files_round_trip_compactly() {

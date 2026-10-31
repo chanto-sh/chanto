@@ -9,6 +9,7 @@ use crate::agent::{
     Agent, Env, Event, Frontend, PermissionReply, PermissionRequest, Queued, TurnEnd, event_json,
     image_data_urls,
 };
+use crate::wire::{Health, StreamEvent, TurnDone};
 use crate::{Cli, commands};
 use anyhow::Result;
 use async_trait::async_trait;
@@ -37,10 +38,11 @@ struct ServerFrontend {
 
 impl ServerFrontend {
     /// Send a request event and wait for the client's answer.
-    async fn ask(&self, mut ev: Value) -> Option<Value> {
+    /// Send the event `build` makes with a new request id, and wait for its answer.
+    async fn ask(&self, build: impl FnOnce(String) -> Value) -> Option<Value> {
         let id = format!("req-{}", &uuid::Uuid::new_v4().simple().to_string()[..8]);
         let (tx, rx) = oneshot::channel();
-        ev["request_id"] = json!(id);
+        let mut ev = build(id.clone());
         crate::secrets::redact_json(&mut ev);
         self.pending
             .lock()
@@ -59,8 +61,17 @@ impl Frontend for ServerFrontend {
         }
     }
     async fn permission(&self, req: PermissionRequest) -> PermissionReply {
-        let ev = json!({"type": "permission_request", "tool": req.tool, "label": req.label, "detail": req.detail,
-            "reason": req.reason, "always_label": req.always_label});
+        let ev = |request_id| {
+            StreamEvent::PermissionRequest {
+                request_id,
+                tool: &req.tool,
+                label: &req.label,
+                detail: &req.detail,
+                reason: req.reason.as_deref(),
+                always_label: &req.always_label,
+            }
+            .to_value()
+        };
         let Some(a) = self.ask(ev).await else {
             return PermissionReply::Deny(None);
         };
@@ -77,7 +88,14 @@ impl Frontend for ServerFrontend {
     }
     async fn question(&self, question: &str, options: &[String]) -> Option<String> {
         let a = self
-            .ask(json!({"type": "question", "question": question, "options": options}))
+            .ask(|request_id| {
+                StreamEvent::Question {
+                    request_id,
+                    question,
+                    options,
+                }
+                .to_value()
+            })
             .await?;
         a["answer"].as_str().map(str::to_string)
     }
@@ -120,7 +138,12 @@ impl crate::tools::Tool for RemoteTool {
     }
     async fn run(&self, input: Value, ctx: &crate::tools::Ctx) -> Result<crate::tools::ToolOutput> {
         let id = uuid::Uuid::new_v4().simple().to_string();
-        let ev = json!({"type": "tool_call", "id": id, "name": self.name, "input": input});
+        let ev = StreamEvent::ToolCall {
+            id: &id,
+            name: &self.name,
+            input: &input,
+        }
+        .to_value();
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
@@ -727,7 +750,7 @@ async fn send_message(
         if line.starts_with('/') && commands::is_immediate(line) {
             match commands::handle_env(&s.env, line).await {
                 Some(commands::Outcome::Show(md)) => {
-                    let _ = s.tx.send(json!({"type": "info", "message": md}));
+                    let _ = s.tx.send(StreamEvent::Info { message: &md }.to_value());
                     return (StatusCode::ACCEPTED, Json(json!({"output": md}))).into_response();
                 }
                 Some(commands::Outcome::Exit | commands::Outcome::Nothing) => {
@@ -749,7 +772,7 @@ async fn send_message(
     tokio::spawn(async move {
         let mut a = s2.agent.lock().await;
         let mut prompt = text.clone();
-        let mut result = json!({"type": "turn_done"});
+        let mut result = TurnDone::default();
         // Typed in the web UI; a command's expansion and the jobs it runs are
         // Chanto's prompts, so only the command itself is the user's.
         let command = text.trim_start().starts_with('/');
@@ -762,17 +785,17 @@ async fn send_message(
                 commands::Outcome::Prompt(p) => prompt = p,
                 commands::Outcome::Run(job) => {
                     match job.run(&mut a, cancel.clone()).await {
-                        Ok(r) => result["output"] = json!(r),
-                        Err(e) => result["error"] = json!(format!("{e:#}")),
+                        Ok(r) => result.output = Some(r),
+                        Err(e) => result.error = Some(format!("{e:#}")),
                     }
                     prompt.clear();
                 }
                 commands::Outcome::Show(md) => {
-                    result["output"] = json!(md);
+                    result.output = Some(md);
                     prompt.clear();
                 }
                 commands::Outcome::Reset(m) => {
-                    result["output"] = json!(m.unwrap_or_else(|| "Session reset.".into()));
+                    result.output = Some(m.unwrap_or_else(|| "Session reset.".into()));
                     prompt.clear();
                 }
                 commands::Outcome::Exit | commands::Outcome::Nothing => prompt.clear(),
@@ -784,9 +807,9 @@ async fn send_message(
             while let Some((t, images)) = next.take() {
                 a.typed_input = std::mem::take(&mut typed);
                 match a.run_turn(&t, images, cancel.clone()).await {
-                    Ok(TurnEnd::Done(r)) => result["result"] = json!(r),
-                    Ok(TurnEnd::Interrupted) => result["interrupted"] = json!(true),
-                    Err(e) => result["error"] = json!(format!("{e:#}")),
+                    Ok(TurnEnd::Done(r)) => result.result = Some(r),
+                    Ok(TurnEnd::Interrupted) => result.interrupted = Some(true),
+                    Err(e) => result.error = Some(format!("{e:#}")),
                 }
                 a.save_session();
                 // Messages queued during the final answer, and background reports.
@@ -808,11 +831,11 @@ async fn send_message(
                 }
             }
         }
-        result["total_cost_usd"] = json!(s2.env.accounting.total());
-        result["price_unknown"] = json!(s2.env.accounting.unknown());
+        result.total_cost_usd = s2.env.accounting.total();
+        result.price_unknown = s2.env.accounting.unknown();
         drop(a);
         *s2.cancel.lock().unwrap() = None;
-        let _ = s2.tx.send(result);
+        let _ = s2.tx.send(StreamEvent::TurnDone(result).to_value());
     });
     (StatusCode::ACCEPTED, Json(json!({"started": true}))).into_response()
 }
@@ -1202,7 +1225,11 @@ fn router(
         .route(
             "/health",
             get(move || async move {
-                Json(json!({"ok": true, "version": env!("CARGO_PKG_VERSION"), "runs": hosts_runs}))
+                Json(Health {
+                    ok: true,
+                    version: env!("CARGO_PKG_VERSION").into(),
+                    runs: hosts_runs,
+                })
             }),
         )
         .with_state(st)
@@ -1514,7 +1541,9 @@ mod tests {
         let secret = &format!("{}_{}", "ghp", "abcdefghijklmnopqrstuvwxyz0123456789");
         let secret = secret.as_str();
         for kind in ["permission_request", "question"] {
-            let ask = frontend.ask(json!({"type": kind, "detail": secret}));
+            let ask = frontend.ask(
+                |request_id| json!({"type": kind, "request_id": request_id, "detail": secret}),
+            );
             tokio::pin!(ask);
             tokio::select! {
                 _ = &mut ask => panic!("request should wait for an answer"),
@@ -1527,6 +1556,85 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test]
+    async fn permission_requests_and_questions_reach_the_client_and_come_back() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let frontend = Arc::new(ServerFrontend {
+            tx,
+            pending: Default::default(),
+        });
+        // The client: answer each request by its id, as POST /respond does.
+        let answer = |frontend: Arc<ServerFrontend>, reply: Value| async move {
+            let ev = rx_next(&frontend).await;
+            let id = ev["request_id"].as_str().unwrap().to_string();
+            let (sender, _) = frontend.pending.lock().unwrap().remove(&id).unwrap();
+            sender.send(reply).unwrap();
+            ev
+        };
+        async fn rx_next(frontend: &ServerFrontend) -> Value {
+            loop {
+                if let Some((_, (_, ev))) = frontend.pending.lock().unwrap().iter().next() {
+                    return ev.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
+        let req = PermissionRequest {
+            tool: "Bash".into(),
+            label: "Bash(ls)".into(),
+            detail: "ls".into(),
+            always_label: "ls".into(),
+            reason: Some("lists files".into()),
+            proposed: None,
+            auto_deny: None,
+        };
+        let client = tokio::spawn(answer(
+            frontend.clone(),
+            json!({"decision": "allow_always"}),
+        ));
+        assert_eq!(frontend.permission(req).await, PermissionReply::AllowAlways);
+        let ev = client.await.unwrap();
+        assert_eq!(ev["type"], "permission_request");
+        assert_eq!(ev["tool"], "Bash");
+        assert_eq!(ev["reason"], "lists files");
+        assert_eq!(ev["always_label"], "ls");
+        assert_eq!(rx.recv().await.unwrap()["type"], "permission_request");
+
+        let options = vec!["red".to_string(), "blue".to_string()];
+        let client = tokio::spawn(answer(frontend.clone(), json!({"answer": "blue"})));
+        assert_eq!(
+            frontend.question("Which?", &options).await.as_deref(),
+            Some("blue")
+        );
+        let ev = client.await.unwrap();
+        assert_eq!(ev["type"], "question");
+        assert_eq!(ev["options"], json!(["red", "blue"]));
+    }
+
+    #[test]
+    fn the_documented_session_body_passes_validation() {
+        // `CreateSession` is what sdk/schema.json and the SDKs' types say the
+        // route takes: every field of it, filled in, has to be accepted.
+        let body = crate::wire::CreateSession {
+            model: Some("m".into()),
+            mode: Some(crate::wire::Mode::AcceptEdits),
+            resume: Some("abc".into()),
+            cwd: Some("/w".into()),
+            system_prompt_append: Some("".into()),
+            allowed_tools: Some(vec!["Read".into()]),
+            disallowed_tools: Some(vec!["Bash".into()]),
+            max_turns: Some(3),
+            verify: Some(true),
+            tools: Some(vec![crate::wire::ToolSpec {
+                name: "lookup".into(),
+                description: "Look something up.".into(),
+                input_schema: json!({"type": "object", "properties": {}}),
+            }]),
+        };
+        let body = serde_json::to_value(body).unwrap();
+        assert_eq!(validate_options(&body), Ok(()), "{body}");
     }
 
     #[test]

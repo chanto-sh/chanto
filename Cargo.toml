@@ -42,6 +42,9 @@ repository = "https://github.com/chanto-sh/chanto.git"
 [features]
 # Exposes `chanto::fuzzing`, the entry points the fuzz targets in fuzz/ call.
 fuzzing = []
+# JSON Schema for the `chanto serve` API (src/wire.rs), which sdk/schema.json
+# and the SDKs' types come from. Off in builds: only its test uses it.
+schema = ["dep:schemars"]
 
 [dependencies]
 chanto-core = { path = "core", version = "=0.1.10" }
@@ -78,6 +81,7 @@ webpki-root-certs = "1"
 scraper = "0.29.0"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.152"
+schemars = { version = "1.2.3", optional = true }
 sha2 = "0.11.1"
 shell-words = "1.1.1"
 similar = "3.2.0"
