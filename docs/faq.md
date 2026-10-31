@@ -38,6 +38,14 @@ No. Chanto reads your Claude Code and Codex settings as they are: permission
 rules, hooks, MCP servers, skills, commands, subagents and instruction files
 like `CLAUDE.md`. `chanto doctor` shows what it picked up and from where.
 
+## Can I use my subscription plan?
+
+Yes for ChatGPT, Kimi Code, Z.ai GLM, MiniMax, Qwen Code, Tencent CodeBuddy,
+Volcengine, StepFun and Cline Pass: run `chanto login` with the provider. See
+[subscription coding plans](reference.md#subscription-coding-plans). Claude Pro
+and Max plans don't work, including through Claude Code, so use an Anthropic API
+key for Claude models.
+
 ## How is it different from Claude Code or Codex?
 
 It runs any model, including small local ones; it's light on CPU and memory
