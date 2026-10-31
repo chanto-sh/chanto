@@ -7,8 +7,10 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-/// Reasoning effort levels, lowest first. Each provider maps them onto what it accepts.
-pub const EFFORTS: [&str; 5] = ["low", "medium", "high", "xhigh", "max"];
+/// Reasoning effort levels, lowest first. Each provider maps them onto what it
+/// accepts. `ultra` isn't more reasoning than `max`: the agent also tells the
+/// model to delegate, and OpenAI gets `xhigh` for it, as Codex sends.
+pub const EFFORTS: [&str; 6] = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
 /// The requested effort, if thinking is on, capped at `top` (the highest level the API takes).
 pub fn effort_for(req: &ChatRequest, top: &str) -> Option<&'static str> {

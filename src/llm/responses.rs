@@ -8,6 +8,16 @@ use super::anthropic::sse_json;
 use super::*;
 
 /// Models that accept `reasoning` (and reject sampling parameters).
+/// The highest effort a model takes: `max` from GPT-5.6 on.
+fn effort_cap(model: &str) -> &'static str {
+    let m = model.to_ascii_lowercase();
+    if m.starts_with("gpt-6") || m.starts_with("gpt-5.6") {
+        "max"
+    } else {
+        "xhigh"
+    }
+}
+
 pub(super) fn reasoning_model(m: &str) -> bool {
     let m = m.to_ascii_lowercase();
     m.starts_with("o1")
@@ -101,7 +111,11 @@ pub(super) fn body(req: &ChatRequest) -> Value {
         let effort = if req.think == Some(false) {
             "low"
         } else {
-            effort_for(req, "xhigh").unwrap_or("medium")
+            if req.think != Some(false) && req.effort.as_deref() == Some("ultra") {
+                "xhigh"
+            } else {
+                effort_for(req, effort_cap(&req.model)).unwrap_or("medium")
+            }
         };
         body["reasoning"] = json!({"effort": effort, "summary": "auto"});
         body["include"] = json!(["reasoning.encrypted_content"]);

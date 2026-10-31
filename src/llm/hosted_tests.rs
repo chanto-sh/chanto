@@ -446,10 +446,25 @@ fn effort_maps_to_each_api() {
         max_tokens: Some(4000),
         json: false,
     };
-    // Responses: `max` is capped at `xhigh`; thinking off stays `low`.
+    // Responses: `max` from GPT-5.6 on, capped at `xhigh` before it; `ultra`
+    // is `xhigh` everywhere; thinking off stays `low`.
+    for (model, effort, sent) in [
+        ("gpt-6", "max", "max"),
+        ("gpt-6.1-sol", "max", "max"),
+        ("gpt-5.6-sol", "max", "max"),
+        ("gpt-5.5", "max", "xhigh"),
+        ("gpt-6.1-sol", "ultra", "xhigh"),
+        ("gpt-5.5", "ultra", "xhigh"),
+    ] {
+        assert_eq!(
+            responses::body(&req(model, true, effort))["reasoning"]["effort"],
+            sent,
+            "{model} {effort}"
+        );
+    }
     assert_eq!(
-        responses::body(&req("gpt-6", true, "max"))["reasoning"]["effort"],
-        "xhigh"
+        responses::body(&req("gpt-6.1-sol", false, "ultra"))["reasoning"]["effort"],
+        "low"
     );
     assert_eq!(
         responses::body(&req("gpt-6", true, "high"))["reasoning"]["effort"],

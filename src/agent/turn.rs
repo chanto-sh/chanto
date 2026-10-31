@@ -425,6 +425,17 @@ impl Agent {
                 ));
             }
         }
+        // Subagents don't get this: they'd keep splitting work into more of themselves.
+        if self.depth == 0
+            && self.effort().as_deref() == Some("ultra")
+            && let Some(last) = self.messages.last_mut().filter(|m| m.role == Role::User)
+        {
+            std::sync::Arc::make_mut(&mut last.content).push_str(
+                "\n\n<system-reminder>Delegate on your own initiative: when work can run in parallel or a second \
+                 agent would improve the result, use the Task tool without waiting to be asked. A request from the \
+                 user not to delegate takes priority.</system-reminder>",
+            );
+        }
         let max_turns = self
             .sub
             .max_turns
