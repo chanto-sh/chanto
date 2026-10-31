@@ -109,6 +109,24 @@ jobs:
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: python3 packaging/changelog.py --require --base "$BASE" --head "$HEAD"
 
+  tests-changed:
+    name: tests changed
+    if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      # The title and body go through the environment, never into the script.
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/test_gate.py require --base "$BASE" --head "$HEAD"
+
   sign-off:
     name: DCO sign-off
     if: github.event_name == 'pull_request'

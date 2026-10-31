@@ -67,6 +67,8 @@ jobs:
         run: python3 -m unittest discover -s packaging -p 'test_*release*.py'
       - name: Check changelog fragments
         run: python3 packaging/changelog.py --check
+      - name: Test the test gate
+        run: python3 scripts/test_test_gate.py
   # clippy over the whole workspace, on every push. The desktop app needs the
   # same GTK/WebKit packages as `desktop-linux` to build on Linux.
   clippy:
@@ -198,6 +200,39 @@ jobs:
           cargo llvm-cov report --summary-only -p chanto -p chanto-core \
             --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' \
             --fail-under-lines 80 > /dev/null
+  # The lines only Windows compiles count toward Codecov's patch check too;
+  # Codecov merges this report with the Linux one (codecov.yml waits for both).
+  coverage-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          key: coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+        with:
+          tool: cargo-llvm-cov@0.6.21
+      - run: cargo llvm-cov --locked --quiet -p chanto -p chanto-core --lcov --output-path lcov.info
+        env:
+          CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
+          CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        with:
+          files: lcov.info
+          flags: windows
+          disable_search: true
+          use_oidc: true
+          fail_ci_if_error: false
   # Exercise the native sandbox and process-tree tests on Windows.
   windows:
     runs-on: windows-latest

@@ -79,7 +79,12 @@ Public URLs come from `src/site.rs`; route new code through it.
 2. Keep each PR focused on one change; smaller PRs review faster.
 3. Add or update tests for behavior you change. The agent-loop tests use a mock
    model server (`src/agent/tests.rs`), so most changes can be tested without a
-   live model.
+   live model. CI fails a `feat` or `fix` PR that changes code without touching a
+   test, unless its description has a line `Tests: none (<why>)`. At least 80% of
+   the changed lines must run in tests, across Linux and Windows;
+   `python3 scripts/test_gate.py coverage` shows the Linux or macOS figure before
+   you push. The `mutants` check breaks the changed lines to see whether a test
+   notices; it's advisory.
 4. When your change is user-visible, add a changelog fragment,
    `changelog.d/<branch-name>.md`, instead of editing CHANGELOG.md (see
    [changelog.d/README.md](changelog.d/README.md)). Separate files never

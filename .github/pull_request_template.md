@@ -17,7 +17,7 @@ Keep PRs focused on one change.
 - [ ] `cargo fmt --all --check` passes
 - [ ] `cargo clippy --locked --workspace --all-targets -- -D warnings` is clean
 - [ ] `cargo test --locked` passes
-- [ ] Added or updated tests for the behavior I changed
+- [ ] Added or updated tests for the behavior I changed (CI requires one for `feat` and `fix`, or a `Tests: none (<why>)` line)
 - [ ] Added a `changelog.d/<name>.md` fragment if this is user-visible (CI requires one for `feat`, `fix` and `perf`, or a `Changelog: none (<why>)` line here)
 - [ ] Updated docs / `AGENTS.md` if I changed a convention or interface
 

@@ -4,6 +4,10 @@
 # Whole-repository coverage stays informational here; CI's coverage floor
 # (ci.yml) already holds it at 80%, and gating it again would block a pull
 # request for coverage it did not change.
+codecov:
+  notify:
+    # Linux and Windows both report; don't judge a patch on one of them.
+    after_n_builds: 2
 coverage:
   status:
     project:
