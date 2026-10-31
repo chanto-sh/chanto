@@ -93,6 +93,19 @@
     "turn_wall_ms": 6,
     "rss_mb": 23
   },
+  "exact": {
+    "_comment": [
+      "tests/perf/exact.py, on Linux: instruction counts and prompt size. First",
+      "values, to be set from what the runners report."
+    ],
+    "reps": 3,
+    "tolerance": {
+      "startup_instructions": 1.0,
+      "turn_instructions": 1.0,
+      "prompt_bytes": 1.0
+    },
+    "ceilings": {}
+  },
   "budgets": {
     "linux": {
       "startup_cpu_ms": 28,
