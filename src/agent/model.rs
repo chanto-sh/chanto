@@ -9,14 +9,6 @@ impl Agent {
         cancel: &CancellationToken,
     ) -> Result<Option<llm::ChatResponse>> {
         crate::util::timing("model call");
-        // A session's first shell command would wait for the shell snapshot
-        // (the user's startup files: seconds on a busy setup). Taking it while
-        // the model writes its reply hides that; a command that arrives first
-        // waits for the same capture.
-        if self.tool_allowed("Bash") && !self.env.shell_snapshot.initialized() {
-            let env = self.env.clone();
-            tokio::spawn(async move { crate::shell::snapshot::ensure(&env).await });
-        }
         self.env.settle_model_info().await;
         // The system prompt was written before they connected: it names the
         // servers and carries their instructions.
@@ -184,7 +176,20 @@ impl Agent {
         let mut display = (!quiet && crate::hooks::has(&self.env, "MessageDisplay"))
             .then(|| crate::hooks::message_display(&self.env));
         let display_tx = Mutex::new(display.as_ref().map(|(tx, _)| tx.clone()));
+        let bash_allowed = self.tool_allowed("Bash");
         let mut on_delta = |d: Delta| {
+            if let Delta::ToolCall(name) = &d {
+                // A session's first shell command waits for the shell snapshot
+                // (the user's startup files: seconds on a busy setup). Starting
+                // it as soon as the model begins a Bash call hides some of that
+                // behind the rest of the reply. Sessions that never run Bash
+                // never start the login shell.
+                if bash_allowed && name == "Bash" && !env.shell_snapshot.initialized() {
+                    let env = env.clone();
+                    tokio::spawn(async move { crate::shell::snapshot::ensure(&env).await });
+                }
+                return;
+            }
             {
                 let mut ft = first_token.lock().unwrap();
                 if ft.is_none() {
@@ -208,6 +213,7 @@ impl Agent {
                     None => env.emit(Event::Text(t)),
                 },
                 Delta::Reasoning(t) => env.emit(Event::Reasoning(t)),
+                Delta::ToolCall(_) => {}
             }
         };
         // Show what the MessageDisplay hooks still hold, before the message ends.

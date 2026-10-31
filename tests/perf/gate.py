@@ -9,7 +9,10 @@ time is zero:
             It must also start no `git`: a question that changes nothing
             needs no checkpoint (Unix; a logging `git` leads PATH).
   turns     40 requests that each read a 40 KB file, the same workload the
-            published benchmark uses: CPU per request and peak RSS.
+            published benchmark uses: CPU per request and peak RSS. One more
+            run of it must start no login shell: a session that runs no
+            command needs no snapshot of the user's shell setup (Unix;
+            $SHELL is a logging `bash`).
 
 Each one is compared with the same measurement of another binary (in CI, the
 pull request's base commit built from its own source) and with a fixed
@@ -319,6 +322,55 @@ def helper_calls(bench, binary, runs=3):
     return [line for line in log.read_text().splitlines() if line]
 
 
+def shell_starts(binary, work, home, project):
+    """The login shells a read-only session started, as the arguments each was
+    given. The session reads a file and answers, running no command, so it
+    needs no snapshot of the user's shell setup. $SHELL is a stub that logs
+    its arguments and runs the real bash, so the run behaves as it would
+    without it.
+
+    It runs as the published benchmark does, with permissions bypassed so
+    Bash is offered (a `-p` run in the default mode leaves it out). The first
+    reply takes a second, as a real model's does: a build that starts the
+    capture early reaches the shell every time, instead of only when the
+    instant mock happens to be slower than it.
+
+    None on Windows, which has no login shell to snapshot.
+    """
+    if sys.platform == "win32":
+        return None
+    real = shutil.which("bash")
+    stub = work / "shell-stub" / "bash"
+    stub.parent.mkdir(exist_ok=True)
+    log = work / "shell-starts.log"
+    log.write_text("")
+    stub.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"bash $*\" >> '{log}'\n"
+        + (f"exec '{real}' \"$@\"\n" if real else "exit 127\n")
+    )
+    stub.chmod(0o755)
+    scenario = work / "read-once.json"
+    scenario.write_text(json.dumps([
+        {"sleep_s": 1, "tool_calls": [{"name": "Read", "args": {"file_path": "f0.txt"}}]},
+        {"text": "done."},
+    ]))
+    mock, port = mock_start(scenario, work / "read-once.log")
+    try:
+        _, code = wait_with_usage(
+            binary,
+            ["-p", "--mode", "bypassPermissions", "read f0.txt", "--cwd", str(project)],
+            dict(child_env(home, port), SHELL=str(stub)),
+        )
+    finally:
+        mock.kill()
+    if code != 0:
+        raise GateError(f"{binary} exited {code} in the read-only session")
+    # A login shell started counts as one `bash -i -l` call; the capture
+    # script it was given spans several lines.
+    return [line for line in log.read_text().splitlines() if line.startswith("bash ")]
+
+
 class StartupBench:
     """One long-lived mock, so a one-shot run pays for nothing but Chanto."""
 
@@ -598,6 +650,7 @@ def run(head, base, config, device=False):
             bench.close()
 
         project, scenario = write_turn_scenario(work, turns, blob_kb)
+        shells = shell_starts(head, work, home, project)
         for i in range(warmup + reps["turns"]):
             for name, binary in alternating(binaries, i):
                 usage = turn_run(
@@ -640,6 +693,7 @@ def run(head, base, config, device=False):
         "reps": reps,
         "metrics": metrics,
         "helpers": helpers,
+        "shells": shells,
     }
     if device_metrics is not None:
         report["device"] = {
@@ -647,7 +701,7 @@ def run(head, base, config, device=False):
             "reps": cfg["device"]["reps"],
             "metrics": device_metrics,
         }
-    report["ok"] = not helpers and all(
+    report["ok"] = not helpers and not shells and all(
         m["verdict"] == "pass"
         for group in (report["metrics"], report.get("device", {}).get("metrics", {}))
         for m in group.values()
@@ -698,6 +752,12 @@ def markdown(report):
             f"| Helper programs ({', '.join(HELPERS)}) | | {len(helpers)} | | 0 | "
             f"{'pass' if not helpers else 'fail'} |"
         )
+    shells = report.get("shells")
+    if shells is not None:
+        lines.append(
+            f"| Login shells, read-only session | | {len(shells)} | | 0 | "
+            f"{'pass' if not shells else 'fail'} |"
+        )
     passing = [label(k) for k, m in report["metrics"].items() if m["verdict"] == "pass"]
     device = report.get("device", {})
     if report["ok"]:
@@ -713,6 +773,9 @@ def markdown(report):
         if helpers:
             lines += ["**A one-shot question started a helper program it doesn't need:** "
                       + "; ".join(f"`{c}`" for c in helpers[:5])]
+        if shells:
+            lines += ["**A session that ran no command started a login shell:** "
+                      + "; ".join(f"`{c[:80]}`" for c in shells[:3])]
         if failed_device:
             lines += ["**The small device could not keep up:** "
                       + ", ".join(failed_device)]

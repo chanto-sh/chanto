@@ -237,6 +237,19 @@ class MarkdownTest(unittest.TestCase):
         report["helpers"] = []
         self.assertIn("| Helper programs (git) | | 0 | | 0 | pass |", gate.markdown(report))
 
+    def test_a_read_only_session_that_started_a_shell_fails(self):
+        report = self.report("pass")
+        report["shells"] = ["bash -i -l -c capture"]
+        report["ok"] = False
+        text = gate.markdown(report)
+        self.assertIn("| Login shells, read-only session | | 1 | | 0 | fail |", text)
+        self.assertIn("started a login shell", text)
+
+    def test_no_shells_pass(self):
+        report = self.report("pass")
+        report["shells"] = []
+        self.assertIn("| Login shells, read-only session | | 0 | | 0 | pass |", gate.markdown(report))
+
     def test_a_missing_base_is_named(self):
         report = self.report("pass")
         report["base"] = None

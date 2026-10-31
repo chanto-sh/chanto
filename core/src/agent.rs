@@ -183,11 +183,11 @@ impl Agent {
         );
         let mut stream = transport.post(&url, &headers, body).await?;
         let mut decoder = OpenaiDecoder::new(&req);
-        let mut on_delta = |d: Delta| {
-            on_event(match d {
-                Delta::Text(text) => Event::Text { text },
-                Delta::Reasoning(text) => Event::Reasoning { text },
-            })
+        let mut on_delta = |d: Delta| match d {
+            Delta::Text(text) => on_event(Event::Text { text }),
+            Delta::Reasoning(text) => on_event(Event::Reasoning { text }),
+            // Reported once the reply is complete, with its arguments.
+            Delta::ToolCall(_) => {}
         };
         while let Some(chunk) = stream.next().await {
             if decoder.feed(&chunk?, &mut on_delta)? {

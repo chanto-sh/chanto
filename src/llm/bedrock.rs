@@ -341,6 +341,9 @@ impl Provider {
                 "contentBlockStart" => {
                     let t = &v["start"]["toolUse"];
                     if !t.is_null() {
+                        if let Some(name) = t["name"].as_str().filter(|n| !n.is_empty()) {
+                            on_delta(Delta::ToolCall(name.to_string()));
+                        }
                         calls.insert(
                             i,
                             (

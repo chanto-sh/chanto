@@ -809,6 +809,9 @@ impl OpenaiDecoder {
                         p.1 = id.to_string();
                     }
                     if let Some(n) = tc["function"]["name"].as_str() {
+                        if p.2.is_empty() && !n.is_empty() {
+                            on_delta(Delta::ToolCall(n.to_string()));
+                        }
                         p.2.push_str(n);
                     }
                     match &tc["function"]["arguments"] {
