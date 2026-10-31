@@ -5,11 +5,11 @@ order: 0
 description: 'What Chanto is and where to start.'
 ---
 
-Chanto is a fast, lean coding agent for your terminal. It's a single small Rust binary that starts instantly and has the lowest CPU and memory of the 16 agents we benchmarked, and it runs against local models (Ollama, llama.cpp, vLLM and other OpenAI-compatible servers) or hosted ones (Anthropic, OpenAI, your ChatGPT login, Amazon Bedrock, Google Vertex AI, Azure and more).
+Chanto is a fast, lean coding agent for your terminal. It's a single small Rust binary that starts instantly and has the lowest startup, CPU per turn and memory of the 23 coding agents with 5,000+ GitHub stars we benchmark, and it runs against local models (Ollama, llama.cpp, vLLM and other OpenAI-compatible servers) or hosted ones (Anthropic, OpenAI, your ChatGPT login, Amazon Bedrock, Google Vertex AI, Azure and more).
 
 ## What makes it different
 
-- **It's fast and light.** About 3–5 ms of CPU per turn and 23 MB of peak memory in our [overhead benchmark](https://github.com/chanto-sh/benchmarks#overhead-latest-results) on GitHub’s Linux and macOS runners ([reproduce it](https://github.com/chanto-sh/benchmarks#reproduce-the-overhead-numbers)), so it stays responsive in long sessions and leaves your machine to the model and your tools.
+- **It's fast and light.** Chanto 0.1.10 used 1.5–3.1 ms of CPU per turn, 13–23 ms to start, and 17–24 MB of peak memory in our [overhead benchmark](https://github.com/chanto-sh/benchmarks#overhead-latest-results) on GitHub’s macOS and Linux runners ([reproduce it](https://github.com/chanto-sh/benchmarks#reproduce-the-overhead-numbers)), so it stays responsive in long sessions and leaves your machine to the model and your tools.
 - **It works with your setup.** It reads your Claude Code and Codex settings, permission rules, hooks, MCP servers, instruction files, skills and subagents, so there's nothing to migrate.
 - **It checks before it finishes.** With `--verify`, Chanto runs the project's checks before it calls a task done. It runs the tests related to the change, or the full suite when shared setup changed, tells failures it caused from ones that were already there, and won't weaken tests to make them pass.
 - **It can drive another agent.** `chanto acp-client` runs Claude Code, OpenCode or any other ACP v1 agent under Chanto's own UI and permissions.
