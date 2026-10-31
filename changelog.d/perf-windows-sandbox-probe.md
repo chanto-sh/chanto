@@ -1,0 +1,1 @@
+- **Faster one-shot runs on Windows.** Each start launched a command to check that the sandbox works, even if the run never used the shell. A one-shot run now checks just before its first shell command, and that command waits for the answer, so the sandbox protects it as before. If the sandbox can't start, the warning now appears at that point too.

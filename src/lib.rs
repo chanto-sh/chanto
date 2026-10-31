@@ -960,7 +960,9 @@ async fn setup_session(
         mode
     };
     cfg.mode = Some(mode);
-    crate::tools::bash::prime_sandbox_caches(&cfg.sandbox);
+    if interactive {
+        crate::tools::bash::prime_sandbox_caches(&cfg.sandbox);
+    }
     for (key, overridden) in [
         ("model", cli.model.is_some()),
         ("provider", cli.provider.is_some()),
@@ -1106,18 +1108,18 @@ async fn setup_session(
         }
     }
     tools::bash::SANDBOX_ACTIVE.store(
-        cfg.sandbox.enabled && tools::bash::sandbox_available(),
+        cfg.sandbox.enabled && tools::bash::sandbox_supported(),
         std::sync::atomic::Ordering::Relaxed,
     );
     guardrails::set_policy(&cfg.sandbox, &cfg.secrets);
     if cfg.sandbox.enabled {
         tools::bash::start_sandbox_probe();
     }
-    if cfg.sandbox.enabled && !tools::bash::sandbox_available() {
+    if cfg.sandbox.enabled && !tools::bash::sandbox_supported() {
         warnings.push("Shell commands aren't sandboxed on this system (chanto needs working macOS Seatbelt, Linux Landlock or a Windows restricted token). Set `[sandbox] enabled = false` to hide this.".into());
     }
     // The Windows sandbox confines writes only; say so where config expects more.
-    if cfg!(windows) && cfg.sandbox.enabled && tools::bash::sandbox_available() {
+    if cfg!(windows) && cfg.sandbox.enabled {
         if cfg.sandbox.network_policy() == crate::config::NetworkPolicy::Deny {
             warnings.push("sandbox.network = \"deny\" isn't enforced on Windows: sandboxed commands can still reach the network.".into());
         }
@@ -1125,7 +1127,8 @@ async fn setup_session(
             warnings.push("sandbox.auto_allow is on, but on Windows the sandbox only confines writes: auto-allowed commands can still read credential files and use the network.".into());
         }
     }
-    if cfg.sandbox.enabled && cfg.sandbox.auto_allow && tools::bash::sandbox_available() {
+    // `permissions` also needs `sandbox_on`, so this never outlives a failed start.
+    if cfg.sandbox.enabled && cfg.sandbox.auto_allow && tools::bash::sandbox_supported() {
         permissions::SANDBOX_AUTO_ALLOW.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     // `--tools` (and `--bare`'s or `--restricted`'s default set) limits the built-in tools; MCP tools stay.
