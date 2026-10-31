@@ -1,1 +1,0 @@
-- **Local models' tool calls.** With `tool_protocol = "text"`, a reply made only of JSON tool calls one after another (bare or in a code fence), as small local models often write them, now runs every call. Only a single bare call ran before, and a reply with several ran none. Any prose around them, or an object that isn't a call to a known tool, still means none run.

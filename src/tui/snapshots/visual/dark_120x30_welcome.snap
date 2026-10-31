@@ -6,7 +6,7 @@ expression: snapshot(buffer)
 --- screen ---
  ╭────────────────────────────────────────────────────────────────────╮
  │                                                                    │
- │  ❖ chanto v0.1.9                                                   │
+ │  ❖ chanto v0.1.10                                                  │
  │    model  mock                                                     │
  │    cwd    /workspace/demo                                          │
  │    /help for commands                                              │
@@ -48,8 +48,8 @@ row 02 cols 001..003: Style::new().fg(Color::Rgb(52, 211, 153)).bg(Color::Reset)
 row 02 cols 003..004: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 004..006: Style::new().fg(Color::Rgb(52, 211, 153)).bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 006..012: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold()
-row 02 cols 012..019: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Reset).underline_color(Color::Reset)
-row 02 cols 019..069: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 02 cols 012..020: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Reset).underline_color(Color::Reset)
+row 02 cols 020..069: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 069..071: Style::new().fg(Color::Rgb(52, 211, 153)).bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 071..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 03 cols 000..001: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)

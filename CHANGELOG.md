@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.1.10 (October 30, 2026)
+
+- **Local models' tool calls.** With `tool_protocol = "text"`, a reply made only of JSON tool calls one after another (bare or in a code fence), as small local models often write them, now runs every call. Only a single bare call ran before, and a reply with several ran none. Any prose around them, or an object that isn't a call to a known tool, still means none run.
+- **No login shell in sessions that run no commands.** Since 0.1.9, Chanto started your login shell during each session's first model reply, to capture your shell setup (PATH, aliases, functions) before the first Bash command. It did this even in sessions that never ran a command, and the shell could outlive a short session. It now starts when the model begins a Bash call. Sessions that only read, edit or answer never run your startup files. On GitHub's Ubuntu runner, that shell had raised the published 40-request benchmark's peak memory from 26 MB (0.1.8) to 57 MB. The first command still overlaps the capture with the rest of the model's reply, though no longer with all of it.
+
 ## v0.1.9 (October 30, 2026)
 
 - **Long sessions stay fast.** Before every model request Chanto checks that each tool call's results sit right after it, and it used to take every result out and put it back even when they already did, shifting the whole transcript each time. A well-formed transcript is now left in place: a 400-turn session uses about 20% less CPU, and the saving grows with the session.
