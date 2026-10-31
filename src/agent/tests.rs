@@ -553,6 +553,42 @@ async fn mechanical_followups_use_low_effort() {
 }
 
 #[tokio::test]
+async fn ultra_effort_tells_only_the_main_agent_to_delegate() {
+    let dir = tmpdir("effort-ultra");
+    let (base, seen) = mock_server(vec![
+        json!({"content": "One."}),
+        json!({"content": "Two."}),
+        json!({"content": "Three."}),
+    ])
+    .await;
+    let run = async |effort: &str, depth| {
+        let mut agent = Agent::new(make_env(&base, &dir, Mode::Default, 32768));
+        agent.env.set_think(true);
+        agent.env.set_effort(Some(effort.into()));
+        agent.depth = depth;
+        agent
+            .run_turn("go", vec![], CancellationToken::new())
+            .await
+            .unwrap();
+    };
+    run("ultra", 0).await;
+    run("ultra", 1).await;
+    run("max", 0).await;
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 3);
+    let reminded =
+        |b: &serde_json::Value| b["messages"].to_string().contains("Delegate on your own");
+    assert!(reminded(&bodies[0]));
+    assert!(
+        !reminded(&bodies[1]),
+        "a subagent would keep splitting work"
+    );
+    assert!(!reminded(&bodies[2]));
+    // Chat completions tops out at `xhigh`.
+    assert_eq!(bodies[0]["reasoning_effort"], "xhigh");
+}
+
+#[tokio::test]
 async fn adaptive_effort_stays_the_same_within_a_turn() {
     let dir = tmpdir("effort-sticky");
     std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
