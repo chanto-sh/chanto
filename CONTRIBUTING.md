@@ -16,8 +16,8 @@ cargo build                 # add --release for target/release/chanto
 ```
 
 `cargo build` and `cargo test` at the root build only the `chanto` CLI. The
-desktop app (`desktop/`) and the wire types (`proto/`) are separate workspace
-members so their dependencies never reach the CLI.
+desktop app (`desktop/`), the WebAssembly build (`web/`) and the wire types
+(`proto/`) are separate workspace members so their dependencies never reach the CLI.
 
 ## Before you open a pull request
 
