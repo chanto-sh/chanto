@@ -10,8 +10,10 @@
 #
 # CI serves Qwen3.5-4B with llama-server (see .github/workflows/real-model.yml);
 # locally any OpenAI-compatible or Ollama server works. SMOKE_FLAGS adds
-# Chanto flags (--no-think for a thinking model).
+# Chanto flags (--no-think for a thinking model); SMOKE_PYTHON names Python
+# where it isn't `python3` (Windows).
 set -euo pipefail
+PYTHON=${SMOKE_PYTHON:-python3}
 BIN=$(cd "$(dirname "$1")" && pwd)/$(basename "$1")
 BASE_URL=$2
 MODEL=$3
@@ -48,7 +50,7 @@ HOME="$W/home" CHANTO_HOME="$W/home/.chanto" CHANTO_NO_PRESENCE=1 \
   ${server[@]+"${server[@]}"} --model "$MODEL" \
   --num-ctx 16384 --max-turns 15 --mode bypassPermissions --no-session-persistence \
   ${SMOKE_FLAGS:-} \
-  "python3 test_calc.py fails. Fix the bug in calc.py so it passes, then run it to confirm." \
+  "$PYTHON test_calc.py fails. Fix the bug in calc.py so it passes, then run it to confirm." \
   > "$W/out.txt" 2> "$W/err.txt" || status=$?
 
 echo "--- chanto exit $status; its reply:"
@@ -61,5 +63,5 @@ git --no-pager diff
 fail() { echo "::error::real-model smoke: $1"; exit 1; }
 [ "$status" -eq 0 ] || fail "chanto exited $status"
 [ "$(cksum < test_calc.py)" = "$test_sum" ] || fail "the test file was changed"
-python3 test_calc.py > /dev/null || fail "the test still fails"
+"$PYTHON" test_calc.py > /dev/null || fail "the test still fails"
 echo "real-model smoke passed"
