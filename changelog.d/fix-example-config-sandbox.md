@@ -1,0 +1,1 @@
+- **The example config no longer turns the sandbox off.** `chanto --example-config` printed `[sandbox] enabled = false`, while the sandbox is on by default, so anyone who copied the template lost it without noticing. It now says `true`.

@@ -1997,7 +1997,7 @@ auto = true
 scope = "project"               # "user" for preferences shared across projects
 
 [sandbox]
-enabled = false                 # macOS: run Bash under Seatbelt (writes limited to project + temp/caches)
+enabled = true                  # run Bash under the OS sandbox: writes limited to the project, temp dirs and tool caches
 auto_allow = false              # auto mode: sandboxed commands skip the classifier
 # allow_write = ["~/.local/share/myapp"]
 # network = "allow"             # allow | deny | allowlist (deny_network is a legacy alias)
@@ -2128,6 +2128,22 @@ auto_allow = false              # auto mode: sandboxed commands skip the classif
 
 #[cfg(test)]
 mod tests {
+    /// Someone who copies the template must get the defaults, not switch
+    /// something off: every setting it spells out says what happens anyway.
+    #[test]
+    fn the_example_config_only_states_defaults() {
+        let parsed: Config = toml::from_str(EXAMPLE_CONFIG).unwrap();
+        let (parsed, default) = (
+            serde_json::to_value(parsed).unwrap(),
+            serde_json::to_value(Config::default()).unwrap(),
+        );
+        for (section, default) in default.as_object().unwrap() {
+            if default.is_object() {
+                assert_eq!(parsed[section], *default, "[{section}] in EXAMPLE_CONFIG");
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
