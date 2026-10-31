@@ -1,1 +1,0 @@
-- **The right upgrade command on Homebrew.** When Chanto ran through Homebrew's link in its `bin` folder, the upgrade notice could suggest the install script instead of `brew upgrade chanto`. It now goes by where the binary really is.

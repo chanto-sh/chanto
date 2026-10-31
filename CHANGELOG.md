@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.1.11 (October 31, 2026)
+
+- **Chanto's agent for web pages, on npm.** Each release now publishes `@chanto/web`: the agent loop and its file tools as WebAssembly, working on a project held in memory, with the model supplied by the page. It's what runs on chanto.sh/try. It's experimental, and its interface may change in any release. The release also attaches it as `chanto-web-vX.Y.Z.tgz`, covered by the signed checksums and build provenance like the CLI archives.
+- **Faster start in big folders.** Before showing its first screen, Chanto looked through the whole folder it started in for env files whose values it masks, which took about half a second in a large folder (a directory of many projects, say). That search now runs in the background: each turn still picks up the files before its first model request, so nothing goes out unmasked. Started in a folder of 100,000 files, the first screen now appears as fast as in an empty one.
+- **The right upgrade command on Homebrew.** When Chanto ran through Homebrew's link in its `bin` folder, the upgrade notice could suggest the install script instead of `brew upgrade chanto`. It now goes by where the binary really is.
+
 ## v0.1.10 (October 30, 2026)
 
 - **Local models' tool calls.** With `tool_protocol = "text"`, a reply made only of JSON tool calls one after another (bare or in a code fence), as small local models often write them, now runs every call. Only a single bare call ran before, and a reply with several ran none. Any prose around them, or an object that isn't a call to a known tool, still means none run.
