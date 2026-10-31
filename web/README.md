@@ -4,6 +4,19 @@ Chanto's agent in the browser: `chanto-core`'s agent loop, file tools and
 in-memory file system behind `wasm-bindgen`. The page supplies the model as a
 `transport` function; the project's files never leave the page.
 
+## Install
+
+Each release publishes it to npm as `@chanto/web`, under Chanto's version
+(experimental: its interface may change in any release):
+
+```sh
+npm install @chanto/web
+```
+
+The package's README shows the interface. The release also attaches it as
+`chanto-web-vX.Y.Z.tgz`, listed in the signed `SHA256SUMS` with its build
+provenance.
+
 ## Build
 
 ```sh
