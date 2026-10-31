@@ -1,7 +1,8 @@
 # npm: `npm i -g @chanto/cli` (npm refuses the unscoped name `chanto` as too
 # close to `chance`). One package per platform (@chanto/cli-<os>-<cpu>) holds
 # that platform's binary from a GitHub release; @chanto/cli picks it through
-# optionalDependencies. The release workflow calls this after each release;
+# optionalDependencies. @chanto/web, Chanto's agent as WebAssembly for pages,
+# is the package the release built and attached (chanto-web-vX.Y.Z.tgz). The release workflow calls this after each release;
 # to retry, re-run this job in that release's run.
 #
 # Publishing uses npm trusted publishing: each package on npmjs.com trusts
@@ -91,3 +92,10 @@ jobs:
             publish "${dir%/}"
           done
           publish npm/chanto
+          # @chanto/web as the release attached it, checked against SHA256SUMS.
+          web="chanto-web-$TAG.tgz"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$web" --pattern SHA256SUMS --dir web-dist
+          (cd web-dist && grep -E "  $web\$" SHA256SUMS | sha256sum --strict --check)
+          mkdir -p npm/web
+          tar -xzf "web-dist/$web" -C npm/web
+          publish npm/web/package

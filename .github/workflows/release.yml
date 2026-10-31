@@ -161,9 +161,65 @@ jobs:
             dist/*.zip
             dist/*.intoto.jsonl
 
+  # @chanto/web: chanto-core's agent loop and file tools as WebAssembly, for
+  # pages (chanto.sh/try embeds it). Built from this tag with the release's
+  # Rust and the wasm-bindgen CLI that web/Cargo.toml pins, packed with npm,
+  # attested like the CLI archives, and listed in SHA256SUMS; npm.yml publishes
+  # this same file.
+  web:
+    needs: preflight
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: ${{ env.RELEASE_RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: third-party-licenses
+      - name: Build and pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The bindings generator has to match the wasm-bindgen crate exactly.
+          bindgen=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' web/Cargo.toml)
+          [ -n "$bindgen" ] || { echo "::error::web/Cargo.toml must pin wasm-bindgen exactly"; exit 1; }
+          cargo install wasm-bindgen-cli --version "$bindgen" --locked
+          cargo build --release --locked -p chanto-web --target wasm32-unknown-unknown
+          wasm-bindgen --target web --out-dir web/pkg \
+            target/wasm32-unknown-unknown/release/chanto_web.wasm
+          python3 packaging/npm/web.py "$GITHUB_REF_NAME" web/pkg
+          mkdir -p dist
+          (cd web/pkg && npm pack --pack-destination "$GITHUB_WORKSPACE/dist")
+          mv dist/chanto-web-*.tgz "dist/chanto-web-${GITHUB_REF_NAME}.tgz"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        id: attest
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: dist/*.tgz
+      - if: ${{ !github.event.repository.private }}
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: jq -c . "$BUNDLE" > "dist/chanto-web-${GITHUB_REF_NAME}.intoto.jsonl"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: web
+          path: |
+            dist/*.tgz
+            dist/*.intoto.jsonl
+
   release:
-    # The desktop app and editor plugins aren't released yet; only the CLI is.
-    needs: build
+    # The desktop app and editor plugins aren't released yet: the CLI and
+    # @chanto/web are.
+    needs: [build, web]
     runs-on: ubuntu-latest
     # RELEASE_SIGNING_KEY lives in the `publish` environment, which only v*
     # tags can use, so a workflow pushed on a branch can't read it.
@@ -179,7 +235,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      # dist/ holds the CLI archives; SHA256SUMS covers all of them.
+      # dist/ holds the CLI archives and @chanto/web; SHA256SUMS covers them all.
       # After a security release, raise min_version in install.sh and
       # $minVersion in install.ps1 to it (tests/install.sh checks they match),
       # so a hostile host can't serve an older signed release as "latest".
@@ -190,7 +246,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+          (cd dist && sha256sum -- *.tar.gz *.zip *.tgz > SHA256SUMS)
           # Sign the checksum file so self-update can verify it (see src/update.rs
           # RELEASE_PUBKEY_B64). `chanto upgrade` refuses an unsigned release, so
           # no release goes out without the signature.
@@ -212,13 +268,13 @@ jobs:
           ssh-keygen -Y verify -f packaging/release-allowed-signers -I chanto-release -n chanto-release \
             -s dist/SHA256SUMS.sshsig < dist/SHA256SUMS
           # Every archive carries its build provenance (attested in the build job).
-          for a in dist/*.tar.gz dist/*.zip; do
+          for a in dist/*.tar.gz dist/*.zip dist/*.tgz; do
             if [ ! -f "${a%.*}.intoto.jsonl" ] && [ ! -f "${a%.tar.gz}.intoto.jsonl" ]; then
               echo "::error::no provenance for $a; refusing to publish"
               exit 1
             fi
           done
-          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.sshsig dist/*.intoto.jsonl)
+          assets=(dist/*.tar.gz dist/*.zip dist/*.tgz dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.sshsig dist/*.intoto.jsonl)
           awk -v h="## $GITHUB_REF_NAME " 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' \
             CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
