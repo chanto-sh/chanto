@@ -69,6 +69,10 @@ jobs:
         run: python3 packaging/changelog.py --check
       - name: Test the test gate
         run: python3 scripts/test_test_gate.py
+      - name: Check the docs name every flag, command, key and tool
+        run: |
+          python3 scripts/test_docs_drift.py
+          python3 scripts/docs_drift.py
   # clippy over the whole workspace, on every push. The desktop app needs the
   # same GTK/WebKit packages as `desktop-linux` to build on Linux.
   clippy:
