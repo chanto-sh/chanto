@@ -4,16 +4,17 @@
     "over its platform's ceiling, when it is significantly slower than the base",
     "commit at `alpha`, or when it is slower by more than `large_change`.",
     "The ceilings are a backstop for a run with no base to compare with (a",
-    "main push, a manual run). CPU time per run varies by up to 2.6x between",
-    "GitHub's runner instances, so a CPU ceiling sits at about twice the",
-    "slowest measured run (October 30, 2026, after the startup work in",
-    "#142-#145: startup / per request at most Linux 21 / 2.4 ms, macOS",
-    "35 / 4.2 ms, Windows 94 / 16 ms; Windows keeps its earlier, tighter",
-    "160 / 24 ms). Peak memory is stable across instances (startup / 40",
-    "turns: Linux 20 / 22 MB, macOS 19 / 20 MB, Windows 16 / 18 MB), so",
-    "those ceilings sit at 1.5x. Tighter would fail",
-    "pull requests on a slow or noisy runner for no reason; the comparison",
-    "with the base, measured on the same runner, is what holds a change.",
+    "main push, a manual run). They sit close to what the runners do, to keep",
+    "Chanto's lead rather than only catch disasters. CPU time per run varies by",
+    "up to 2.6x between GitHub's runner instances, so CPU ceilings sit about 1.3",
+    "times the slowest run seen (October 30-31, 2026: startup / per request at",
+    "most Linux 21.9 / 2.5 ms, macOS 35 / 4.2 ms, Windows per request 16 ms).",
+    "Windows startup sits at 90 ms: #168 cut it, only a few runs follow (slowest",
+    "46.9 ms, 93.8 ms before it), and its clock ticks every 15.6 ms. Peak memory",
+    "is stable, so about 1.1 times (startup / 40 turns: Linux 18.9 / 20.5 MB,",
+    "macOS 17.1 / 18.8 MB, Windows 14.8 / 17.1 MB). A failure on a change that",
+    "costs nothing means a slower runner than these saw: rerun it before raising",
+    "a ceiling. The comparison with the base, on the same runner, holds a change.",
     "reps: startup runs are cheap and noisy, so there are more of them; the",
     "turn workload is a whole session each but still costs a second, next to",
     "two eight-minute builds. With 50 and 15 samples the U test reaches",
@@ -30,15 +31,13 @@
     "device: the same 40-turn workload pinned to `cpus` core against wall-time",
     "and memory ceilings, for a machine with no spare cores and a phone's",
     "memory. It has no base to compare with, since wall time on a shared",
-    "runner measures the runner; the ceilings are deliberately loose first-run",
-    "values, to be tightened from what the runners report.",
+    "runner measures the runner; the ceilings sit about 1.3 times the slowest of",
+    "20 runs (244.5 / 4.6 ms) and 1.1 times for memory (20.7 MB).",
     "binary_mb: the release binary's size, in 10^6 bytes. It is exact, so it",
     "has no tolerance or test: it fails only over its ceiling, and a pull",
     "request that needs more raises the ceiling here, where reviewers see the",
-    "growth. First values, about 15-20% above the opt-level \"s\" builds",
-    "(macOS arm64 20.3 MB; v0.1.7 at opt-level 3 was 25.6 / 31.2 / 40.0 MB on",
-    "macOS / Linux / Windows, about 21% more), to be tightened from what the",
-    "runners report."
+    "growth. About 2.5% above the builds of October 31, 2026",
+    "(macOS 20.3, Linux 24.0, Windows 29.3 MB)."
   ],
   "alpha": 0.01,
   "warmup": 2,
@@ -52,18 +51,19 @@
   },
   "tolerance": {
     "startup_cpu_ms": 0.04,
-    "startup_rss_mb": 0.08,
+    "startup_rss_mb": 0.03,
     "turn_cpu_ms": 0.04,
-    "turn_rss_mb": 0.08
+    "turn_rss_mb": 0.03
   },
   "large_change": 0.10,
   "large_change_p": 0.1,
   "stress": {
     "_comment": [
       "tests/perf/stress.py: a long session and a large tree, against the fake",
-      "model. Ceilings from what the Linux and macOS runners report (October",
-      "2026: 26-44 MB, every step under 0.8 s): about twice for memory and",
-      "5-15 times for step times, which vary more on a shared runner. drift:",
+      "model. Ceilings from the last 16 Linux and macOS runs (October 31, 2026:",
+      "long session 39.5 MB, large tree 32 MB, resume 25.5 MB and 0.15 s): about",
+      "1.25 times for memory and 1.5-3 times for step times, which vary more on a",
+      "shared runner. drift:",
       "the last quarter's median gap between model requests may be at most",
       "this times the first quarter's, plus 2 ms.",
       "grep_vs_rg: Grep for paths may take at most this times `rg -l` on the",
@@ -72,48 +72,48 @@
     "long_session": {
       "turns": 2000,
       "files": 400,
-      "rss_mb": 80,
+      "rss_mb": 50,
       "drift": 2.0,
       "timeout_s": 600
     },
     "large_tree": {
       "files": 30000,
-      "rss_mb": 80,
-      "step_s": {"glob_all": 1, "grep_paths": 3, "grep_count": 4, "read_large": 1, "read_c": 1, "edit_c": 1},
+      "rss_mb": 40,
+      "step_s": {"glob_all": 0.3, "grep_paths": 2, "grep_count": 2, "read_large": 0.2, "read_c": 0.2, "edit_c": 0.6},
       "grep_vs_rg": 2.0,
       "timeout_s": 900
     },
-    "resume": {"first_request_s": 3, "rss_mb": 80, "timeout_s": 120},
+    "resume": {"first_request_s": 0.5, "rss_mb": 32, "timeout_s": 120},
     "cleanup": {"grace_s": 3, "timeout_s": 120}
   },
   "device": {
     "cpus": 1,
     "reps": 5,
-    "startup_wall_ms": 1500,
-    "turn_wall_ms": 250,
-    "rss_mb": 256
+    "startup_wall_ms": 320,
+    "turn_wall_ms": 6,
+    "rss_mb": 23
   },
   "budgets": {
     "linux": {
-      "startup_cpu_ms": 45,
-      "startup_rss_mb": 30,
-      "turn_cpu_ms": 5,
-      "turn_rss_mb": 33,
-      "binary_mb": 29
+      "startup_cpu_ms": 28,
+      "startup_rss_mb": 21,
+      "turn_cpu_ms": 3.3,
+      "turn_rss_mb": 22.5,
+      "binary_mb": 24.5
     },
     "darwin": {
-      "startup_cpu_ms": 70,
-      "startup_rss_mb": 29,
-      "turn_cpu_ms": 9,
-      "turn_rss_mb": 31,
-      "binary_mb": 24
+      "startup_cpu_ms": 45,
+      "startup_rss_mb": 19,
+      "turn_cpu_ms": 5.5,
+      "turn_rss_mb": 20.5,
+      "binary_mb": 21
     },
     "windows": {
-      "startup_cpu_ms": 160,
-      "startup_rss_mb": 24,
-      "turn_cpu_ms": 24,
-      "turn_rss_mb": 27,
-      "binary_mb": 37
+      "startup_cpu_ms": 90,
+      "startup_rss_mb": 16.5,
+      "turn_cpu_ms": 21,
+      "turn_rss_mb": 19,
+      "binary_mb": 30
     }
   }
 }
