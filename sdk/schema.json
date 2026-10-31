@@ -1,0 +1,981 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Api",
+  "description": "Everything the schema covers, as one document: the SDK generator reads\neach top-level definition from it.",
+  "type": "object",
+  "properties": {
+    "create_session": {
+      "$ref": "#/$defs/CreateSession"
+    },
+    "event": {
+      "$ref": "#/$defs/StreamEvent"
+    },
+    "fork": {
+      "$ref": "#/$defs/Fork"
+    },
+    "health": {
+      "$ref": "#/$defs/Health"
+    },
+    "respond": {
+      "$ref": "#/$defs/Respond"
+    },
+    "rewind": {
+      "$ref": "#/$defs/Rewind"
+    },
+    "send_message": {
+      "$ref": "#/$defs/SendMessage"
+    },
+    "session_created": {
+      "$ref": "#/$defs/SessionCreated"
+    }
+  },
+  "required": [
+    "event",
+    "create_session",
+    "session_created",
+    "send_message",
+    "respond",
+    "fork",
+    "rewind",
+    "health"
+  ],
+  "$defs": {
+    "CreateSession": {
+      "description": "`POST /sessions`: start a session (every field optional).",
+      "type": "object",
+      "properties": {
+        "allowed_tools": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "description": "The working directory (the server's own by default).",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "disallowed_tools": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": "string"
+          }
+        },
+        "max_turns": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Mode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume": {
+          "description": "A saved session's id to continue.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "system_prompt_append": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tools": {
+          "description": "Tools the client runs itself: the agent calls them with `tool_call`.",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/ToolSpec"
+          }
+        },
+        "verify": {
+          "description": "Run the project's checks before finishing, as `--verify` does.",
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "Decision": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "allow_always",
+        "deny"
+      ]
+    },
+    "Fork": {
+      "description": "`POST /sessions/{id}/fork`: a live copy of the session, from now or from\na checkpoint.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "point": {
+          "description": "A checkpoint index; the current conversation when omitted.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      }
+    },
+    "Health": {
+      "description": "`GET /health`.",
+      "type": "object",
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "runs": {
+          "description": "Whether this server hosts background runs (`/runs`).",
+          "type": "boolean"
+        },
+        "version": {
+          "description": "The server's Chanto version.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ok",
+        "version",
+        "runs"
+      ]
+    },
+    "Mode": {
+      "description": "A permission mode.",
+      "type": "string",
+      "enum": [
+        "default",
+        "acceptEdits",
+        "plan",
+        "auto",
+        "bypassPermissions"
+      ]
+    },
+    "Respond": {
+      "description": "`POST /sessions/{id}/respond`: answers a `permission_request` (`decision`,\noptionally `feedback`), a `question` (`answer`), or a `tool_call` (`id`\nand `result`).",
+      "type": "object",
+      "properties": {
+        "answer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "decision": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Decision"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "feedback": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "description": "A `tool_call`'s id.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "request_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ToolResult"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "Rewind": {
+      "description": "`POST /sessions/{id}/rewind`: back to a checkpoint, or undo the last\nrewind's code restore. With `preview`, only reports what it would do.",
+      "type": "object",
+      "properties": {
+        "checkpoint": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        },
+        "mode": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RewindMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "preview": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "undo": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        }
+      }
+    },
+    "RewindMode": {
+      "type": "string",
+      "enum": [
+        "both",
+        "conversation",
+        "code"
+      ]
+    },
+    "SendMessage": {
+      "description": "`POST /sessions/{id}/messages`: a prompt or a `/command`.",
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "text"
+      ]
+    },
+    "SessionCreated": {
+      "description": "`POST /sessions` answer.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "model",
+        "warnings"
+      ]
+    },
+    "StreamEvent": {
+      "description": "One event on `GET /sessions/{id}/events` (also `--output-format\nstream-json`): a JSON object whose `type` names the variant.",
+      "oneOf": [
+        {
+          "description": "The model started a reply.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "assistant_start"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "The model's reply ended.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "assistant_end"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Reply text as it streams in.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "text"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "Reasoning as it streams in.",
+          "type": "object",
+          "properties": {
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "reasoning"
+            }
+          },
+          "required": [
+            "type",
+            "text"
+          ]
+        },
+        {
+          "description": "A tool call started; `parent` is the subagent call it belongs to.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "parent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_start"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "label"
+          ]
+        },
+        {
+          "description": "A tool call finished. `output` is what the model saw (secrets\nredacted, at most 2,000 characters); `display` is the human-facing\nsummary, edit diffs included.",
+          "type": "object",
+          "properties": {
+            "display": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "images": {
+              "description": "Up to two images the tool returned, as data URLs.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "is_error": {
+              "type": "boolean"
+            },
+            "output": {
+              "type": "string"
+            },
+            "parent": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_end"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "is_error",
+            "output",
+            "display",
+            "images"
+          ]
+        },
+        {
+          "description": "Output from a tool that's still running.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_progress"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "text"
+          ]
+        },
+        {
+          "description": "What the agent is busy with, or `null` when it's idle.",
+          "type": "object",
+          "properties": {
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "type": {
+              "type": "string",
+              "const": "busy"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "description": "Token use and cost so far.",
+          "type": "object",
+          "properties": {
+            "context_max": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "context_used": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "price_unknown": {
+              "description": "True when some model's price isn't known, so the cost is a floor.",
+              "type": "boolean"
+            },
+            "total_cost_usd": {
+              "type": "number",
+              "format": "double"
+            },
+            "total_in": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "total_out": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "tps": {
+              "description": "Tokens per second of the last reply.",
+              "type": "number",
+              "format": "double"
+            },
+            "type": {
+              "type": "string",
+              "const": "usage"
+            }
+          },
+          "required": [
+            "type",
+            "context_used",
+            "context_max",
+            "total_in",
+            "total_out",
+            "tps",
+            "total_cost_usd",
+            "price_unknown"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "warning"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "error"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "info"
+            }
+          },
+          "required": [
+            "type",
+            "message"
+          ]
+        },
+        {
+          "description": "The session's todo list, in full.",
+          "type": "object",
+          "properties": {
+            "todos": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/Todo"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "todos"
+            }
+          },
+          "required": [
+            "type",
+            "todos"
+          ]
+        },
+        {
+          "description": "The permission mode changed.",
+          "type": "object",
+          "properties": {
+            "mode": {
+              "$ref": "#/$defs/Mode"
+            },
+            "type": {
+              "type": "string",
+              "const": "mode"
+            }
+          },
+          "required": [
+            "type",
+            "mode"
+          ]
+        },
+        {
+          "description": "The conversation was compacted from `before` to `after` tokens.",
+          "type": "object",
+          "properties": {
+            "after": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "before": {
+              "type": "integer",
+              "format": "uint64",
+              "minimum": 0
+            },
+            "type": {
+              "type": "string",
+              "const": "compacted"
+            }
+          },
+          "required": [
+            "type",
+            "before",
+            "after"
+          ]
+        },
+        {
+          "description": "A background subagent started or changed state.",
+          "type": "object",
+          "properties": {
+            "description": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "background_agent"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "description",
+            "status"
+          ]
+        },
+        {
+          "description": "A ChatGPT plan's usage limits.",
+          "type": "object",
+          "properties": {
+            "plan": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "primary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Window"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "secondary": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Window"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "summary": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "rate_limits"
+            }
+          },
+          "required": [
+            "type",
+            "summary"
+          ]
+        },
+        {
+          "description": "Live status of a long-running mode, by key (\"goal\", \"team\").",
+          "type": "object",
+          "properties": {
+            "key": {
+              "type": "string"
+            },
+            "lines": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "status"
+            }
+          },
+          "required": [
+            "type",
+            "key",
+            "lines"
+          ]
+        },
+        {
+          "description": "The agent wants to use a tool and needs a decision: answer with\n`POST /sessions/{id}/respond` and `{request_id, decision, feedback?}`.",
+          "type": "object",
+          "properties": {
+            "always_label": {
+              "description": "What \"allow always\" would allow.",
+              "type": "string"
+            },
+            "detail": {
+              "type": "string"
+            },
+            "label": {
+              "type": "string"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "tool": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "permission_request"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "tool",
+            "label",
+            "detail",
+            "always_label"
+          ]
+        },
+        {
+          "description": "The agent asks a question: answer with `{request_id, answer}`.",
+          "type": "object",
+          "properties": {
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "question": {
+              "type": "string"
+            },
+            "request_id": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "question"
+            }
+          },
+          "required": [
+            "type",
+            "request_id",
+            "question",
+            "options"
+          ]
+        },
+        {
+          "description": "The agent called a tool the session was created with: answer with\n`{id, result: {content, is_error}}` within ten minutes.",
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "input": true,
+            "name": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "tool_call"
+            }
+          },
+          "required": [
+            "type",
+            "id",
+            "name",
+            "input"
+          ]
+        },
+        {
+          "description": "A prompt or command finished.",
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "turn_done"
+            }
+          },
+          "$ref": "#/$defs/TurnDone",
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "Todo": {
+      "description": "A todo-list item.",
+      "type": "object",
+      "properties": {
+        "activeForm": {
+          "type": "string"
+        },
+        "content": {
+          "type": "string"
+        },
+        "status": {
+          "description": "`pending`, `in_progress` or `completed`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "content",
+        "status",
+        "activeForm"
+      ]
+    },
+    "ToolResult": {
+      "description": "What a client-side tool returned.",
+      "type": "object",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "is_error": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "content",
+        "is_error"
+      ]
+    },
+    "ToolSpec": {
+      "description": "A client-side tool: the agent sees its name, description and the JSON\nSchema of its input (an object schema).",
+      "type": "object",
+      "properties": {
+        "description": {
+          "type": "string"
+        },
+        "input_schema": true,
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema"
+      ]
+    },
+    "TurnDone": {
+      "description": "The end of a prompt or command: its answer (`result`), a command's printed\ntext (`output`), an `error`, or `interrupted`, and the session's cost so far.",
+      "type": "object",
+      "properties": {
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "interrupted": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "output": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "price_unknown": {
+          "type": "boolean"
+        },
+        "result": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_cost_usd": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "total_cost_usd",
+        "price_unknown"
+      ]
+    },
+    "Window": {
+      "description": "One usage-limit window (the 5-hour rolling one or the weekly one).",
+      "type": "object",
+      "properties": {
+        "resets_at": {
+          "description": "Unix seconds.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "used_percent": {
+          "type": "number",
+          "format": "double"
+        },
+        "window_minutes": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "used_percent"
+      ]
+    }
+  }
+}

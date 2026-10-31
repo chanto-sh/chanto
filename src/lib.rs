@@ -90,6 +90,7 @@ mod util;
 mod voice;
 #[cfg(windows)]
 mod windows_sandbox;
+pub mod wire;
 mod worktree;
 
 use agent::{Agent, Env, EnvInit, Frontend, TurnEnd};

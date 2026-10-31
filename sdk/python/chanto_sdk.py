@@ -35,6 +35,12 @@ import uuid
 import urllib.request
 from typing import Callable, Iterator, Optional
 
+try:
+    # The API's types, generated from sdk/schema.json (the server's own wire types).
+    from chanto_types import PermissionRequestEvent, QuestionEvent, StreamEvent
+except ImportError:  # this file copied on its own
+    PermissionRequestEvent = QuestionEvent = StreamEvent = dict  # type: ignore
+
 
 class ChantoError(Exception):
     pass
@@ -173,8 +179,8 @@ class Session:
         self,
         client: Chanto,
         id: str,
-        on_permission: Optional[Callable[[dict], str]] = None,
-        on_question: Optional[Callable[[dict], str]] = None,
+        on_permission: Optional[Callable[[PermissionRequestEvent], str]] = None,
+        on_question: Optional[Callable[[QuestionEvent], str]] = None,
         tools=None,
     ):
         self.tools = {t.name: t for t in tools or []}
@@ -215,7 +221,7 @@ class Session:
         finally:
             self._ready.set()
 
-    def send(self, text: str, timeout: Optional[float] = None) -> Iterator[dict]:
+    def send(self, text: str, timeout: Optional[float] = None) -> Iterator[StreamEvent]:
         """Send a prompt (or /command) and yield events until the turn ends."""
         self.client._request("POST", f"/sessions/{self.id}/messages", {"text": text})
         while True:

@@ -135,6 +135,9 @@ jobs:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
       - run: cargo test --locked --quiet -p chanto-proto
+      # sdk/schema.json has to be what src/wire.rs generates: the SDKs' types
+      # come from it.
+      - run: cargo test --locked --quiet --features schema --lib 'wire::'
       # The install script: platforms, curl/wget, checksums and signatures.
       - run: sh tests/install.sh
   # Test coverage (cargo-llvm-cov, the compiler's own instrumentation) of the
@@ -308,6 +311,8 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
+      # The SDKs' types have to be what sdk/schema.json generates.
+      - run: python3 sdk/gen_types.py --check
       - run: python3 -m unittest -v test_chanto_sdk
         working-directory: sdk/python
       - run: npm ci --ignore-scripts && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts

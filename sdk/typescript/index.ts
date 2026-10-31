@@ -10,8 +10,14 @@
 //   const run = await h.startRun({ task: "add retries", cwd: "/path/to/repo" });
 //   for await (const ev of h.runEvents(run.id)) if (ev.type === "permission_request") await h.respondRun(run.id, { decision: "allow" });
 
-export type ChantoEvent = { type: string; [k: string]: any };
-export type Decision = "allow" | "allow_always" | "deny";
+import type { Decision, Mode, PermissionRequestEvent, QuestionEvent, StreamEvent } from "./types.js";
+
+// The API's types, generated from sdk/schema.json (the server's own wire types).
+export type * from "./types.js";
+/** An event on a session's stream. */
+export type ChantoEvent = StreamEvent;
+/** An event on a background run's stream (its own format: see sdk/README.md). */
+export type RunEvent = { type: string; [k: string]: any };
 
 export interface Tool {
   name: string;
@@ -29,11 +35,11 @@ export interface SessionOptions {
   cwd?: string;
   tools?: Tool[];
   model?: string;
-  mode?: string;
+  mode?: Mode;
   resume?: string;
   /** Default: deny, so nothing runs unattended unless you opt in. */
-  onPermission?: (ev: ChantoEvent) => Decision | Promise<Decision>;
-  onQuestion?: (ev: ChantoEvent) => string | Promise<string>;
+  onPermission?: (ev: PermissionRequestEvent) => Decision | Promise<Decision>;
+  onQuestion?: (ev: QuestionEvent) => string | Promise<string>;
 }
 
 export interface RunOptions {
@@ -110,7 +116,7 @@ export class Chanto {
     return (await (await this.raw("POST", "/runs/bundles", bytes)).json()).bundle_id;
   }
   /** Logged events after `since`, then live ones; ends when the run finishes. */
-  async *runEvents(id: string, since = 0): AsyncGenerator<ChantoEvent> {
+  async *runEvents(id: string, since = 0): AsyncGenerator<RunEvent> {
     const r = await this.raw("GET", `/runs/${id}/events?since=${since}`);
     const reader = r.body!.getReader();
     const decoder = new TextDecoder();
@@ -195,7 +201,8 @@ export class Session {
       for (;;) {
         const { value, done } = await reader.read().catch(() => ({ value: undefined, done: true }));
         if (done) {
-          this.queue.push({ type: "turn_done", error: "event stream closed" });
+          // Ends the turn like the server's own turn_done; the cost so far is unknown.
+          this.queue.push({ type: "turn_done", error: "event stream closed", total_cost_usd: 0, price_unknown: true });
           this.wake?.();
           return;
         }
@@ -250,7 +257,7 @@ export class Session {
       yield ev;
       if (ev.type === "turn_done") {
         if (ev.error) throw new Error(ev.error);
-        this.lastResult = ev.result ?? ev.output;
+        this.lastResult = ev.result ?? ev.output ?? undefined;
         return;
       }
     }

@@ -28,6 +28,21 @@ CHANTO_SERVER_TOKEN=... chanto serve --port 0 --model qwen3-coder:30b
 
 By default, permission prompts are **denied**. Pass a callback to approve actions, or create the session with `mode: "acceptEdits" | "auto" | "bypassPermissions"`.
 
+## Types
+
+Both SDKs type the API from one source. `src/wire.rs` defines what `chanto
+serve` streams and accepts, and the server builds its events from those types;
+`sdk/schema.json` is their JSON Schema, and `sdk/gen_types.py` turns it into
+`typescript/types.ts` and `python/chanto_types.py` (TypedDicts). A session's
+events are a union tagged by `type`, so `if (ev.type === "text") ev.text`
+type-checks. CI fails if the schema or the generated files fall behind; after
+changing `src/wire.rs`:
+
+```sh
+UPDATE_SCHEMA=1 cargo test --features schema --lib wire::
+python3 sdk/gen_types.py
+```
+
 ## Protocol
 
 In `chanto web` mode, `/`, `/app.js` and `/style.css` serve public embedded UI assets.
