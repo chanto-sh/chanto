@@ -1,0 +1,1 @@
+- **`ultra` effort, and `max` on recent OpenAI models.** `--effort ultra` (or `/think ultra`) asks for high reasoning and tells the model to delegate to subagents on its own, matching Codex's Ultra. `max` now reaches GPT-5.6 and GPT-6 models through the Responses API; it used to be sent as `xhigh`.

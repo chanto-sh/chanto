@@ -132,12 +132,12 @@ pub const BUILTIN: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "think",
-        args: "[on|off|low|medium|high|xhigh|max]",
+        args: "[on|off|low|medium|high|xhigh|max|ultra]",
         help: "Toggle model reasoning, or set its effort",
     },
     CommandInfo {
         name: "effort",
-        args: "[low|medium|high|xhigh|max]",
+        args: "[low|medium|high|xhigh|max|ultra]",
         help: "Show or set reasoning effort",
     },
     CommandInfo {
@@ -1053,7 +1053,7 @@ pub async fn handle_env(env: &std::sync::Arc<Env>, line: &str) -> Option<Outcome
                 "" if cmd == "effort" => {
                     let e = env.effort();
                     return Some(Outcome::Show(format!(
-                        "Effort: {} (set with /think low|medium|high|xhigh|max)",
+                        "Effort: {} (set with /think low|medium|high|xhigh|max|ultra)",
                         e.as_deref().unwrap_or("the provider's default")
                     )));
                 }

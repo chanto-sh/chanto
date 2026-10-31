@@ -243,7 +243,7 @@ pub struct Cli {
     /// Disable model reasoning
     #[arg(long)]
     pub no_think: bool,
-    /// Reasoning effort: low | medium | high | xhigh | max
+    /// Reasoning effort: low | medium | high | xhigh | max | ultra (delegates to subagents)
     #[arg(long, value_name = "LEVEL", value_parser = clap::builder::PossibleValuesParser::new(llm::EFFORTS), conflicts_with = "no_think")]
     pub effort: Option<String>,
     /// Use the simple line-based interface instead of the full-screen TUI

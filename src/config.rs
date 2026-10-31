@@ -41,7 +41,7 @@ pub struct Config {
     pub temperature: Option<f32>,
     /// Enable model "thinking" (reasoning) when supported.
     pub think: Option<bool>,
-    /// Reasoning effort: low | medium | high | xhigh | max (unset: the provider's default).
+    /// Reasoning effort: low | medium | high | xhigh | max | ultra (unset: the provider's default).
     pub effort: Option<String>,
     /// Show streamed reasoning in the terminal.
     pub show_thinking: Option<bool>,
@@ -1883,7 +1883,7 @@ provider = "ollama"             # "ollama" (native API), "openai" (any OpenAI-co
 # model = "qwen3-coder:30b"     # default: first model the server reports
 num_ctx = 32768                 # context window requested from the server
 think = true                    # enable reasoning for models that support it
-# effort = "high"               # reasoning effort: low | medium | high | xhigh | max
+# effort = "high"               # reasoning effort: low | medium | high | xhigh | max | ultra
 show_thinking = true
 # tui = "inline"                # draw inline: output goes to the terminal's scrollback (default: fullscreen)
 mode = "default"                # default | acceptEdits | plan | auto | bypassPermissions

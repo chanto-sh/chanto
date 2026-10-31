@@ -371,7 +371,7 @@ async fn think_and_effort() {
     assert_eq!(env.effort().as_deref(), Some("high"));
     assert_eq!(
         env_show(env, "/effort").await,
-        "Effort: high (set with /think low|medium|high|xhigh|max)"
+        "Effort: high (set with /think low|medium|high|xhigh|max|ultra)"
     );
     assert_eq!(env_show(env, "/think off").await, "Thinking disabled");
     assert!(!env.think());
