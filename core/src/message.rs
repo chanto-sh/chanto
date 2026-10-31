@@ -156,6 +156,10 @@ pub struct ChatRequest {
 pub enum Delta {
     Text(String),
     Reasoning(String),
+    /// A tool call has begun: its name, as soon as the stream gives it and
+    /// usually before its arguments. A name streamed in pieces is reported
+    /// as its first piece; the call itself comes with the finished reply.
+    ToolCall(String),
 }
 
 #[derive(Debug, Clone, Default)]

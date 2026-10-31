@@ -1139,6 +1139,10 @@ impl Provider {
                 if let Some(calls) = msg["tool_calls"].as_array() {
                     for c in calls {
                         let f = &c["function"];
+                        // Ollama sends each call whole, so the name comes with its arguments.
+                        if let Some(name) = f["name"].as_str().filter(|n| !n.is_empty()) {
+                            on_delta(Delta::ToolCall(name.to_string()));
+                        }
                         let args = match &f["arguments"] {
                             Value::String(s) => serde_json::from_str(s).unwrap_or(json!({})),
                             Value::Null => json!({}),

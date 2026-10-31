@@ -188,6 +188,9 @@ impl Provider {
                 "response.output_item.added" => {
                     let it = &v["item"];
                     if it["type"] == "function_call" {
+                        if let Some(name) = it["name"].as_str().filter(|n| !n.is_empty()) {
+                            on_delta(Delta::ToolCall(name.to_string()));
+                        }
                         partial.insert(
                             idx,
                             (

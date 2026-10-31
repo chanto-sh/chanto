@@ -413,6 +413,11 @@ impl AnthropicStream {
                     json_bufs.push(String::new());
                 }
                 blocks[i] = v["content_block"].clone();
+                if blocks[i]["type"] == "tool_use"
+                    && let Some(name) = blocks[i]["name"].as_str().filter(|n| !n.is_empty())
+                {
+                    on_delta(Delta::ToolCall(name.to_string()));
+                }
             }
             "content_block_delta" => {
                 let i = v["index"].as_u64().unwrap_or(0) as usize;

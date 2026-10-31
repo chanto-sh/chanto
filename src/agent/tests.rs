@@ -6384,16 +6384,40 @@ async fn a_lookup_that_outlasted_startup_is_applied_before_the_first_request() {
 }
 
 #[tokio::test]
-async fn the_shell_snapshot_is_taken_during_the_first_model_call() {
+async fn a_turn_without_bash_never_takes_the_shell_snapshot() {
+    // The snapshot runs the user's startup files in a login shell: a session
+    // that only reads and answers shouldn't pay for it.
+    let dir = tmpdir("no-bash-snapshot");
+    let (base, _seen) = mock_server(vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "missing.txt"}))}),
+        json!({"content": "Done."}),
+    ])
+    .await;
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
+    agent
+        .run_turn("hi", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!agent.env.shell_snapshot.initialized());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn the_shell_snapshot_starts_when_the_model_begins_a_bash_call() {
     let dir = tmpdir("early-snapshot");
-    let (base, _seen) = mock_server(vec![json!({"content": "Done."})]).await;
-    let mut agent = Agent::new(make_env(&base, &dir, Mode::Default, 32768));
+    let (base, _seen) = mock_server(vec![
+        json!({"tool_calls": tc("Bash", json!({"command": "touch made-by-the-test"}))}),
+        json!({"content": "Done."}),
+    ])
+    .await;
+    // Plan mode refuses the command, so only the streamed call can start it.
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::Plan, 32768));
     assert!(!agent.env.shell_snapshot.initialized());
     agent
         .run_turn("hi", vec![], CancellationToken::new())
         .await
         .unwrap();
-    // Started in the background by the model call, with no shell command run.
     for _ in 0..50 {
         if agent.env.shell_snapshot.initialized() {
             break;
@@ -6401,6 +6425,7 @@ async fn the_shell_snapshot_is_taken_during_the_first_model_call() {
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     assert!(agent.env.shell_snapshot.initialized());
+    assert!(!dir.join("made-by-the-test").exists());
     let _ = std::fs::remove_dir_all(dir);
 }
 
