@@ -1,11 +1,11 @@
 [package]
 name = "chanto-core"
-version = "0.1.0"
+version = "0.1.10"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The parts of the chanto agent that build for every target, WebAssembly included"
+description = "The parts of the chanto agent that build for every target, WebAssembly included. Released with chanto under the same version; no stable API of its own."
 homepage = "https://chanto.sh"
 keywords = ["chanto"]
 

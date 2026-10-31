@@ -21,11 +21,17 @@ def check(root: Path, tag: str) -> None:
     def toml(path: str) -> dict:
         return tomllib.loads((root / path).read_text())
 
-    for path in ("Cargo.toml", "desktop/Cargo.toml"):
+    for path in ("Cargo.toml", "desktop/Cargo.toml", "core/Cargo.toml"):
         require(toml(path)["package"]["version"] == version, f"{path}: version mismatch")
     packages = {p["name"]: p["version"] for p in toml("Cargo.lock")["package"]}
-    for name in ("chanto", "chanto-desktop"):
+    for name in ("chanto", "chanto-desktop", "chanto-core"):
         require(packages[name] == version, f"Cargo.lock: {name} version mismatch")
+    # chanto-core has no API of its own to keep stable: chanto takes exactly
+    # the one released with it, so crates.io never pairs it with another.
+    require(
+        toml("Cargo.toml")["dependencies"]["chanto-core"]["version"] == f"={version}",
+        f'Cargo.toml: chanto-core must be required as "={version}"',
+    )
     require(
         json.loads((root / "ide/vscode/package.json").read_text())["version"] == version,
         "VS Code version mismatch",

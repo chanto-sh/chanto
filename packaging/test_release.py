@@ -20,7 +20,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for name in (
-            "Cargo.toml", "Cargo.lock", "desktop/Cargo.toml",
+            "Cargo.toml", "Cargo.lock", "desktop/Cargo.toml", "core/Cargo.toml",
             "ide/vscode/package.json", "ide/jetbrains/build.gradle.kts",
             "CHANGELOG.md", "install.sh", "install.ps1",
         ):
@@ -54,6 +54,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.replace("Cargo.lock", f'name = "chanto"\nversion = "{self.version}"',
                      'name = "chanto"\nversion = "99.0.0"')
         with self.assertRaisesRegex(ValueError, "Cargo.lock"):
+            check(self.root, self.tag)
+
+    def test_rejects_core_version_drift(self):
+        self.replace("core/Cargo.toml", f'version = "{self.version}"', 'version = "99.0.0"')
+        with self.assertRaisesRegex(ValueError, "core/Cargo.toml"):
+            check(self.root, self.tag)
+
+    def test_rejects_a_loose_core_requirement(self):
+        # chanto has to take exactly the chanto-core released with it.
+        self.replace("Cargo.toml", f'version = "={self.version}"', f'version = "{self.version}"')
+        with self.assertRaisesRegex(ValueError, "chanto-core must be required"):
             check(self.root, self.tag)
 
     def test_rejects_undated_notes(self):
