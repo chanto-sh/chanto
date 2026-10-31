@@ -342,6 +342,11 @@ impl Agent {
         if let (Some(s), Some((_, dirs))) = (test_snapshot.as_mut(), &forced) {
             s.lock_dirs(dirs);
         }
+        // A request that quotes the text a test pins ("change the message
+        // `…` to …") is asking for that test's expectation to change.
+        if let Some(s) = test_snapshot.as_mut() {
+            s.set_request(input);
+        }
         let mut gate_attempts = 0u32;
         // How many times a finish was bounced for weakening existing tests
         // outside `--verify` (where the gate handles it instead).
@@ -865,10 +870,13 @@ impl Agent {
                 // Outside `--verify` there is no gate, but a finish that stands
                 // on a deleted or skipped test still isn't the work: send it
                 // back a couple of times, then finish saying so. `--verify`
-                // handles this in the gate above.
+                // handles this in the gate above. A changed expectation isn't
+                // sent back: when the request asks for that behaviour to change,
+                // the test has to change with it, and the notice when it
+                // happened already asked the agent to say so.
                 let weakened = test_snapshot
                     .as_ref()
-                    .map(crate::guardrails::Snapshot::violations)
+                    .map(|s| s.changes().weakened)
                     .unwrap_or_default();
                 if !verify && !weakened.is_empty() && test_bounces < 2 {
                     test_bounces += 1;
@@ -896,8 +904,9 @@ impl Agent {
                         "<system-reminder>You are not done: the last check you ran, `{cmd}`, failed, and nothing has changed since.\n\n\
                          {}\n\nFix the failure. If these are existing tests, their expectations are the contract: prefer an \
                          implementation that leaves the default case unchanged (annotate only the new or non-default case) \
-                         rather than assuming they are stale. If the failure is unrelated to the request or expected, say so \
-                         explicitly and explain why before giving your final answer.</system-reminder>",
+                         rather than assuming they are stale, unless the request asks for exactly the behaviour they pin to \
+                         change; then update them to the new behaviour and say so. If the failure is unrelated to the \
+                         request or expected, say so explicitly and explain why before giving your final answer.</system-reminder>",
                         crate::util::truncate(out, 4_000)
                     )));
                     continue;
@@ -1135,22 +1144,44 @@ impl Agent {
                 && self.edit_seq != edits_before
                 && let Some(snap) = test_snapshot.as_ref()
             {
-                let changed: Vec<String> = snap
-                    .violations()
-                    .into_iter()
-                    .filter(|v| !test_edits_seen.contains(v))
-                    .collect();
-                if !changed.is_empty() {
+                let changes = snap.changes();
+                let fresh = |v: Vec<String>| -> Vec<String> {
+                    v.into_iter()
+                        .filter(|v| !test_edits_seen.contains(v))
+                        .collect()
+                };
+                let (weakened, changed) = (fresh(changes.weakened), fresh(changes.changed));
+                if !weakened.is_empty() || !changed.is_empty() {
                     test_edit_notices += 1;
-                    test_edits_seen.extend(changed.iter().cloned());
-                    let list = changed.join("; ");
+                    test_edits_seen.extend(weakened.iter().chain(&changed).cloned());
+                    let list = weakened
+                        .iter()
+                        .chain(&changed)
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     self.emit(Event::Warn(format!("Existing tests were changed: {list}")));
+                    // Deleting, skipping or dropping assertions is never the
+                    // work. A changed expectation is, when the request asks for
+                    // the behaviour it pins to change; telling the agent to
+                    // restore it then makes it undo a correct fix.
+                    let note = if weakened.is_empty() {
+                        format!(
+                            "You changed what an existing test expects: {list}. That is right only when the request \
+                             asks for exactly the behaviour that test pins to change. If it does, keep the change and say \
+                             in your answer which expectation changed and why the old one no longer holds. If it doesn't, \
+                             restore the test (for example `git checkout -- <file>`) and fix the code it exercises instead."
+                        )
+                    } else {
+                        format!(
+                            "You weakened an existing test: {list}. Existing tests are the contract: restore them (for \
+                             example `git checkout -- <file>`) and fix the code they exercise, or add your own tests \
+                             alongside them. If the requested behaviour genuinely conflicts with an existing test, keep the \
+                             code change, leave the test as it was, and explain the conflict in your answer."
+                        )
+                    };
                     self.messages.push(Message::user(format!(
-                        "<system-reminder>You changed an existing test: {list}. Existing tests are the contract: \
-                         restore them (for example `git checkout -- <file>`) and fix the code they exercise, or add your \
-                         own tests alongside them. If the requested behaviour genuinely conflicts with an existing test, \
-                         keep the code change, leave the test as it was, and explain the conflict in your answer.\
-                         </system-reminder>"
+                        "<system-reminder>{note}</system-reminder>"
                     )));
                 }
             }
