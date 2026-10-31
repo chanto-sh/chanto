@@ -146,8 +146,11 @@ impl InstallMethod {
         }
     }
 
-    /// Look at the files next to `exe` (a couple of tiny reads).
+    /// Look at the files next to `exe` (a couple of tiny reads). Homebrew's
+    /// `bin/chanto` is a link into its Cellar, so this goes by the real file.
     pub fn detect(exe: &Path) -> InstallMethod {
+        let real = exe.canonicalize();
+        let exe = real.as_deref().unwrap_or(exe);
         let installer = std::fs::read_to_string(exe.with_file_name("chanto.install-method"))
             .is_ok_and(|s| s.trim() == "installer");
         let cargo = exe
@@ -509,6 +512,24 @@ mod tests {
         assert!(Cargo.command().starts_with("cargo install"));
         assert_eq!(Installer.command(), "chanto upgrade");
         assert!(Unknown.command().contains("install."));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detection_follows_a_link_into_the_homebrew_cellar() {
+        let dir =
+            std::env::temp_dir().join(format!("chanto-method-{}", uuid::Uuid::new_v4().simple()));
+        let cellar = dir.join("Cellar/chanto/1.0.0/bin");
+        std::fs::create_dir_all(&cellar).unwrap();
+        std::fs::write(cellar.join("chanto"), "").unwrap();
+        let bin = dir.join("bin");
+        std::fs::create_dir(&bin).unwrap();
+        std::os::unix::fs::symlink(cellar.join("chanto"), bin.join("chanto")).unwrap();
+        assert_eq!(
+            InstallMethod::detect(&bin.join("chanto")),
+            InstallMethod::Homebrew
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
