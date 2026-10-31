@@ -1275,7 +1275,8 @@ mod tests {
             "sk_live_0123456789abcdefABCD",
             "sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
             "sk-proj-abcdefghijklmnopqrstuvwxyz0123456789AB",
-            "AIzaSyA-0123456789abcdefghijklmnopqrstu ",
+            // Split so secret scanners don't take the fake for a real key.
+            concat!("AIza", "SyA-0123456789abcdefghijklmnopqrstu "),
             "npm_abcdefghijklmnopqrstuvwxyz0123456789",
             "pypi-AgEIcHlwaS5vcmcCJGFiY2RlZmdoaWprbG1ub3BxcnN0dXZ3eHl6MDEyMzQ1Njc4OQ",
             concat!("hf_", "abcdefghijklmnopqrstuvwxyzABCDEFGH"),
