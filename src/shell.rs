@@ -5,6 +5,12 @@
 //! PowerShell, then cmd.exe. `CHANTO_SHELL` overrides the choice; everything
 //! that needs to run a command goes through here so there is one place to get
 //! it right.
+//!
+//! The one exception is on Windows with the sandbox on: Git Bash can't start
+//! under its restricted token (its runtime creates objects only the user's own
+//! SID may write, which is what the token must not have), so the shell tool
+//! uses PowerShell there; see [`tool_shell`]. Hooks and other commands the
+//! user wrote run unsandboxed and keep [`shell`].
 
 use std::path::{Path, PathBuf};
 
@@ -103,17 +109,47 @@ pub fn shell() -> (String, Vec<&'static str>) {
         if let Some(p) = windows_bash() {
             return (p.display().to_string(), vec!["-c"]);
         }
-        if let Some(p) = find_on_path("pwsh.exe") {
-            return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
-        }
-        if let Some(p) = find_on_path("powershell.exe") {
-            return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
-        }
-        (
-            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
-            vec!["/C"],
-        )
+        windows_native_shell()
     }
+}
+
+#[cfg(windows)]
+fn windows_native_shell() -> (String, Vec<&'static str>) {
+    if let Some(p) = find_on_path("pwsh.exe") {
+        return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
+    }
+    if let Some(p) = find_on_path("powershell.exe") {
+        return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
+    }
+    (
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
+        vec!["/C"],
+    )
+}
+
+/// Set at startup from `[sandbox] enabled`. Not changed by `/sandbox`, so the
+/// shell the model was told about stays the shell for the whole session.
+static SANDBOXED_TOOL_SHELL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_sandboxed_tool_shell(on: bool) {
+    SANDBOXED_TOOL_SHELL.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The shell the model's commands run in.
+pub fn tool_shell() -> (String, Vec<&'static str>) {
+    #[cfg(windows)]
+    if SANDBOXED_TOOL_SHELL.load(std::sync::atomic::Ordering::Relaxed)
+        && std::env::var("CHANTO_SHELL").map_or(true, |s| s.trim().is_empty())
+    {
+        return windows_native_shell();
+    }
+    shell()
+}
+
+/// The quoting rules of [`tool_shell`].
+pub fn tool_flavor() -> Flavor {
+    flavor_of(&tool_shell().0)
 }
 
 /// A bash that runs Windows programs in Windows paths: Git Bash (or MSYS2,

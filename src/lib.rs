@@ -1107,6 +1107,7 @@ async fn setup_session(
             });
         }
     }
+    crate::shell::set_sandboxed_tool_shell(cfg.sandbox.enabled);
     tools::bash::SANDBOX_ACTIVE.store(
         cfg.sandbox.enabled && tools::bash::sandbox_supported(),
         std::sync::atomic::Ordering::Relaxed,

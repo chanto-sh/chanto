@@ -1651,8 +1651,15 @@ pub fn system_prompt(p: &PromptInputs) -> String {
         std::env::consts::OS,
         std::env::consts::ARCH
     ));
+    let shell = match crate::shell::tool_flavor() {
+        crate::shell::Flavor::Posix => "bash",
+        crate::shell::Flavor::PowerShell => {
+            "PowerShell, not bash: write commands in its syntax (Windows PowerShell 5 has no `&&`; use `;` or `if ($?)`)"
+        }
+        crate::shell::Flavor::Cmd => "cmd.exe, not bash: write commands in its syntax, on one line",
+    };
     s.push_str(&format!(
-        "- Shell: bash\n- Date: {}\n",
+        "- Shell: {shell}\n- Date: {}\n",
         chrono::Local::now().format("%Y-%m-%d")
     ));
     s.push_str(&format!("- Model: {}\n", p.model));
