@@ -321,14 +321,17 @@ pub fn warm(root: &Path) {
 
 fn project_env_files(root: &Path) -> Vec<PathBuf> {
     let mtime = |d: &Path| std::fs::metadata(d).and_then(|m| m.modified()).ok();
-    if let Some((r, dirs, files)) = LAST_WALK.lock().unwrap().as_ref()
+    // Held through the walk: the first turn's refresh waits for the background
+    // one and reuses its result instead of walking the project a second time.
+    let mut last = LAST_WALK.lock().unwrap();
+    if let Some((r, dirs, files)) = last.as_ref()
         && r == root
         && dirs.iter().all(|(d, t)| mtime(d) == *t)
     {
         return files.clone();
     }
     let (seen, out) = walk_env_files(root);
-    *LAST_WALK.lock().unwrap() = Some((root.to_path_buf(), seen, out.clone()));
+    *last = Some((root.to_path_buf(), seen, out.clone()));
     out
 }
 
