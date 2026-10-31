@@ -62,8 +62,9 @@
       "tests/perf/stress.py: a long session and a large tree, against the fake",
       "model. Ceilings from the last 16 Linux and macOS runs (October 31, 2026:",
       "long session 39.5 MB, large tree 32 MB, resume 25.5 MB and 0.15 s): about",
-      "1.25 times for memory and 1.5-3 times for step times, which vary more on a",
-      "shared runner. drift:",
+      "1.25 times for memory. Step times swing about 3x between runner instances",
+      "(grep_count: 0.8 s typically, 2.73 s on a slow macOS one), so about 2 times the",
+      "slowest seen. drift:",
       "the last quarter's median gap between model requests may be at most",
       "this times the first quarter's, plus 2 ms.",
       "grep_vs_rg: Grep for paths may take at most this times `rg -l` on the",
@@ -79,7 +80,7 @@
     "large_tree": {
       "files": 30000,
       "rss_mb": 40,
-      "step_s": {"glob_all": 0.3, "grep_paths": 2, "grep_count": 2, "read_large": 0.2, "read_c": 0.2, "edit_c": 0.6},
+      "step_s": {"glob_all": 0.6, "grep_paths": 4, "grep_count": 6, "read_large": 0.4, "read_c": 0.4, "edit_c": 1.2},
       "grep_vs_rg": 2.0,
       "timeout_s": 900
     },
