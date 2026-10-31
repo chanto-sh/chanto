@@ -250,6 +250,19 @@ class MarkdownTest(unittest.TestCase):
         report["shells"] = []
         self.assertIn("| Login shells, read-only session | | 0 | | 0 | pass |", gate.markdown(report))
 
+    def test_a_first_screen_that_waits_on_a_big_folder_fails(self):
+        report = self.report("pass")
+        report["big_folder"] = {"empty_ms": 4.0, "big_ms": 130.0}
+        report["ok"] = False
+        text = gate.markdown(report)
+        self.assertIn("| First screen, 100,000-file folder vs empty (ms) | | +126.0 | | 50 | fail |", text)
+        self.assertIn("waits on the folder it starts in", text)
+
+    def test_a_first_screen_unaffected_by_a_big_folder_passes(self):
+        report = self.report("pass")
+        report["big_folder"] = {"empty_ms": 4.0, "big_ms": 5.5}
+        self.assertIn("| First screen, 100,000-file folder vs empty (ms) | | +1.5 | | 50 | pass |", gate.markdown(report))
+
     def test_a_missing_base_is_named(self):
         report = self.report("pass")
         report["base"] = None

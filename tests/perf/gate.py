@@ -13,6 +13,10 @@ time is zero:
             run of it must start no login shell: a session that runs no
             command needs no snapshot of the user's shell setup (Unix;
             $SHELL is a logging `bash`).
+  first screen  the interactive app's startup, in a folder of 100,000 files
+            and in an empty one: the big folder may not cost more than
+            BIG_FOLDER_SLACK_MS before the first screen, since nothing there
+            should walk the project (Unix; it runs in a pseudo-terminal).
 
 Each one is compared with the same measurement of another binary (in CI, the
 pull request's base commit built from its own source) and with a fixed
@@ -371,6 +375,73 @@ def shell_starts(binary, work, home, project):
     return [line for line in log.read_text().splitlines() if line.startswith("bash ")]
 
 
+# How much longer the first screen may take in a folder of 100,000 files than
+# in an empty one. A walk of that folder before the first screen costs over
+# 100 ms (the secret-file scan once did); without one the two match within a
+# few milliseconds.
+BIG_FOLDER_SLACK_MS = 50
+
+
+def first_screen_ms(binary, cwd, home):
+    """Milliseconds from the interactive app's start to its first screen
+    (`setup done` in CHANTO_TIMING's log), run in a pseudo-terminal in `cwd`."""
+    import fcntl, pty, re, select, signal, struct, termios
+
+    env = dict(child_env(home, 1), CHANTO_TIMING="1", TERM="xterm-256color")
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(cwd)
+        os.execve(binary, [binary], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    out, found, start = b"", None, time.monotonic()
+    while found is None and time.monotonic() - start < 20:
+        if select.select([fd], [], [], 0.05)[0]:
+            try:
+                out += os.read(fd, 65536)
+            except OSError:
+                break
+        found = re.search(rb"\[timing\]\s+([\d.]+) ms\s+setup done", out)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    os.close(fd)
+    if found is None:
+        raise GateError(f"{binary} never reached its first screen in {cwd}")
+    return float(found.group(1))
+
+
+def big_folder_startup(binary, work, runs=3):
+    """The interactive app's median time to its first screen in an empty
+    folder and in one of 100,000 files: {"empty_ms", "big_ms"}.
+
+    None on Windows, which has no pseudo-terminal of this kind.
+    """
+    if sys.platform == "win32":
+        return None
+    root = work / "first-screen"
+    home = root / "home"
+    (home / "chanto").mkdir(parents=True, exist_ok=True)
+    # Answers the first-run question about error reports, which would
+    # otherwise come before the first screen.
+    (home / "chanto" / "config.toml").write_text("[feedback]\nshare_errors = false\n")
+    empty = root / "empty"
+    empty.mkdir(exist_ok=True)
+    big = root / "big"
+    for i in range(1000):
+        d = big / f"pkg{i}"
+        d.mkdir(parents=True, exist_ok=True)
+        for j in range(100):
+            (d / f"f{j}").touch()
+    times = {"empty_ms": [], "big_ms": []}
+    for _ in range(runs):
+        times["empty_ms"].append(first_screen_ms(binary, empty, home))
+        times["big_ms"].append(first_screen_ms(binary, big, home))
+    return {k: statistics.median(v) for k, v in times.items()}
+
+
+def big_folder_slow(big_folder):
+    return big_folder is not None and big_folder["big_ms"] - big_folder["empty_ms"] > BIG_FOLDER_SLACK_MS
+
+
 class StartupBench:
     """One long-lived mock, so a one-shot run pays for nothing but Chanto."""
 
@@ -651,6 +722,7 @@ def run(head, base, config, device=False):
 
         project, scenario = write_turn_scenario(work, turns, blob_kb)
         shells = shell_starts(head, work, home, project)
+        big_folder = big_folder_startup(head, work)
         for i in range(warmup + reps["turns"]):
             for name, binary in alternating(binaries, i):
                 usage = turn_run(
@@ -694,6 +766,7 @@ def run(head, base, config, device=False):
         "metrics": metrics,
         "helpers": helpers,
         "shells": shells,
+        "big_folder": big_folder,
     }
     if device_metrics is not None:
         report["device"] = {
@@ -701,7 +774,7 @@ def run(head, base, config, device=False):
             "reps": cfg["device"]["reps"],
             "metrics": device_metrics,
         }
-    report["ok"] = not helpers and not shells and all(
+    report["ok"] = not helpers and not shells and not big_folder_slow(big_folder) and all(
         m["verdict"] == "pass"
         for group in (report["metrics"], report.get("device", {}).get("metrics", {}))
         for m in group.values()
@@ -758,6 +831,13 @@ def markdown(report):
             f"| Login shells, read-only session | | {len(shells)} | | 0 | "
             f"{'pass' if not shells else 'fail'} |"
         )
+    big_folder = report.get("big_folder")
+    if big_folder is not None:
+        extra = big_folder["big_ms"] - big_folder["empty_ms"]
+        lines.append(
+            f"| First screen, 100,000-file folder vs empty (ms) | | {extra:+.1f} | | "
+            f"{BIG_FOLDER_SLACK_MS} | {'fail' if big_folder_slow(big_folder) else 'pass'} |"
+        )
     passing = [label(k) for k, m in report["metrics"].items() if m["verdict"] == "pass"]
     device = report.get("device", {})
     if report["ok"]:
@@ -776,6 +856,10 @@ def markdown(report):
         if shells:
             lines += ["**A session that ran no command started a login shell:** "
                       + "; ".join(f"`{c[:80]}`" for c in shells[:3])]
+        if big_folder_slow(big_folder):
+            lines += ["**The first screen waits on the folder it starts in:** "
+                      f"{big_folder['big_ms']:.0f} ms in 100,000 files against "
+                      f"{big_folder['empty_ms']:.0f} ms in an empty folder"]
         if failed_device:
             lines += ["**The small device could not keep up:** "
                       + ", ".join(failed_device)]
