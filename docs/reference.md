@@ -6,7 +6,7 @@ Full reference for every feature. The [README](../README.md) is the overview.
 
 A fast, local-first agentic coding CLI written in Rust, built around one rule: it has to prove its work before it calls the job done. It runs against **local models** through Ollama's native API or any OpenAI-compatible server (llama.cpp `llama-server`, LM Studio, vLLM, MLX, …), and against hosted models: the native **Anthropic Messages** and **OpenAI Responses** APIs, OpenAI-compatible services (OpenRouter, Gemini, DeepSeek, Groq and others; `chanto providers` lists them), and Amazon Bedrock, Google Vertex AI and Azure.
 
-- **Single binary** (about 17 MB), starts instantly, uses little memory
+- **Single binary** (about 20 MB), starts instantly, uses little memory
 - **Full-screen or [inline](#inline-mode) TUI**: streaming markdown, collapsible tool, diff and thinking blocks (click or `ctrl+o`), mouse scrolling, permission dialogs, slash and `@file` completion (gitignored files are offered last, marked, and `.git` never), todo panel, and a status bar with context usage and tokens/s
 - **Reads the setup you already have**: existing Claude Code and Codex settings, permission rules, hooks, MCP servers, instruction files, skills, commands/prompts and subagents carry over, so switching doesn't mean starting from an empty config (see [Compatibility](#claude-code-and-codex-compatibility))
 - **Multi-model**: named providers (`[providers.lmstudio]`, `[providers.llamacpp]`, …) referenced as `provider/model`, so the main agent, subagents (`subagent_model`) and the auto-mode classifier (`classifier_model`) can each use a different model or server. Switch live with `/model`.
@@ -23,7 +23,7 @@ Cycle with `shift+tab`: `default` → `acceptEdits` → `plan` → `auto`, plus 
 
 ## Tools
 
-`Read` (text, images, PDF, notebooks), `Write`, `Edit`, `MultiEdit` (a file that isn't UTF-8 is refused with its likely encoding, UTF-16 or Latin-1, and an `iconv` command to convert it; a `Write` or `Edit` whose arguments arrived as broken JSON, likely cut off, isn't run on a repaired guess: the model is asked to resend it in smaller pieces), `NotebookEdit`, `Glob`, `Grep` (ripgrep), `Ls`, `RepoMap` (a ranked, token-budgeted map of the project's symbols (functions, types, classes, modules), most-referenced first, for getting oriented in a large or unfamiliar tree before grepping; `path` limits it to a subdirectory, `tokens` sets the budget, default 1024), `SemanticSearch` (vector search over the codebase: files are split into overlapping chunks and embedded through the `[embeddings]` provider, the vectors are cached under `~/.chanto/cache/embeddings/` and refreshed when a file changes, and results are ranked by cosine similarity; `query` is required, `k` (default 8) and `path` are optional), `Bash` (persistent cwd inside the project and `--add-dir`/`additionalDirectories` directories: a command that ends outside them, like `cd /`, leaves the shell back at the project root and the output says `Shell cwd was reset to <root>`; `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` (or `CHANTO_BASH_MAINTAIN_PROJECT_WORKING_DIR`) starts every command at the project root, timeouts, background shells via `BashOutput`/`KillShell`; runs through bash on Unix, with your shell's PATH, variables, aliases and functions (see [Your shell setup in Bash](#your-shell-setup-in-bash)), and through a `bash`/PowerShell/cmd on Windows, whichever exists (override with `CHANTO_SHELL`); files a command changed show as a diff), `Monitor` (runs a command in the background and hands each line it prints to the model as it arrives, so it reacts to a log, a file change or a CI status without polling; ends when the command exits or at `timeout_ms`, default 5 minutes, at most 30 (10 in `-p` runs, which wait for the watch to finish); it is a background shell, so `/bashes`, `BashOutput` and `KillShell` see it, and `Bash(...)` permission rules apply to its command), `CronCreate`/`CronList`/`CronDelete` and `ScheduleWakeup` (in-session scheduled prompts and the self-paced `/loop`; offered in the TUI and the `--plain` REPL only, and not at all with `CLAUDE_CODE_DISABLE_CRON=1`), `WebSearch`, `WebFetch`, `Browser` (Chrome over CDP: navigate, snapshot with element refs, click, type, keys, screenshots for vision models, tabs, JS eval), `Computer` (opt-in desktop control: screenshots, mouse, keyboard, apps; see [Computer use](#computer-use)), `TodoWrite`, `Task` (subagents with their own context), `AskUserQuestion`, `ExitPlanMode`, `Skill`
+`Read` (text, images, PDF, notebooks), `Write`, `Edit`, `MultiEdit` (a file that isn't UTF-8 is refused with its likely encoding, UTF-16 or Latin-1, and an `iconv` command to convert it; a `Write` or `Edit` whose arguments arrived as broken JSON, likely cut off, isn't run on a repaired guess: the model is asked to resend it in smaller pieces), `NotebookEdit`, `Glob`, `Grep` (ripgrep), `Ls`, `RepoMap` (a ranked, token-budgeted map of the project's symbols (functions, types, classes, modules), most-referenced first, for getting oriented in a large or unfamiliar tree before grepping; `path` limits it to a subdirectory, `tokens` sets the budget, default 1024), `SemanticSearch` (vector search over the codebase: files are split into overlapping chunks and embedded through the `[embeddings]` provider, the vectors are cached under `~/.chanto/cache/embeddings/` and refreshed when a file changes, and results are ranked by cosine similarity; `query` is required, `k` (default 8) and `path` are optional), `Bash` (persistent cwd inside the project and `--add-dir`/`additionalDirectories` directories: a command that ends outside them, like `cd /`, leaves the shell back at the project root and the output says `Shell cwd was reset to <root>`; `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` (or `CHANTO_BASH_MAINTAIN_PROJECT_WORKING_DIR`) starts every command at the project root, timeouts, background shells via `BashOutput`/`KillShell`; runs through bash on Unix, with your shell's PATH, variables, aliases and functions (see [Your shell setup in Bash](#your-shell-setup-in-bash)), and through a `bash`/PowerShell/cmd on Windows, whichever exists (override with `CHANTO_SHELL`); files a command changed show as a diff), `Monitor` (runs a command in the background and hands each line it prints to the model as it arrives, so it reacts to a log, a file change or a CI status without polling; ends when the command exits or at `timeout_ms`, default 5 minutes, at most 30 (10 in `-p` runs, which wait for the watch to finish); it is a background shell, so `/bashes`, `BashOutput` and `KillShell` see it, and `Bash(...)` permission rules apply to its command), `CronCreate`/`CronList`/`CronDelete` and `ScheduleWakeup` (in-session scheduled prompts and the self-paced `/loop`; offered in the TUI and the `--plain` REPL only, and not at all with `CLAUDE_CODE_DISABLE_CRON=1`), `WebSearch`, `WebFetch`, `Browser` (Chrome over CDP: navigate, snapshot with element refs, click, type, keys, screenshots for vision models, tabs, JS eval), `Computer` (opt-in desktop control: screenshots, mouse, keyboard, apps; see [Computer use](#computer-use)), `TodoWrite`, `Task` (subagents with their own context), `AskUserQuestion`, `ExitPlanMode`, `Skill`, `Memory` (see [Durable memory](#durable-memory)), `Lsp` (see [Language servers](#language-servers)), `ToolSearch` (see [MCP servers](#mcp-servers)), `ChantoCloud` (cloud runs and agents, once you've signed in with `chanto cloud login`)
 
 ## Sandbox
 
@@ -37,7 +37,7 @@ The sandbox is on by default (macOS Seatbelt, Linux Landlock, and on Windows a w
 - **Windows status:** commands run under a restricted copy of your own token (`WRITE_RESTRICTED`) inside a job object. No administrator, driver, extra account or AppContainer is needed. What's enforced: writes are limited to the project, the temp dir, `allow_write` and `--add-dir` paths, the package managers' download caches (`.cargo\registry`, `.cargo\git`, `.gradle\caches`, `.m2\repository`, `.bun\install\cache`, `go\pkg` and `.nuget\packages` in your profile; the npm, pnpm, Yarn, pip, uv, Go build and Poetry caches under `%LOCALAPPDATA%`), plus the rare locations that grant write access to Everyone; and the job kills every descendant when the shell or the launcher exits (the launcher also watches the Chanto process). What isn't: none of the read-only guards above apply, and reads are not restricted at all (Windows only consults a write-restricted token's extra SIDs for writes), so `deny_read` and the built-in credential denials don't apply and commands can read anything you can. The network isn't restricted either: `network = "deny"` gets a startup warning and commands keep network access, and `network = "allowlist"` fails closed with an error. With `sandbox.auto_allow`, Chanto warns at startup that auto-allowed commands can read credentials and use the network.
 - On Windows each writable root gets its own write SID (derived from its path) and an inheritable allow ACE for it. The ACE stays on the directory after the command: the first grant on a big tree waits while Windows propagates it to existing files, later commands only check it. The tool caches are granted in the background when Chanto starts, so commands don't wait on them. It grants nothing to ordinary processes, since that SID can only narrow a token's access. Files with protected ACLs, or moved in from elsewhere with their own ACL, stay read-only inside the sandbox. Grant paths must be on an ACL-capable filesystem, and setup failures stop the command rather than running it without isolation. WSL shells can't be contained and are refused. If the startup probe fails, Chanto warns and runs commands unsandboxed, as on any system without a sandbox.
 - When the sandbox blocks a command, the model can retry it with `dangerouslyDisableSandbox: true`. That is never automatic and always needs a human: you're asked in default, acceptEdits and plan modes, auto mode asks too (the classifier does not get to hand the sandbox back), and only bypass mode allows it. An explicit `Bash(...)` allow rule you wrote also covers it.
-- `/sandbox` shows the policy and `/sandbox on|off` toggles it for the session; `[sandbox] enabled = false` turns it off. `--sandbox read-only | workspace-write | danger-full-access` work as in Codex.
+- `/sandbox` shows the policy and `/sandbox on|off` toggles it for the session; `[sandbox] enabled = false` turns it off. `--sandbox read-only | workspace-write | danger-full-access` work as in Codex; `[sandbox] read_only = true` sets the read-only policy in config, whatever the permission mode.
 - In allowlist mode, `allowed_domains` accepts exact names and `*.example.org` (subdomains only); `denied_domains` wins over allowed entries. Omit `allowed_domains` to use package registry defaults for GitHub, npm/Yarn, PyPI, crates.io, Go modules, Maven Central and RubyGems. An explicit `[]` permits nothing. IP literals, including loopback, require an exact entry.
 - Commands receive `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lowercase equivalents, with `NO_PROXY=localhost`. HTTPS uses CONNECT; plain HTTP checks Host and the request target. A lazy loopback proxy uses separate credentials and policies for each command. Tools that ignore proxy settings cannot connect directly to normal service ports.
 - macOS Seatbelt restricts outbound traffic to the proxy's loopback endpoint. Linux requires Landlock ABI v4 for `deny` or `allowlist`, restricts TCP connects to the proxy port, and uses seccomp to block UDP/raw/packet sockets and io_uring bypasses. Landlock port rules apply to every destination address, so Linux also permits TCP connections to that same port on other hosts; it cannot enforce the loopback address. Unix sockets remain available for local DNS services. Unsupported kernels fail closed with an actionable error; `network = "allow"` retains unrestricted networking.
@@ -282,6 +282,8 @@ With Homebrew (macOS and Linux):
 brew install chanto-sh/tap/chanto
 ```
 
+To embed the agent in a web page, `npm install @chanto/web`: the agent loop and its file tools as WebAssembly, working on a project held in memory, with the model supplied by the page. There's no shell. It's experimental, and its interface may change in any release; see [`web/README.md`](../web/README.md).
+
 Each release renders the formula from `packaging/homebrew/chanto.rb` (version
 and archive checksums), uploads it as a `homebrew-formula` artifact, and pushes
 it to the [chanto-sh/homebrew-tap](https://github.com/chanto-sh/homebrew-tap)
@@ -327,7 +329,10 @@ Requirements: a model, either a hosted provider (a key or login) or a local serv
 ```sh
 chanto                                  # interactive TUI
 chanto "fix the failing tests"          # TUI with an initial prompt
-chanto -p "explain src/main.rs"         # print mode (non-interactive)
+chanto -p "explain src/main.rs"         # print mode (non-interactive); `chanto exec "…"` is the same
+chanto -p --max-turns 20 "…"            # stop after 20 model turns (default 500; also `max_turns`)
+chanto -C ../other-repo                 # work in another directory (also --cwd, --cd)
+chanto --no-think                       # turn model reasoning off (also `think = false`)
 chanto -p --mode auto "add a --json flag and tests"
 chanto -p --output-format json "…"      # machine-readable result (usage, duration, num_turns and tool_calls for the whole session, compaction included)
 chanto -c                               # continue the last session here (an unreadable one is reported, with the newest readable one resumed instead)
@@ -606,6 +611,10 @@ The Chanto directory (`~/.chanto` throughout these docs: config, sessions, logs,
 provider = "ollama"
 model = "qwen3-coder:30b"
 num_ctx = 32768
+show_thinking = true                # false leaves streamed reasoning out of the TUI
+tool_protocol = "native"            # native (falls back to text when needed) | text (always use the text tool-call protocol)
+apply_patch_tool = false            # offer the apply_patch tool to models (it's accepted when called either way)
+primer = true                       # first turn: list the project's files and attach small files the request names
 think = true                        # if reasoning starts repeating itself, that step is retried without thinking
 effort = "high"                     # reasoning effort: low | medium | high | xhigh | max (default: the provider's). Also --effort, /effort, /think <level>
 mode = "default"
@@ -629,13 +638,22 @@ mcp_tool_timeout = 600              # seconds an MCP tool call may take (a serve
 allow = ["Bash(cargo test:*)", "Bash(npm run lint:*)"]
 deny  = ["Bash(git push:*)"]
 auto_mode_rules = ["Never modify files under migrations/"]
+auto_deny_after_secs = 75           # auto mode: deny a prompt nobody answers after this long (0: wait)
+additional_directories = ["../shared"] # directories outside the project treated as part of the workspace
 
 [web]
 search_backend = "auto"             # duckduckgo by default; brave/tavily/searxng with keys
 search_min_gap_ms = 1500            # key-less searches are paced per engine; a blocked engine cools down (0 disables pacing)
+# brave_api_key, tavily_api_key     # keys for those backends (or BRAVE_API_KEY, TAVILY_API_KEY)
+# searxng_url = "http://localhost:8888"
+fetch_max_chars = 30000             # page content WebFetch returns
+condense_with_model = false         # true: the model condenses long pages against the prompt (slow on local models)
 
 [browser]
 headless = false
+# chrome_path = "/path/to/chrome"    # default: found automatically
+# port = 9222                       # attaches if something already listens there
+# user_data_dir = "/path/to/profile" # keeps logins between runs
 
 [embeddings]                        # SemanticSearch's embedding endpoint
 provider = "ollama"                 # ollama (default) | openai
@@ -652,7 +670,7 @@ base_url = "http://localhost:1234/v1"
 kind = "anthropic"                  # key from api_key or ANTHROPIC_API_KEY
 
 [sandbox]
-enabled = true                      # macOS: Bash writes limited to project + temp/caches
+enabled = true                      # on by default: Bash writes limited to project + temp/caches
 auto_allow = true                   # auto mode: sandboxed commands skip the classifier
 
 [mcp_servers.github]
@@ -1490,6 +1508,8 @@ How it works:
 - `--fallback-model` and `fallback_model` work like Claude Code's `--fallback-model` and `fallbackModel` (a chain of up to three, tried in order, for the current turn only, with a notice when it switches). Chanto also switches when a local model server refuses the connection, which Claude Code treats as a transport error. Claude Code's `fallbackModel` setting isn't imported, since its model names don't apply to other providers. See [Fallback models](#fallback-models).
 - `compat.codex_rules = true` also imports the command approvals in `~/.codex/rules/*.rules` (`prefix_rule`) as Bash allow, ask and deny rules.
 
+`chanto migrate <tool> [--path <file>] [--apply]` translates another agent's configuration (`opencode`, `continue`, `cline`, `cursor`, `windsurf`, `aider`, or any file with `--path`) into Chanto's, using your configured model. It shows the result for review; `--apply` backs up your config and merges it into `~/.chanto/config.toml`.
+
 ### Other tools' instruction files
 
 Chanto also reads the instruction files other coding tools keep, in each directory from the repository root down to the working directory:
@@ -1594,6 +1614,8 @@ L4:10 error: cannot move out of `v` because it is borrowed [rustc E0505]
 command = "zls"
 extensions = ["zig"]
 ```
+
+In a project with more than 20,000 files, reading a file doesn't start a language server (the first edit does), and clangd runs only with a compilation database.
 
 Some servers run project code: rust-analyzer runs build scripts and proc macros, typescript-language-server loads the project's own TypeScript, gopls may download toolchains, and pylsp loads linter plugins. These only start in trusted folders. pyright and clangd run anywhere. Servers only start for files inside the project or an `--add-dir` directory, with at most 4 running at once. In a Cargo workspace, one rust-analyzer serves all member crates. `[lsp]` in a project config is ignored until the folder is trusted. Set `CHANTO_LSP_DEBUG=1` to log server traffic to stderr.
 
@@ -1824,13 +1846,18 @@ Benchmark variants turn on the experimental optimizations below: `chanto+concise
 
 ## Optimizations (experimental)
 
-Speed and token optimizations that are **off by default** while they're being measured against the benchmark; each has its own switch so it can be measured on its own. Turn them on in config, or for one run with `CHANTO_OPTIMIZE=concise,quiet,provenance` (or `all`):
+Speed and token optimizations, each with its own switch so it can be measured on its own against the benchmark. Most are **off by default**; `adaptive_effort` and `stable_prefix` are on. Set them in config, or for one run with `CHANTO_OPTIMIZE=concise,quiet,provenance,spec,defer,token,noprefix,noadaptive` (`all` turns on the first three):
 
 ```toml
 [optimize]
 concise_prose = true      # brief prose replies
 quiet = true              # quiet mode: no narration, one short summary, a quiet view (see below)
 provenance = true         # flag numeric claims and identifiers not found in this turn's tool outputs
+spec_check = true         # treat a written spec as the contract and exercise the result against it
+defer_tools = true        # keep rarely used built-in tools behind ToolSearch
+token_classifier = true   # auto mode: settle ALLOW from a one-token answer's probabilities
+adaptive_effort = false   # on by default: low effort once a turn is under way
+stable_prefix = false     # on by default: per-project context goes in the first user message
 ```
 
 - **`concise_prose`** adds a short instruction to the system prompt: lead with the result, no recaps of what was done or restating the task, short status updates between tool calls. It says explicitly that it never applies to code, tool arguments, file contents or reasoning. It's part of the session's fixed system prompt, so the prompt prefix (and a local server's cache) stays the same from request to request. It's skipped when the Concise output style is already selected, which says the same.
@@ -1839,6 +1866,9 @@ provenance = true         # flag numeric claims and identifiers not found in thi
   - *`--quiet`* (or `/quiet on|off` during a session) turns on the model side and a quiet view. In the TUI, while the agent works you see only the spinner and the status line (the tool running now, how many tool calls so far, elapsed time and tokens), plus permission prompts and questions. The turn's intermediate text, thinking and tool blocks stay out of the transcript but are still recorded: ctrl+o or `/transcript` shows them (inline mode prints the last turn's steps), and the session history is intact, so "what did you do?" works as usual. The final summary shows normally, and spend-guard notices, warnings, errors and verification results always show. `--plain` prints the same way (`/transcript` lists the last turn's steps), and `-p` text prints only the final summary even with `--verbose`; `--output-format json` and `stream-json` are unchanged.
   - *Preset*: `--quiet` without `--mode` starts in auto mode, so safety is auto mode's: risky actions still ask, and the sandbox still applies. An explicit `--mode` (or `--dangerously-skip-permissions`, `--full-auto`, `--sandbox`) wins. `quiet = true` in config (or `CHANTO_OPTIMIZE=quiet`) turns on the model side and the quiet view but leaves the mode alone.
 - **`provenance`** (`chanto+provenance`) checks the final answer's numbers, environment-variable names, file paths and function-call identifiers against tool output from the current turn. When a claim isn't found, the model is told once more and asked to re-check it against the code or the tool output (a single bounded bounce, so it never loops); the warning is always shown, and nothing is blocked or re-asked again. This deterministic prototype can miss unsupported prose or flag a valid claim expressed differently; user messages, earlier turns and answers given without any tool call are not checked.
+
+- **`adaptive_effort`** (on by default): from the first reply in a turn that only called tools, later calls in that turn ask for `low` reasoning effort, so the effort changes at most once a turn. `false` keeps the provider's default on every call.
+- **`stable_prefix`** (on by default): only Chanto's fixed instructions go in the system message; the environment, git status, skills, subagents, MCP servers and instruction files go at the top of the first user message, so the system message and tool list are cached across sessions and directories.
 
 OpenAI's Predicted Outputs aren't included: the `prediction` parameter is a Chat Completions feature of GPT-4o and GPT-4.1 models only, it can't be combined with `tools` (function calling), and the file content a tool call is about to write isn't known before the model writes it, so there's no sound way to use it in a tool-calling agent loop.
 

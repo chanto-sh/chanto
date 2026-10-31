@@ -60,7 +60,7 @@ Each background run works in its own git worktree and branch while you keep goin
 
 ## Configuration
 
-Settings live in `~/.chanto/config.toml` (global), `./.chanto/config.toml` (project) and `./.chanto/config.local.toml` (personal). `chanto --example-config` prints a template with every option.
+Settings live in `~/.chanto/config.toml` (global), `./.chanto/config.toml` (project) and `./.chanto/config.local.toml` (personal). `chanto --example-config` prints a commented template of the common options.
 
 ```toml
 provider = "ollama"

@@ -43,7 +43,7 @@ npm i -g @chanto/cli                              # npm
 cargo install chanto --locked                     # from source (Rust 1.95+)
 ```
 
-On Windows (PowerShell): `irm https://chanto.sh/install.ps1 | iex`. The installers check the release signature and the download's checksum and put `chanto` in `~/.local/bin`; `chanto upgrade` updates it.
+On Windows (PowerShell): `irm https://chanto.sh/install.ps1 | iex`. The installers check the release signature and the download's checksum and put `chanto` in `~/.local/bin` (on Windows, `%LOCALAPPDATA%\chanto\bin`); `chanto upgrade` updates it.
 
 ## First run
 
@@ -137,7 +137,7 @@ python3 reproduce.py --quick    # smaller selection; omit --quick for the full c
 
 ## Development
 
-`src/` contains the agent, `proto/` shared wire types, and `docs/` the reference. Building requires Rust 1.95 or newer:
+`src/` contains the agent, `core/` the OS-independent parts of the agent, shared with `web/` (the WebAssembly build), `proto/` shared wire types, and `docs/` the reference. Building requires Rust 1.95 or newer:
 
 ```sh
 cargo build                 # add --release for target/release/chanto
