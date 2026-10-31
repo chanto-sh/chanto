@@ -1029,7 +1029,7 @@ fn is_safe_command_in(cmd: &str, posix: bool) -> bool {
 /// commands to them and one to bash), so for them only commands that mean
 /// the same in every shell count as safe: see [`plain_command`].
 fn posix_shell() -> bool {
-    crate::shell::flavor() == crate::shell::Flavor::Posix
+    crate::shell::tool_flavor() == crate::shell::Flavor::Posix
 }
 
 /// One simple command that reads the same in bash, PowerShell and cmd.exe:

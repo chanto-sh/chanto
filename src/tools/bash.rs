@@ -289,7 +289,7 @@ fn build_command_for_policy(
         None
     };
     let proxy_port = network.as_ref().map(|p| p.port);
-    let (prog, flags) = crate::shell::shell();
+    let (prog, flags) = crate::shell::tool_shell();
     let mut cmd = match sandbox {
         Some(sb) if active && cfg!(target_os = "macos") => {
             let root = crate::permissions::project_root().unwrap_or_else(|| cwd.to_path_buf());
@@ -643,10 +643,11 @@ independent calls in parallel."
             .map(|c| c.scratch.clone())
             .unwrap_or_else(std::env::temp_dir);
         let cwd_file = tmp.join(format!("chanto-cwd-{}", uuid::Uuid::new_v4().simple()));
-        let script = format!(
-            "{}{command}\n__hx_ec=$?\n{PWD} > '{}' 2>/dev/null\nexit $__hx_ec",
-            env_prelude(ctx, &cwd),
-            cwd_file.display()
+        let script = wrap_command(
+            crate::shell::tool_flavor(),
+            &env_prelude(ctx, &cwd),
+            &command,
+            &cwd_file,
         );
         // Bounded concurrency across agents, and don't pile onto a machine that's out of memory.
         let _slot = crate::resources::command_slot().await;
@@ -910,12 +911,84 @@ independent calls in parallel."
 #[path = "bash/output_tests.rs"]
 mod output_tests;
 
+#[cfg(test)]
+mod wrap_tests {
+    use super::wrap_command;
+    use crate::shell::Flavor;
+    use std::path::Path;
+
+    #[test]
+    fn each_shell_gets_a_script_in_its_own_syntax() {
+        let file = Path::new("cwd-file");
+        let posix = wrap_command(Flavor::Posix, "", "ls", file);
+        assert!(posix.starts_with("ls\n__hx_ec=$?\n") && posix.ends_with("exit $__hx_ec"));
+        let ps = wrap_command(Flavor::PowerShell, "", "ls", file);
+        assert!(ps.starts_with("ls\n$__hx_ok = $?;") && ps.contains("'cwd-file'"));
+        assert!(!ps.contains("||") && !ps.contains("/dev/null"), "{ps}");
+        assert_eq!(wrap_command(Flavor::Cmd, "", "dir", file), "dir");
+    }
+
+    /// PowerShell 5, the one every Windows has, parses this script.
+    #[cfg(windows)]
+    #[test]
+    fn powershell_reports_status_and_directory() {
+        let dir =
+            std::env::temp_dir().join(format!("chanto-wrap-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir(&dir).unwrap();
+        let file = dir.join("cwd");
+        let run = |command: &str| {
+            let script = wrap_command(Flavor::PowerShell, "", command, &file);
+            std::process::Command::new("powershell.exe")
+                .args(["-NoProfile", "-Command", &script])
+                .current_dir(&dir)
+                .status()
+                .unwrap()
+                .code()
+        };
+        assert_eq!(run("cmd /c exit 0"), Some(0));
+        assert_eq!(run("cmd /c exit 7"), Some(7));
+        assert_eq!(run("Get-Item no-such-file-here"), Some(1));
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        assert_eq!(run("cd sub"), Some(0));
+        let ended = std::fs::read_to_string(&file).unwrap();
+        assert!(ended.trim_end().ends_with("sub"), "{ended}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
 /// Prints the shell's directory as a path Chanto can open: Git Bash's
 /// `pwd -P` says `/c/Users/…`, which Windows can't resolve, so ask for `C:/Users/…`.
 #[cfg(windows)]
 const PWD: &str = "{ pwd -W || pwd -P; }";
 #[cfg(not(windows))]
 const PWD: &str = "pwd -P";
+
+/// `command` as a script that keeps its exit status and leaves the directory
+/// it ended in at `cwd_file`. cmd.exe runs only one line through `/C`, so a
+/// command there can't report its directory.
+fn wrap_command(
+    flavor: crate::shell::Flavor,
+    prelude: &str,
+    command: &str,
+    cwd_file: &std::path::Path,
+) -> String {
+    use crate::shell::{Flavor, powershell_quote};
+    let file = cwd_file.display();
+    match flavor {
+        Flavor::Posix => {
+            format!("{prelude}{command}\n__hx_ec=$?\n{PWD} > '{file}' 2>/dev/null\nexit $__hx_ec")
+        }
+        // `$?` first: anything after it resets it. `$LASTEXITCODE` alone would
+        // miss a failed cmdlet and repeat an earlier program's status.
+        Flavor::PowerShell => format!(
+            "{prelude}{command}\n$__hx_ok = $?; $__hx_ec = $LASTEXITCODE\n\
+             try {{ [IO.File]::WriteAllText({}, (Get-Location).ProviderPath) }} catch {{}}\n\
+             if ($__hx_ok) {{ exit 0 }} elseif ($__hx_ec) {{ exit $__hx_ec }} else {{ exit 1 }}",
+            powershell_quote(&file.to_string())
+        ),
+        Flavor::Cmd => format!("{prelude}{command}"),
+    }
+}
 
 /// Where the shell stays after a command that ended in `new`: there if it's
 /// inside the project or an added directory (or back at `root` when
@@ -960,7 +1033,9 @@ fn maintain_project_dir() -> bool {
 /// they can build on it. Neither inside a background run's container,
 /// which can't see the files.
 fn env_prelude(ctx: &Ctx, cwd: &std::path::Path) -> String {
-    if crate::runs::container::for_path(cwd).is_some() {
+    if crate::runs::container::for_path(cwd).is_some()
+        || crate::shell::tool_flavor() != crate::shell::Flavor::Posix
+    {
         return String::new();
     }
     format!(
