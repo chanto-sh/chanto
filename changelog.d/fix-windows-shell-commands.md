@@ -1,1 +1,0 @@
-- **Shell commands on Windows.** With the sandbox on, which is the default, commands failed wherever Git Bash was installed, because Git Bash can't start inside the sandbox. They now run in PowerShell there, and the model is told so. Without Git Bash, commands failed in PowerShell with a parse error; that's fixed too. With the sandbox off, Git Bash is still used.

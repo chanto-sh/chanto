@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.1.12 (October 31, 2026)
+
+- **Faster one-shot runs on Windows.** Each start launched a command to check that the sandbox works, even if the run never used the shell. A one-shot run now checks just before its first shell command, and that command waits for the answer, so the sandbox protects it as before. If the sandbox can't start, the warning now appears at that point too.
+- **Shell commands on Windows.** With the sandbox on, which is the default, commands failed wherever Git Bash was installed, because Git Bash can't start inside the sandbox. They now run in PowerShell there, and the model is told so. Without Git Bash, commands failed in PowerShell with a parse error; that's fixed too. With the sandbox off, Git Bash is still used.
+- **`ultra` effort, and `max` on recent OpenAI models.** `--effort ultra` (or `/think ultra`) asks for high reasoning and tells the model to delegate to subagents on its own, modelled on what Codex sends for Ultra. `max` now reaches GPT-5.6 and GPT-6 models through the Responses API; it used to be sent as `xhigh`.
+
 ## v0.1.11 (October 31, 2026)
 
 - **Chanto's agent for web pages, on npm.** Each release now publishes `@chanto/web`: the agent loop and its file tools as WebAssembly, working on a project held in memory, with the model supplied by the page. It's what runs on chanto.sh/try. It's experimental, and its interface may change in any release. The release also attaches it as `chanto-web-vX.Y.Z.tgz`, covered by the signed checksums and build provenance like the CLI archives.

@@ -1,6 +1,6 @@
 [package]
 name = "chanto"
-version = "0.1.11"
+version = "0.1.12"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -47,7 +47,7 @@ fuzzing = []
 schema = ["dep:schemars"]
 
 [dependencies]
-chanto-core = { path = "core", version = "=0.1.11" }
+chanto-core = { path = "core", version = "=0.1.12" }
 chanto-proto = { path = "proto", version = "0.1.0" }
 aho-corasick = "1.1.5"
 memchr = "2.8.3"
