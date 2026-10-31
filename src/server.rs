@@ -1558,6 +1558,61 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn permission_requests_and_questions_reach_the_client_and_come_back() {
+        let (tx, mut rx) = broadcast::channel(16);
+        let frontend = Arc::new(ServerFrontend {
+            tx,
+            pending: Default::default(),
+        });
+        // The client: answer each request by its id, as POST /respond does.
+        let answer = |frontend: Arc<ServerFrontend>, reply: Value| async move {
+            let ev = rx_next(&frontend).await;
+            let id = ev["request_id"].as_str().unwrap().to_string();
+            let (sender, _) = frontend.pending.lock().unwrap().remove(&id).unwrap();
+            sender.send(reply).unwrap();
+            ev
+        };
+        async fn rx_next(frontend: &ServerFrontend) -> Value {
+            loop {
+                if let Some((_, (_, ev))) = frontend.pending.lock().unwrap().iter().next() {
+                    return ev.clone();
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        }
+        let req = PermissionRequest {
+            tool: "Bash".into(),
+            label: "Bash(ls)".into(),
+            detail: "ls".into(),
+            always_label: "ls".into(),
+            reason: Some("lists files".into()),
+            proposed: None,
+            auto_deny: None,
+        };
+        let client = tokio::spawn(answer(
+            frontend.clone(),
+            json!({"decision": "allow_always"}),
+        ));
+        assert_eq!(frontend.permission(req).await, PermissionReply::AllowAlways);
+        let ev = client.await.unwrap();
+        assert_eq!(ev["type"], "permission_request");
+        assert_eq!(ev["tool"], "Bash");
+        assert_eq!(ev["reason"], "lists files");
+        assert_eq!(ev["always_label"], "ls");
+        assert_eq!(rx.recv().await.unwrap()["type"], "permission_request");
+
+        let options = vec!["red".to_string(), "blue".to_string()];
+        let client = tokio::spawn(answer(frontend.clone(), json!({"answer": "blue"})));
+        assert_eq!(
+            frontend.question("Which?", &options).await.as_deref(),
+            Some("blue")
+        );
+        let ev = client.await.unwrap();
+        assert_eq!(ev["type"], "question");
+        assert_eq!(ev["options"], json!(["red", "blue"]));
+    }
+
     #[test]
     fn the_documented_session_body_passes_validation() {
         // `CreateSession` is what sdk/schema.json and the SDKs' types say the
