@@ -71,9 +71,8 @@ def measure(binary, work, reps, turns, blob_kb):
     """Median instruction counts of each workload, and the prompt's size."""
     home = work / "home"
     home.mkdir(exist_ok=True)
-    project = work / "project"
     hello = hello_scenario(work)
-    scenario = gate.write_turn_scenario(work, turns, blob_kb)
+    project, scenario = gate.write_turn_scenario(work, turns, blob_kb)
     out = {"startup": [], "turns": []}
     for _ in range(reps):
         for name, scene, prompt, cwd in (
