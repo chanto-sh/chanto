@@ -94,6 +94,27 @@
     "turn_wall_ms": 6,
     "rss_mb": 23
   },
+  "exact": {
+    "_comment": [
+      "tests/perf/exact.py, on Linux: instruction counts and prompt size. On the",
+      "first run the same binary's runs spread 0.67% (startup) and 0.16% (turns),",
+      "and two builds of the same code differed by 0.04% at most, so a change over",
+      "1% or 0.5% is real. Prompt bytes are exact. Ceilings sit about 2% over that",
+      "run (72.3M and 446M instructions, 23058 bytes), to stop slow creep across",
+      "pull requests. A new Rust version can move instructions: raise them here."
+    ],
+    "reps": 3,
+    "tolerance": {
+      "startup_instructions": 0.01,
+      "turn_instructions": 0.005,
+      "prompt_bytes": 0.01
+    },
+    "ceilings": {
+      "startup_instructions": 74000000,
+      "turn_instructions": 455000000,
+      "prompt_bytes": 23500
+    }
+  },
   "budgets": {
     "linux": {
       "startup_cpu_ms": 28,

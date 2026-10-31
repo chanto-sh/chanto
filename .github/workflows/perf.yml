@@ -211,6 +211,18 @@ jobs:
             ${{ matrix.extra_args }} \
             --json "$BENCH_TEMP/perf.json" \
             --summary-md "$BENCH_TEMP/perf.md"
+      # Instruction counts and the prompt's size (tests/perf/exact.py): small
+      # changes that CPU time on a shared runner can't show. Linux only, since
+      # that's where valgrind runs.
+      - name: Exact costs
+        if: ${{ env.MEASURE == 'true' && github.event_name != 'push' && runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq valgrind >/dev/null
+          base=()
+          if [ -f "$BENCH_TEMP/chanto-base" ]; then
+            base=(--base "$BENCH_TEMP/chanto-base")
+          fi
+          $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"
       # A very long session and a very large tree (tests/perf/stress.py),
       # against the fake model. ripgrep and clangd make its Grep and
       # language-server checks real; it needs POSIX tools, so not Windows.
