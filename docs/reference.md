@@ -329,7 +329,7 @@ Requirements: a model, either a hosted provider (a key or login) or a local serv
 ```sh
 chanto                                  # interactive TUI
 chanto "fix the failing tests"          # TUI with an initial prompt
-chanto -p "explain src/main.rs"         # print mode (non-interactive); `chanto exec "…"` is the same
+chanto -p "explain src/main.rs"         # print mode (non-interactive; also --print); `chanto exec "…"` is the same
 chanto -p --max-turns 20 "…"            # stop after 20 model turns (default 500; also `max_turns`)
 chanto -C ../other-repo                 # work in another directory (also --cwd, --cd)
 chanto --no-think                       # turn model reasoning off (also `think = false`)
