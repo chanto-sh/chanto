@@ -222,10 +222,10 @@ jobs:
       - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
         with:
           tool: cargo-llvm-cov@0.6.21
-      # chanto only: chanto-core's tools work on an in-memory project with `/`
-      # paths, which is what they get in the browser, and it has its Linux and
-      # WASI runs. A failing test still gets its report uploaded (the `windows`
-      # job is what judges the tests), so Codecov's status isn't left waiting.
+      # chanto's tests only: chanto-core's own expect the `/` paths of their
+      # in-memory project, and run on Linux and WASI. A failing test still gets
+      # its report uploaded (the `windows` job is what judges the tests), so
+      # Codecov's status isn't left waiting.
       - run: cargo llvm-cov --locked --quiet --ignore-run-fail -p chanto --lcov --output-path lcov.info
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
