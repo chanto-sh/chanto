@@ -420,6 +420,13 @@ fn env_file_values(text: &str) -> Vec<(String, String)> {
 
 /// Collect known secret values: environment, Chanto's config and the project's env files.
 pub fn init(cfg: &crate::config::Config, root: &Path) {
+    init_known(cfg);
+    refresh(root);
+}
+
+/// Collect the secret values that need no walk of the project: environment and
+/// Chanto's config. [`refresh`] adds the project's env files.
+pub fn init_known(cfg: &crate::config::Config) {
     ENABLED.store(cfg.secrets.redact, std::sync::atomic::Ordering::Relaxed);
     *SESSION_CONFIG.write().unwrap_or_else(|e| e.into_inner()) = Some(cfg.secrets.clone());
     let mut values: BTreeMap<String, String> = BTreeMap::new();
@@ -474,9 +481,6 @@ pub fn init(cfg: &crate::config::Config, root: &Path) {
         }
     }
     *st = Arc::new(build(base, vec![], BTreeMap::new()));
-    drop(st);
-    drop(learned);
-    refresh(root);
 }
 
 /// Pick up new or changed env files in the project (cheap when nothing changed).

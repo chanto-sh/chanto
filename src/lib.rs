@@ -1062,11 +1062,18 @@ async fn setup_session(
     }
     lsp::set_trusted(config::is_trusted(&cwd));
     crate::util::timing("trust checked");
-    secrets::init(&cfg, &cwd);
-    // Do the first prompt's secret-file scan in the background.
+    secrets::init_known(&cfg);
+    // Find the project's env files and do the first prompt's secret-file scan
+    // in the background: both walk the project, which takes a noticeable
+    // moment in a big folder, and the first screen shouldn't wait for it. A
+    // turn refreshes before its first model request, so nothing leaves
+    // unmasked meanwhile.
     {
         let root = cwd.clone();
-        std::thread::spawn(move || secrets::warm(&root));
+        std::thread::spawn(move || {
+            secrets::refresh(&root);
+            secrets::warm(&root);
+        });
     }
     crate::util::timing("secrets init");
     permissions::PROTECT_SECRET_FILES.store(
