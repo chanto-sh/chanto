@@ -15,6 +15,11 @@ concurrency:
 # Checks only read the repository; nothing here needs a writable token.
 permissions:
   contents: read
+# Debug info for file and line numbers only (backtraces keep them): full debug
+# info made every test binary several times larger, which slowed linking
+# (most on Windows) and grew the build cache each job restores.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 # Only main writes a build cache. GitHub gives the repository one budget shared
 # by every ref, and a pull request that stored its own copies (one per job,
 # several hundred megabytes each) evicted main's, which every pull request
@@ -124,7 +129,7 @@ jobs:
       # The extension's server is also exercised by the Rust IDE tests.
       - run: npm ci && npm test
         working-directory: ide/vscode
-      - run: cargo build --locked
+      # `cargo test` builds the binary the tests run, so no separate build.
       - run: cargo test --locked --quiet
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
@@ -208,9 +213,10 @@ jobs:
       # paths and compiles the Unix-only ones; code left unused here would
       # otherwise only show as warnings in a release build. The desktop app
       # is part of the workspace, so this also checks it.
-      - run: cargo clippy --locked -j 2 --workspace --all-targets -- -D warnings
-      - run: cargo build --locked -j 2
-      - run: cargo test --locked -j 2 --quiet
+      # Like macOS: all the runner's cores, and `cargo test` builds the binary
+      # rather than a separate `cargo build`.
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --quiet
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
