@@ -22,6 +22,7 @@ env:
   # (seconds from Hugging Face) rather than filling the shared Actions cache.
   LLAMA_BUILD: b11966
   LLAMA_SHA256: c83ad2d4652fa270619f9ec2140d78b27cb731e17c676ae468122737083afb56
+  LLAMA_WINDOWS_SHA256: 1f1a2d203a2b3fb996c59bf4c20f37042d9265976c558cbbf621390c26a8932c
   OLLAMA_VERSION: v0.40.5
   OLLAMA_SHA256: dc5eabc292f9949546c90a97c820f924b035e05243b0de13c7f366182562169c
 
@@ -135,6 +136,53 @@ jobs:
             export SMOKE_FLAGS=--no-think
           fi
           tests/real-model/smoke.sh target/debug/chanto "$base" "$MODEL" "$PROVIDER"
+      - name: Server log
+        if: ${{ !cancelled() }}
+        run: grep -E -i "chat format|prompt eval time|eval time|error" "$RUNNER_TEMP/server.log" | tail -40 || true
+
+  # The same task on Windows with the sandbox on, its default: the model's
+  # commands run in PowerShell inside the sandbox, on a machine with Git Bash.
+  smoke-windows:
+    name: smoke (qwen3.5-4b, openai, windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked
+      - name: Start llama-server
+        env:
+          MODEL_URL: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf
+          MODEL_SHA256: 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 5 --retry-all-errors -o model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  model.gguf" | sha256sum -c -
+          curl -fsSL --retry 5 -o llama.zip \
+            "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_BUILD/llama-$LLAMA_BUILD-bin-win-cpu-x64.zip"
+          echo "$LLAMA_WINDOWS_SHA256  llama.zip" | sha256sum -c -
+          mkdir llama && unzip -q llama.zip -d llama
+          llama/llama-server.exe -m model.gguf --port 8080 \
+            --jinja --reasoning off \
+            -c 16384 -t 4 --temp 0 --seed 1 > server.log 2>&1 &
+          for _ in $(seq 120); do
+            curl -fs http://127.0.0.1:8080/health > /dev/null && exit 0
+            sleep 1
+          done
+          cat server.log
+          exit 1
+      - name: Smoke test
+        env:
+          SMOKE_PYTHON: python
+        run: tests/real-model/smoke.sh target/debug/chanto http://127.0.0.1:8080/v1 qwen3.5-4b openai
       - name: Server log
         if: ${{ !cancelled() }}
         run: grep -E -i "chat format|prompt eval time|eval time|error" "$RUNNER_TEMP/server.log" | tail -40 || true
