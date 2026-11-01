@@ -927,6 +927,24 @@ independent calls in parallel."
 }
 
 #[cfg(test)]
+#[test]
+fn a_missing_login_points_at_the_sandbox_on_macos() {
+    for out in [
+        "fatal: could not read Username for 'https://github.com'",
+        "fatal: terminal prompts disabled",
+        "To get started with GitHub CLI, please run: gh auth login",
+        "error: keychain not found",
+    ] {
+        assert_eq!(
+            looks_sandbox_blocked(out),
+            cfg!(target_os = "macos"),
+            "{out}"
+        );
+    }
+    assert!(!looks_sandbox_blocked("fatal: not a git repository"));
+}
+
+#[cfg(test)]
 #[path = "bash/output_tests.rs"]
 mod output_tests;
 
