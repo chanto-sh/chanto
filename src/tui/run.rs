@@ -264,6 +264,7 @@ impl App {
             pr_status: Default::default(),
             mouse: !inline,
             pastes: vec![],
+            oversize_offer: None,
             images: vec![],
             pending_dialogs: VecDeque::new(),
             search: None,
@@ -355,6 +356,12 @@ impl App {
             self.input.insert(&format!("@{} ", t.replace(' ', "\\ ")));
         } else if (n_lines > 12 || s.len() > 1500) && self.env.config.collapse_pastes != Some(false)
         {
+            if let Some((tokens, max)) = self.oversized(&s) {
+                self.hint = Some((
+                    format!("That paste won't fit this model: ~{tokens} tokens of {max}"),
+                    Instant::now(),
+                ));
+            }
             self.pastes.push(s.clone());
             self.input.insert(&format!(
                 "[Pasted text #{} +{} lines]",

@@ -259,6 +259,91 @@ async fn submitting_a_prompt_starts_a_turn_and_records_it() {
     assert!(!t.busy && t.blocks.is_empty());
 }
 
+const TOO_BIG: usize = 400_000;
+
+#[tokio::test]
+async fn a_paste_that_wont_fit_warns_when_pasted_and_stays_on_enter() {
+    let mut t = test_app();
+    t.on_paste(&"word ".repeat(TOO_BIG / 5));
+    assert!(t.hint.as_ref().unwrap().0.contains("won't fit this model"));
+    let tag = t.input.text.clone();
+    t.input.insert(" summarise this");
+    let typed = t.input.text.clone();
+    assert!(typed.starts_with(&tag));
+    t.busy = true;
+    t.submit_as(Deliver::Queue);
+    assert!(t.queue.is_empty(), "nothing is sent");
+    assert_eq!(t.input.text, typed, "the text stays in the box");
+    assert_eq!(t.pastes.len(), 1);
+    // Editing it means the offer no longer applies.
+    t.input.insert("!");
+    t.submit_as(Deliver::Queue);
+    assert!(t.queue.is_empty());
+    assert!(t.input.text.ends_with('!'));
+}
+
+#[tokio::test]
+async fn enter_again_saves_the_paste_and_keeps_what_was_typed() {
+    let mut t = test_app();
+    let paste = "word ".repeat(TOO_BIG / 5);
+    t.on_paste(&paste);
+    t.input.insert(" summarise this");
+    t.busy = true;
+    t.submit_as(Deliver::Queue);
+    t.submit_as(Deliver::Queue);
+    assert_eq!(t.queue.len(), 1);
+    let sent = t.queue[0].0.clone();
+    assert!(sent.ends_with(" summarise this"), "{sent}");
+    let path = sent
+        .strip_prefix("[Pasted text saved to ")
+        .and_then(|s| s.split(';').next())
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(path).unwrap(), paste);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600);
+    }
+    std::fs::remove_file(path).unwrap();
+    assert!(t.pastes.is_empty());
+    assert!(t.input.text.is_empty());
+}
+
+#[tokio::test]
+async fn typed_text_too_large_is_saved_whole() {
+    let mut t = test_app();
+    let typed = "word ".repeat(TOO_BIG / 5);
+    t.input.set(&typed);
+    t.busy = true;
+    t.submit_as(Deliver::Queue);
+    assert!(t.queue.is_empty());
+    t.submit_as(Deliver::Queue);
+    let sent = t.queue[0].0.clone();
+    let path = sent
+        .strip_prefix("My message was too large to send, so it's saved to ")
+        .and_then(|s| s.split(". Read").next())
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap().trim_end(),
+        typed.trim_end()
+    );
+    std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn messages_that_fit_and_commands_are_not_held() {
+    let mut t = test_app();
+    t.busy = true;
+    t.input.set("a short question");
+    t.submit_as(Deliver::Queue);
+    assert_eq!(t.queue[0].0, "a short question");
+    t.input
+        .set(&format!("/help {}", "word ".repeat(TOO_BIG / 5)));
+    t.submit_as(Deliver::Queue);
+    assert!(t.input.text.is_empty(), "a command isn't sent to the model");
+}
+
 #[tokio::test]
 async fn submitting_expands_collapsed_pastes() {
     let mut t = test_app();

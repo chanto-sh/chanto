@@ -426,7 +426,7 @@ Note that Chanto's `--agents` takes either form: a number is the team size, as b
 | `#note` | save a note to project memory (`#--agents note` appends to `./AGENTS.md` instead) |
 | `&task` | start `task` as a [background run](#background-and-remote-runs) (same as `/bg task`) |
 
-Messages you type while the model is working are delivered at its next step, as in Claude Code. Large pastes collapse to `[Pasted text #n +N lines]`; ctrl+o with the cursor on or just after the tag expands it in place so you can edit it, and `collapse_pastes = false` in config inserts every paste as plain text.
+Messages you type while the model is working are delivered at its next step, as in Claude Code. Large pastes collapse to `[Pasted text #n +N lines]`. A message too large for the model's context stays in the box when you press enter, and enter again saves the paste to a private file under `~/.chanto/attachments` for the model to read from; ctrl+o with the cursor on or just after the tag expands it in place so you can edit it, and `collapse_pastes = false` in config inserts every paste as plain text.
 
 ### Prompt extras
 
