@@ -46,6 +46,17 @@ Volcengine, StepFun and Cline Pass: run `chanto login` with the provider. See
 and Max plans don't work, including through Claude Code, so use an Anthropic API
 key for Claude models.
 
+## `chanto upgrade` said it upgraded, but the version didn't change. What now?
+
+On Homebrew, versions before v0.1.13 could say `Upgraded Chanto` when nothing changed: if your copy of the tap is out of date, `brew upgrade` finds nothing to do, and Chanto took that as success. Update once by hand, and upgrades work normally after that:
+
+```sh
+brew update && brew upgrade chanto
+chanto --version
+```
+
+Installed with npm? Run `npm install -g @chanto/cli@latest`. With Scoop, run `scoop update chanto`.
+
 ## How is it different from Claude Code or Codex?
 
 It runs any model, including small local ones; it's light on CPU and memory
