@@ -34,6 +34,12 @@
 - Run `scripts/scorecard-check.sh` for OSV, workflow and local Scorecard checks. Advisory exceptions must include an applicability rationale; do not lower the baseline to silence a finding.
 - The block-buffer exception is version/checksum-limited by `scripts/check-advisory-exceptions.py`. Run `python3 -m unittest discover -s tests/scorecard` after changing it. Keep custom validation in a prerequisite job, not inside Scorecard's restricted publishing job.
 
+## Fixing a vulnerability
+- For a bug that exposes users today (sandbox escape, permission bypass, leaked secrets), work from a private GitHub security advisory and its temporary fork, and keep the reproduction and impact there.
+- Public text says what changed, not how to attack it: a plain commit and PR message, no exploit steps, and no test that works as a ready-made exploit. Add the detailed test and any fuzz seed after the advisory is published.
+- Never disguise the fix. The changelog says `**Security:**`, names the kind of bug and recommends upgrading. Merge, tag and publish together, then publish the advisory with the affected and fixed versions.
+- General hardening and CI checks that don't reveal a live bug stay public as usual. Don't publish lists of remaining weaknesses.
+
 ## Architecture
 - `agent/` owns the loop: `turn.rs` (`run_turn` → `call_model` → `execute_calls` → repeat), `model.rs` (one streaming call), `calls.rs` (executing calls, spend guard), `authorize.rs` (permission decisions), `compact.rs`, `session.rs` (checkpoints, rewind, forks), `verify.rs` (guardrails, oracle), `subagent.rs`, `protocol.rs` (text tool protocol, argument normalization), `background.rs`. `agent.rs` keeps the `Env` and `Agent` state and its accessors. Tests live in `agent/tests.rs`; `#[cfg(test)]` modules are separate `*_tests.rs` files.
 - Frontends implement `agent::Frontend` (emit events, permission prompts, questions): `tui/` (ratatui; `draw.rs`, `keys.rs`, `mouse.rs`, `events.rs`, `pickers.rs`, `render.rs`, `stream.rs`, `run.rs`), `plain.rs` (print/REPL).
