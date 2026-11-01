@@ -751,10 +751,6 @@ fn file_tools_cannot_plant_code_that_runs_later() {
 /// The same files written by a shell command that hides the path from anything
 /// reading the command. Only the OS sandbox can stop this.
 #[test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "known gap: Landlock can't keep these read-only inside the project"
-)]
 fn shell_cannot_plant_code_that_runs_later() {
     if !sandbox_or_skip("shell_cannot_plant_code_that_runs_later") {
         return;
@@ -1249,9 +1245,9 @@ fn a_web_page_cannot_drive_the_local_server() {
         .stdout(std::process::Stdio::null())
         .spawn()
         .unwrap();
-    let stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap()).lines();
     let url = stderr
-        .lines()
+        .by_ref()
         .map_while(Result::ok)
         .find_map(|l| {
             l.split("listening on ")
@@ -1259,6 +1255,8 @@ fn a_web_page_cannot_drive_the_local_server() {
                 .map(|u| u.trim().to_string())
         })
         .expect("the server should say where it listens");
+    // Keep reading: a server that can't write its log stops.
+    std::thread::spawn(move || stderr.for_each(drop));
     let addr = url
         .trim_start_matches("http://")
         .trim_end_matches('/')
