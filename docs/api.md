@@ -14,7 +14,7 @@ Everything is JSON over HTTPS. Authenticated routes take `Authorization: Bearer 
 }
 ```
 
-Error codes: `unauthorized`, `forbidden`, `not_found`, `conflict`, `bad_request`, `too_large`, `quota_exceeded`, `expired`, `access_denied`, `not_configured`, `upstream`, `internal`. Clients should treat unknown codes as errors too. The wire types are in the Chanto repository's `proto/` crate (MIT or Apache-2.0).
+Error codes: `unauthorized`, `forbidden`, `not_found`, `conflict`, `bad_request`, `too_large`, `quota_exceeded`, `rate_limited`, `expired`, `access_denied`, `not_configured`, `upstream`, `internal`. Clients should treat unknown codes as errors too. The wire types are in the Chanto repository's `proto/` crate (MIT or Apache-2.0).
 
 ## Accounts
 
