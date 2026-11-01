@@ -298,8 +298,8 @@ reinstalls the latest release):
   platform, verifies it against the release's `SHA256SUMS`, checks that the new
   binary runs, then replaces the old one (removed, then the new one moved into
   place). On a mismatch or any failure the old binary stays.
-- **Homebrew**: offers to run `brew update` and `brew upgrade chanto`, then checks the new version arrived and says so if it didn't.
-- **npm and Scoop**: prints the command to run (`npm install -g @chanto/cli@latest` or `scoop update chanto`).
+- **Homebrew**: runs `brew update` and `brew upgrade chanto`, then checks the new version arrived and says so if it didn't.
+- **npm and Scoop**: runs `npm install -g @chanto/cli@latest` or `scoop update chanto`, then checks the new version arrived the same way.
 - **Cargo**: prints the `cargo install` command; a build in a source checkout is
   told to `git pull` and rebuild. If the install method can't be told, nothing
   is replaced and Chanto says how to install a release.
@@ -313,8 +313,11 @@ at most once per day, with a two-second timeout. The single request is
 version User-Agent; it sends no prompts, keys, or project data. Results and failed
 attempt timestamps are cached in `~/.chanto/update-check.json` (or
 `$CHANTO_HOME/update-check.json`). A newer release produces one dim TUI line or
-an stderr line after a print run, with the appropriate Homebrew, Cargo, or
-`chanto upgrade` command. Very short runs may exit before a notice is ready.
+an stderr line after a print run, naming the version it runs, the release it can
+move to, and the command that upgrades this install: `chanto upgrade` where
+Chanto can do the upgrade itself (the installer, Homebrew, npm and Scoop),
+otherwise the package manager's own command (Cargo). Very short runs may exit
+before a notice is ready.
 Checks never run when `CI` is set. Disable them with `CHANTO_NO_UPDATE_CHECK=1`
 or in your configuration:
 
