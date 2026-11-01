@@ -352,11 +352,16 @@ pub(super) fn seatbelt_ipc(project: Option<&str>, tmp: &str, ssh_agent: bool) ->
 }
 
 /// The fixed part of [`seatbelt_ipc`]: launch requests, Apple Events,
-/// preference writes, the clipboard and Shortcuts.
+/// preference writes, the clipboard, Shortcuts and the keychain, which hands
+/// out logins (`gh`, git's credential helper) that files alone wouldn't.
 pub(crate) const IPC_DENIES: &str = concat!(
     "(deny mach-lookup (global-name \"com.apple.coreservices.launchservicesd\")",
     " (global-name \"com.apple.coreservices.appleevents\")",
     " (global-name \"com.apple.pasteboard.1\")",
+    " (global-name \"com.apple.SecurityServer\")",
+    " (global-name \"com.apple.securityd\")",
+    " (global-name \"com.apple.securityd.xpc\")",
+    " (global-name \"com.apple.secd\")",
     " (global-name-regex \"^com\\\\.apple\\\\.lsd\\\\.\")",
     " (global-name-regex \"^com\\\\.apple\\\\.shortcuts\")",
     // The Shortcuts daemon (`shortcuts run` talks to it).
@@ -503,6 +508,7 @@ pub fn secret_read_denies(home: &std::path::Path, extra: &[String]) -> Vec<(bool
     // (is_regex, path or pattern)
     let h = home.display().to_string();
     let mut out = vec![
+        (false, format!("{h}/Library/Keychains")),
         (
             true,
             format!(

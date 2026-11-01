@@ -241,6 +241,12 @@ fn profile_blocks_ipc_escape_hatches() {
     assert!(profile.contains("(deny appleevent-send)"));
     assert!(profile.contains("com.apple.coreservices.launchservicesd"));
     assert!(profile.contains("com.apple.pasteboard.1"));
+    assert!(profile.contains("com.apple.SecurityServer"), "{profile}");
+    assert!(profile.contains("com.apple.securityd.xpc"), "{profile}");
+    assert!(
+        profile.contains("(deny file-read* (subpath \"/Users/x/Library/Keychains\"))"),
+        "{profile}"
+    );
     assert!(profile.contains("siri\\\\.VoiceShortcuts"), "{profile}");
     assert!(
         profile.contains("^com\\\\.apple\\\\.shortcuts"),
@@ -368,4 +374,66 @@ fn outside_a_sandbox_no_probe_starts() {
     start_sandbox_probe();
     assert_eq!(sandbox::PROBE.get(), Some(&true));
     assert!(sandbox::PROBE_THREAD.lock().unwrap().is_none());
+}
+
+/// An item in a throwaway keychain can be read normally but not from inside the
+/// real profile, while code signing, which shares the security framework, works.
+#[cfg(target_os = "macos")]
+#[test]
+fn seatbelt_keeps_the_keychain_out_of_reach() {
+    let dir = scratch("keychain");
+    let keychain = dir.join("test.keychain-db");
+    let keychain = keychain.to_str().unwrap();
+    let security = |args: &[&str]| {
+        std::process::Command::new("/usr/bin/security")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    assert!(
+        security(&["create-keychain", "-p", "pw", keychain])
+            .status
+            .success()
+    );
+    assert!(
+        security(&["unlock-keychain", "-p", "pw", keychain])
+            .status
+            .success()
+    );
+    assert!(
+        security(&[
+            "add-generic-password",
+            "-a",
+            "a",
+            "-s",
+            "chanto-test",
+            "-w",
+            "hidden",
+            "-T",
+            "/usr/bin/security",
+            keychain
+        ])
+        .status
+        .success()
+    );
+    let read = format!("/usr/bin/security find-generic-password -s chanto-test -w {keychain}");
+    let plain = std::process::Command::new("/bin/sh")
+        .args(["-c", &read])
+        .output()
+        .unwrap();
+    let profile = sandbox_profile(&dir, &SandboxConfig::default());
+    let sandboxed = |command: &str| {
+        std::process::Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", &profile, "/bin/sh", "-c", command])
+            .current_dir(&dir)
+            .output()
+            .unwrap()
+    };
+    let inside = sandboxed(&read);
+    let signing = sandboxed("codesign -dv /bin/ls");
+    let _ = security(&["delete-keychain", keychain]);
+    assert_eq!(String::from_utf8_lossy(&plain.stdout).trim(), "hidden");
+    assert!(!String::from_utf8_lossy(&inside.stdout).contains("hidden"));
+    assert!(!inside.status.success());
+    assert!(signing.status.success());
 }

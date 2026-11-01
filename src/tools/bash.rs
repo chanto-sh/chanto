@@ -140,6 +140,12 @@ fn looks_sandbox_blocked(out: &str) -> bool {
         || o.contains("access denied")
         || o.contains("read-only file system")
         || o.contains("sandbox")
+        // A login from the keychain, which the macOS sandbox keeps out of reach.
+        || (cfg!(target_os = "macos")
+            && (o.contains("could not read username")
+                || o.contains("terminal prompts disabled")
+                || o.contains("gh auth login")
+                || o.contains("keychain")))
 }
 
 /// A command that failed to reach the network (curl, wget, pip, npm, git, Python).
@@ -868,7 +874,7 @@ independent calls in parallel."
                             "\n[This may have been blocked by the sandbox: commands can write only inside the project, temp dirs and package \
                              download caches, can't change git hooks or config, agent or editor settings, and can't read private keys or \
                              credential files. Installing a toolchain or tool, `git init`/`clone`/`worktree add`/`submodule`/`config` and \
-                             git over SSH need to run outside it: run it again with dangerouslyDisableSandbox: true, and the user will be \
+                             git over SSH or with a saved login (`git push`, `gh`) need to run outside it: run it again with dangerouslyDisableSandbox: true, and the user will be \
                              asked to approve.]"
                         });
                     } else if sandbox_on()
