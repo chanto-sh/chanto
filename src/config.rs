@@ -1441,6 +1441,7 @@ impl Config {
             );
         let approvals =
             crate::mcp_policy::Approvals::load(cwd, &compat, trusted && !borrowed, trusted);
+        let mut mcpjson_pins = BTreeMap::new();
         for (i, p) in [cwd.join(".mcp.json"), home_dir().join("mcp.json")]
             .into_iter()
             .enumerate()
@@ -1457,7 +1458,7 @@ impl Config {
                 {
                     for (name, s) in servers {
                         match if i == 0 {
-                            approvals.decide(name)
+                            approvals.decide_server(name, s)
                         } else {
                             crate::mcp_policy::Approval::Approved
                         } {
@@ -1469,10 +1470,20 @@ impl Config {
                                 ));
                                 continue;
                             }
+                            crate::mcp_policy::Approval::Changed => {
+                                cfg.diagnostics.push(format!(
+                                    "MCP server {name} ({}) is new or changed since this project's servers were approved, so it wasn't started; check it, then run /mcp enable {name}",
+                                    p.display()
+                                ));
+                                continue;
+                            }
                             crate::mcp_policy::Approval::Pending => {
                                 skipped.push(format!("MCP server {name} ({}; not approved: trust the folder or run /mcp enable {name})", p.display()));
                                 continue;
                             }
+                        }
+                        if i == 0 && !approvals.is_recorded(name, s) {
+                            mcpjson_pins.insert(name.clone(), crate::mcp_policy::server_digest(s));
                         }
                         if let Ok(sc) = serde_json::from_value::<McpServerConfig>(s.clone())
                             && !cfg.mcp_servers.contains_key(name)
@@ -1484,6 +1495,10 @@ impl Config {
                     }
                 }
             }
+        }
+        if !mcpjson_pins.is_empty() {
+            // Best effort: a read-only home only means this run asks nothing new.
+            let _ = crate::mcp_policy::pin_mcpjson(cwd, mcpjson_pins);
         }
         // `--mcp-config` servers win a name clash with any file's.
         for (src, servers) in &launch.mcp {

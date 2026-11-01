@@ -176,7 +176,9 @@ servers, status-line and key-helper commands, environment variables, sandbox
 settings, allow rules, guardrail commands, plugins, language servers, the
 auto-mode classifier's `classifier_model` and `optimize.token_classifier`) are
 ignored until you trust the folder at a prompt. New `.mcp.json` servers also
-need approval. Installing a plugin asks first when it has hooks, MCP or
+need approval, and trusting a folder approves the servers it holds then: a server
+that's added or changed later doesn't start until you approve it with
+`/mcp enable`, unless you've set `enableAllProjectMcpServers` yourself. Installing a plugin asks first when it has hooks, MCP or
 language servers, or skills and commands that run `` !`cmd` `` blocks, register
 `hooks` or pre-approve `allowed-tools`; plugins with symlinks are refused.
 
