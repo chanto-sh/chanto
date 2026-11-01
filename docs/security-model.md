@@ -69,6 +69,12 @@ Every tool call the model makes goes through one decision point before it runs.
   a patch (`tar x`, `unzip`, `patch`, `git apply`, `git am`) asks, because
   its input names the files it writes. Files that a script or program writes
   (an interpreter, a build, `cp -r dir/. .`) rely on the sandbox.
+- **Reading from outside tightens auto mode.** Once a session has used the web or
+  an MCP tool, commands that send data out (`curl -d`, `scp`, `nc` and the like)
+  need a human, because what came in can steer the model and the classifier
+  doesn't see it. Matching is by pattern, so this raises the bar rather than
+  closing the channel: only `sandbox.network` does that. Commands that hand out a
+  saved login, such as `gh auth token`, always need a human except in bypass.
 - **The auto-mode classifier** judges an action against what you typed: your
   prompts and the messages you send while the agent works, without the files
   you mention or the context Chanto adds to them. Only input a frontend
