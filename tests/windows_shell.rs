@@ -15,12 +15,12 @@ struct Project {
 
 impl Project {
     fn new() -> Self {
+        // A counter, not the time: these run in parallel, and two could read the
+        // same clock tick and share a folder, which fails `git init`.
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let id = std::process::id();
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir = std::env::temp_dir().join(format!("chanto-shell-{id}-{nanos}"));
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("chanto-shell-{id}-{n}"));
         let root = dir.join("project");
         let home = dir.join("home");
         std::fs::create_dir_all(&root).unwrap();
