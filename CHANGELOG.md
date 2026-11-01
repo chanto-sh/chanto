@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.1.14 (November 1, 2026)
+
+- **SDK:** the TypeScript package can be imported. `@chanto/sdk` 0.1.13 failed on import with `exports is not defined`.
+
 ## v0.1.13 (November 1, 2026)
 
 - **The example config no longer turns the sandbox off.** `chanto --example-config` printed `[sandbox] enabled = false`, while the sandbox is on by default, so anyone who copied the template lost it without noticing. It now says `true`.
