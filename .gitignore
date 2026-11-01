@@ -15,3 +15,8 @@ classifier/sources/gtfobins.jsonl
 sdk/typescript/node_modules/
 # wasm-bindgen's output for the browser build (web/README.md).
 /web/pkg/
+/sdk/typescript/dist/
+/sdk/typescript/package/
+/sdk/python/dist/
+/sdk/python/build/
+/sdk/python/*.egg-info/

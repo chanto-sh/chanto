@@ -58,9 +58,92 @@ export interface RunOptions {
   max_minutes?: number;
 }
 
+/** The oldest `chanto` these bindings work with. */
+export const MIN_SERVER_VERSION = "0.1.12";
+
+const versionParts = (v: string) => v.split("-")[0].split(".").slice(0, 3).map(Number);
+
+/** Whether `version` is older than `min`; false when it can't be read. */
+export function olderThan(version: string, min: string): boolean {
+  const [a, b] = [versionParts(version), versionParts(min)];
+  if (a.length < 3 || a.some(Number.isNaN)) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
+
 export class Chanto {
+  /** The server `start` began; `close` stops it. */
+  private process?: { kill(): unknown };
+
   constructor(public url: string, public token: string) {
     this.url = url.replace(/\/$/, "");
+  }
+
+  /** Start a private `chanto serve` on a free port (Node only). Stop it with
+   * `close()`. It doesn't touch ~/.chanto/server.json, so a server you're running
+   * keeps working. */
+  static async start(options: { binary?: string; cwd?: string; model?: string; timeoutMs?: number } = {}): Promise<Chanto> {
+    const { spawn } = await import("node:child_process");
+    const { randomUUID } = await import("node:crypto");
+    const binary = options.binary ?? "chanto";
+    const token = randomUUID().replaceAll("-", "");
+    const args = ["serve", "--port", "0", ...(options.model ? ["--model", options.model] : [])];
+    const child = spawn(binary, args, {
+      cwd: options.cwd,
+      env: { ...process.env, CHANTO_SERVER_TOKEN: token, CHANTO_PRIVATE_SERVER: "1" },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const url = await new Promise<string>((resolve, reject) => {
+      let seen = "";
+      const fail = (why: string) => reject(new Error(`\`${binary} serve\` didn't start: ${why}`));
+      const timer = setTimeout(() => {
+        child.kill();
+        fail("timed out");
+      }, options.timeoutMs ?? 30_000);
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        fail(e.message);
+      });
+      child.on("exit", () => {
+        clearTimeout(timer);
+        fail(seen.slice(-500));
+      });
+      child.stderr!.on("data", (d) => {
+        seen += d;
+        const m = seen.match(/listening on (\S+)/);
+        if (m) {
+          clearTimeout(timer);
+          resolve(m[1]);
+        }
+      });
+    });
+    const client = new Chanto(url, token);
+    client.process = child;
+    try {
+      await client.checkVersion();
+    } catch (e) {
+      client.close();
+      throw e;
+    }
+    return client;
+  }
+
+  /** Stop the server `start` began; does nothing after `connect`. */
+  close(): void {
+    this.process?.kill();
+    this.process = undefined;
+  }
+
+  /** The server's version, after checking it's new enough for this SDK. */
+  async checkVersion(): Promise<string> {
+    const r = await fetch(this.url + "/health").catch((e) => {
+      throw new Error(`no Chanto server at ${this.url}: ${e.message}`);
+    });
+    const { version = "" } = (await r.json()) as { version?: string };
+    if (olderThan(version, MIN_SERVER_VERSION)) {
+      throw new Error(`chanto ${version} is older than this SDK needs (${MIN_SERVER_VERSION}); run \`chanto upgrade\``);
+    }
+    return version;
   }
 
   /** Defaults come from ~/.chanto/server.json (Node only). */
@@ -74,7 +157,9 @@ export class Chanto {
       url ??= info.url;
       token ??= info.token;
     }
-    return new Chanto(url!, token!);
+    const client = new Chanto(url!, token!);
+    await client.checkVersion();
+    return client;
   }
 
   async request(method: string, p: string, body?: unknown): Promise<any> {

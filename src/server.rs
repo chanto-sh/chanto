@@ -1297,6 +1297,34 @@ pub fn server_file() -> std::path::PathBuf {
     crate::config::home_dir().join("server.json")
 }
 
+/// Record where this server is. A program's private server (the SDKs'
+/// `start`) writes nothing, so it can't take over the file that says where
+/// the user's own server is.
+fn write_server_file(
+    path: &std::path::Path,
+    info: &serde_json::Value,
+    private: bool,
+) -> anyhow::Result<()> {
+    if private {
+        return Ok(());
+    }
+    let _ = std::fs::remove_file(path);
+    // Owner-only from the start: the file holds the bearer token.
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+    std::io::Write::write_all(&mut opts.open(path)?, &serde_json::to_vec_pretty(info)?)?;
+    Ok(())
+}
+
+/// Remove the file on shutdown, unless a private server never wrote it.
+fn remove_server_file(path: &std::path::Path, private: bool) {
+    if !private {
+        let _ = std::fs::remove_file(path);
+    }
+}
+
 /// The first IPv4 literal in `s` (skips the CLI's version warning noise).
 fn parse_first_ipv4(s: &str) -> Option<Ipv4Addr> {
     s.split_whitespace()
@@ -1425,13 +1453,8 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
     });
     std::fs::create_dir_all(crate::config::home_dir())?;
     let path = server_file();
-    // Owner-only from the start: the file holds the bearer token.
-    let _ = std::fs::remove_file(&path);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    std::io::Write::write_all(&mut opts.open(&path)?, &serde_json::to_vec_pretty(&info)?)?;
+    let private = std::env::var_os("CHANTO_PRIVATE_SERVER").is_some();
+    write_server_file(&path, &info, private)?;
     eprintln!(
         "chanto server listening on {url}\ntoken: {token}\n(connection details written to {})",
         path.display()
@@ -1517,7 +1540,7 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
     for s in all {
         close_session(&s).await;
     }
-    let _ = std::fs::remove_file(&path);
+    remove_server_file(&path, private);
     r?;
     Ok(())
 }
@@ -1529,6 +1552,33 @@ mod tests {
     use crate::agent::tests::{mock_server, tc};
     use crate::llm::{Provider, ProviderKind};
     use crate::tools::{Ctx, Registry, Tool};
+
+    #[test]
+    fn private_server_leaves_the_users_server_file_alone() {
+        let dir = std::env::temp_dir().join(format!("chanto-server-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("server.json");
+        std::fs::write(&path, "the user's server").unwrap();
+
+        write_server_file(&path, &json!({"url": "private"}), true).unwrap();
+        remove_server_file(&path, true);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "the user's server");
+
+        // A normal server replaces the file, then removes it on shutdown.
+        write_server_file(&path, &json!({"url": "normal"}), false).unwrap();
+        let written: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(written["url"], "normal");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600);
+        }
+        remove_server_file(&path, false);
+        assert!(!path.exists());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[tokio::test]
     async fn request_events_and_replay_mask_secrets() {
