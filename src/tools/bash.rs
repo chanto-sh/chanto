@@ -119,6 +119,9 @@ pub(crate) fn kill_group(pid: u32) {
         .status();
 }
 
+#[cfg(unix)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+mod config_guard;
 mod guards;
 mod sandbox;
 #[cfg(target_os = "linux")]
@@ -664,6 +667,12 @@ independent calls in parallel."
             unsandboxed,
         )?;
         apply_env_vars(ctx, &cwd, unsandboxed, &mut cmd);
+        #[cfg(target_os = "linux")]
+        let config_guard = (sandbox_on() && !unsandboxed && exec.is_none()).then(|| {
+            config_guard::ConfigGuard::take(
+                &crate::permissions::project_root().unwrap_or_else(|| cwd.clone()),
+            )
+        });
         let mut child = cmd.spawn()?;
         let pid = child.id();
         let mut reaper = KillOnDrop(pid);
@@ -820,6 +829,10 @@ independent calls in parallel."
             }
         }
         let _ = std::fs::remove_file(&cwd_file);
+        #[cfg(target_os = "linux")]
+        if let Some(note) = config_guard.and_then(|g| g.restore()) {
+            out.push_str(&note);
+        }
         let elapsed = t0.elapsed();
         let code = status.as_ref().and_then(|s| s.code());
         let mut is_error;
@@ -1103,6 +1116,12 @@ pub(crate) fn spawn_background(
         unsandboxed,
     )?;
     apply_env_vars(ctx, cwd, unsandboxed, &mut cmd);
+    #[cfg(target_os = "linux")]
+    let config_guard = (sandbox_on() && !unsandboxed && exec.is_none()).then(|| {
+        config_guard::ConfigGuard::take(
+            &crate::permissions::project_root().unwrap_or_else(|| cwd.to_path_buf()),
+        )
+    });
     let mut child = cmd.spawn()?;
     if let Some((c, token)) = &exec {
         crate::runs::container::track(child.id(), c, token);
@@ -1145,6 +1164,10 @@ pub(crate) fn spawn_background(
     tokio::spawn(async move {
         let status = child.wait().await;
         drain_output(r1, r2).await;
+        #[cfg(target_os = "linux")]
+        if let Some(note) = config_guard.and_then(|g| g.restore()) {
+            push_capped(&s3, &note);
+        }
         if exec.is_some() {
             crate::runs::container::untrack(s3.pid);
         }
