@@ -1,0 +1,61 @@
+name: upgrade channels
+# `chanto upgrade` on each channel, from the previous release to the latest, with
+# this commit's upgrade code: a real install is laid down, its binary replaced by
+# this build, and `upgrade --force` must leave the latest release in place.
+# Homebrew starts from a tap clone left at the old version, the case that once
+# reported success with nothing upgraded. npm is checked for the command it gives
+# from npm's install path, since `upgrade` doesn't run it; Scoop and cargo are
+# the same, in unit tests.
+on:
+  pull_request:
+    paths:
+      - src/update.rs
+      - src/update_check.rs
+      - install.sh
+      - install.ps1
+      - packaging/homebrew/**
+      - packaging/npm/**
+      - .github/workflows/upgrade-channels.yml
+  schedule:
+    - cron: '41 5 * * *'
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  CHANTO_NO_UPDATE_CHECK: "1"
+
+jobs:
+  upgrade:
+    name: ${{ matrix.channel }} (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { channel: installer, os: ubuntu-latest }
+          - { channel: installer, os: macos-latest }
+          - { channel: installer, os: windows-latest }
+          - { channel: homebrew, os: macos-latest }
+          - { channel: npm, os: ubuntu-latest }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          save-if: false
+      - if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+      - run: cargo build --locked
+      - name: Upgrade
+        env:
+          CHANNEL: ${{ matrix.channel }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: tests/upgrade_channel.sh

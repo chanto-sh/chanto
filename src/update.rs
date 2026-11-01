@@ -311,10 +311,19 @@ fn plan(t: &Target, latest: &str, opts: &Options) -> Plan {
         InstallMethod::Homebrew | InstallMethod::Installer => Plan::Report(format!(
             "{what} Run `{}`.",
             if t.method == InstallMethod::Homebrew {
-                "brew upgrade chanto"
+                t.method.command()
             } else {
                 "chanto upgrade"
             }
+        )),
+        InstallMethod::Npm | InstallMethod::Scoop => Plan::Report(format!(
+            "{what}\nThis Chanto ({path}) is managed by {}; upgrade it with:\n  {}",
+            if t.method == InstallMethod::Npm {
+                "npm"
+            } else {
+                "Scoop"
+            },
+            t.method.command()
         )),
         InstallMethod::Cargo => Plan::Report(format!(
             "{what}\nThis Chanto ({path}) was installed with cargo; upgrade it with:\n  {}",
@@ -330,6 +339,47 @@ fn plan(t: &Target, latest: &str, opts: &Options) -> Plan {
             update_check::INSTALL_COMMAND
         )),
     }
+}
+
+/// Upgrade through Homebrew and check it worked. Homebrew doesn't always
+/// refresh a tap by itself, and on a stale one `brew upgrade` finds nothing to
+/// do and exits 0, so the exit code can't say the new version arrived.
+fn brew_upgrade(brew: &std::ffi::OsStr, latest: &str) -> Result<()> {
+    use std::process::Command;
+    // A failed refresh (offline, say) may still leave a tap new enough.
+    let _ = Command::new(brew).arg("update").status();
+    let status = Command::new(brew)
+        .args(["upgrade", "chanto"])
+        .status()
+        .context("running brew")?;
+    if !status.success() {
+        bail!("`brew upgrade chanto` failed ({status})");
+    }
+    let prefix = Command::new(brew)
+        .args(["--prefix", "chanto"])
+        .output()
+        .context("running brew")?;
+    let prefix = String::from_utf8_lossy(&prefix.stdout);
+    let installed = Command::new(Path::new(prefix.trim()).join("bin").join(binary_name()))
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let version = installed.rsplit(' ').next().unwrap_or_default();
+    if version.is_empty() || update_check::newer(latest, version) {
+        bail!(
+            "Homebrew didn't install {latest}: `chanto --version` still says {}. \
+             A release can take a few minutes to reach the tap. Try `{}`.",
+            if version.is_empty() {
+                "nothing"
+            } else {
+                version
+            },
+            InstallMethod::Homebrew.command()
+        );
+    }
+    Ok(())
 }
 
 /// The upgrade itself; `confirm` asks the user (false when nobody can answer).
@@ -365,13 +415,7 @@ pub async fn run(
                     "chanto {latest} is available. Upgrade with `brew upgrade chanto`."
                 ));
             }
-            let status = std::process::Command::new("brew")
-                .args(["upgrade", "chanto"])
-                .status()
-                .context("running brew")?;
-            if !status.success() {
-                bail!("`brew upgrade chanto` failed ({status})");
-            }
+            brew_upgrade(std::ffi::OsStr::new("brew"), &latest)?;
             Ok(format!("Upgraded Chanto to {latest} with Homebrew."))
         }
         Plan::Install => {
@@ -487,6 +531,110 @@ mod tests {
             current: "1.2.3".into(),
             release_key: RELEASE_PUBKEY_B64.into(),
         }
+    }
+
+    /// A `brew` whose tap only has the new version after `brew update`, as with
+    /// the real one on a stale tap.
+    #[cfg(unix)]
+    fn fake_brew(dir: &Path, installed: &str, update_works: bool, upgrade_exit: u8) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = dir.join("prefix/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let chanto = bin.join("chanto");
+        std::fs::write(&chanto, format!("#!/bin/sh\necho chanto {installed}\n")).unwrap();
+        std::fs::set_permissions(&chanto, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let brew = dir.join("brew");
+        let new = "1.3.0";
+        let refreshed = dir.join("refreshed");
+        std::fs::write(
+            &brew,
+            format!(
+                "#!/bin/sh\necho \"$*\" >> '{log}'\ncase \"$1\" in\n\
+                 update) {update} ;;\n\
+                 upgrade) [ {upgrade_exit} = 0 ] || exit {upgrade_exit}\n\
+                 if [ -e '{refreshed}' ]; then printf '#!/bin/sh\\necho chanto {new}\\n' > '{chanto}'; fi ;;\n\
+                 --prefix) echo '{prefix}' ;;\nesac\n",
+                log = dir.join("calls").display(),
+                update = if update_works {
+                    format!("touch '{}'", refreshed.display())
+                } else {
+                    "exit 1".to_string()
+                },
+                refreshed = refreshed.display(),
+                chanto = chanto.display(),
+                prefix = dir.join("prefix").display(),
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&brew, std::fs::Permissions::from_mode(0o755)).unwrap();
+        brew
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn brew_refreshes_a_stale_tap_before_upgrading() {
+        let dir = tempfile_dir("brew-stale");
+        let brew = fake_brew(&dir, "1.2.0", true, 0);
+        brew_upgrade(brew.as_os_str(), "v1.3.0").unwrap();
+        let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+        assert!(calls.starts_with("update\nupgrade chanto\n"), "{calls}");
+    }
+
+    /// `brew upgrade` exits 0 with nothing to do, which was reported as
+    /// "Upgraded Chanto to v1.3.0" with the old version still installed.
+    #[cfg(unix)]
+    #[test]
+    fn brew_leaving_the_old_version_is_an_error() {
+        let dir = tempfile_dir("brew-noop");
+        let brew = fake_brew(&dir, "1.2.0", false, 0);
+        let e = brew_upgrade(brew.as_os_str(), "v1.3.0")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("didn't install v1.3.0"), "{e}");
+        assert!(e.contains("1.2.0"), "{e}");
+        assert!(e.contains("brew update"), "{e}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_failing_brew_upgrade_is_reported() {
+        let dir = tempfile_dir("brew-fail");
+        let brew = fake_brew(&dir, "1.2.0", true, 3);
+        let e = brew_upgrade(brew.as_os_str(), "v1.3.0")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("failed"), "{e}");
+    }
+
+    #[cfg(unix)]
+    fn tempfile_dir(name: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("chanto-{name}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn npm_and_scoop_get_their_own_command() {
+        let npm = Path::new("/usr/lib/node_modules/@chanto/cli/bin/chanto");
+        assert_eq!(
+            InstallMethod::classify(npm, false, false),
+            InstallMethod::Npm
+        );
+        let scoop = Path::new("C:/Users/me/scoop/apps/chanto/current/chanto.exe");
+        assert_eq!(
+            InstallMethod::classify(scoop, false, false),
+            InstallMethod::Scoop
+        );
+        let o = Options::default();
+        let Plan::Report(s) = plan(&target(InstallMethod::Npm, npm), "v1.3.0", &o) else {
+            panic!("npm owns this install");
+        };
+        assert!(s.contains("npm install -g @chanto/cli@latest"), "{s}");
+        let Plan::Report(s) = plan(&target(InstallMethod::Scoop, scoop), "v1.3.0", &o) else {
+            panic!("Scoop owns this install");
+        };
+        assert!(s.contains("scoop update chanto"), "{s}");
     }
 
     #[test]
