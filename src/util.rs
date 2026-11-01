@@ -653,8 +653,15 @@ mod emoji_tests {
 /// real writing needs them.
 pub fn strip_hidden(s: &str) -> std::borrow::Cow<'_, str> {
     let hidden = |c: char| matches!(c, '\u{E0000}'..='\u{E007F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
-    // This runs on every tool result: their lead bytes rule out almost all text.
-    if !s.bytes().any(|b| matches!(b, 0xE2 | 0xF3)) || !s.contains(hidden) {
+    // This runs on every tool result, so look for the bytes they encode to and
+    // leave most text alone without decoding it.
+    let bytes = s.as_bytes();
+    let found = memchr::memchr2_iter(0xE2, 0xF3, bytes).any(|i| match bytes[i..] {
+        [0xF3, 0xA0, 0x80 | 0x81, ..] => true,
+        [0xE2, 0x80, 0xAA..=0xAE, ..] | [0xE2, 0x81, 0xA6..=0xA9, ..] => true,
+        _ => false,
+    });
+    if !found {
         return s.into();
     }
     let mut out = String::with_capacity(s.len());
