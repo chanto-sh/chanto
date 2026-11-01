@@ -440,6 +440,9 @@ impl Agent {
             // result can't overflow a small model's window on its own.
             let cap = (self.env.context_max() as usize * 7 / 4).clamp(4_000, 60_000);
             let mut content = crate::util::truncate_middle(&out.content, cap);
+            if let std::borrow::Cow::Owned(clean) = crate::util::strip_hidden(&content) {
+                content = clean;
+            }
             if out.is_error && !content.starts_with("Error") && !content.starts_with("Blocked") {
                 content = format!("Error: {content}");
             }

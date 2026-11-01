@@ -747,7 +747,8 @@ impl McpClient {
             .iter()
             .map(|t| McpToolDef {
                 name: t["name"].as_str().unwrap_or("").to_string(),
-                description: t["description"].as_str().unwrap_or("").to_string(),
+                description: crate::util::strip_hidden(t["description"].as_str().unwrap_or(""))
+                    .into_owned(),
                 schema: object_schema(t.get("inputSchema")),
                 read_only: t["annotations"]["readOnlyHint"].as_bool().unwrap_or(false),
                 always_load: t["_meta"]["anthropic/alwaysLoad"].as_bool(),
@@ -766,7 +767,8 @@ impl McpClient {
             .iter()
             .map(|p| McpPromptDef {
                 name: p["name"].as_str().unwrap_or("").to_string(),
-                description: p["description"].as_str().unwrap_or("").to_string(),
+                description: crate::util::strip_hidden(p["description"].as_str().unwrap_or(""))
+                    .into_owned(),
                 arguments: p["arguments"]
                     .as_array()
                     .into_iter()

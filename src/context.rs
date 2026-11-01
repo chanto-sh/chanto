@@ -1367,6 +1367,7 @@ fn load_unique(paths: Vec<PathBuf>, project: &Path) -> Vec<(PathBuf, String)> {
         let Some(t) = read_instructions(&p, confine) else {
             continue;
         };
+        let t = crate::util::strip_hidden(&t).into_owned();
         let t = strip_frontmatter(&t).to_string();
         if t.trim().is_empty() || out.iter().any(|(_, o)| o.trim() == t.trim()) {
             continue;
