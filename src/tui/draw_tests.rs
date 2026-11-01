@@ -711,6 +711,21 @@ async fn only_a_block_with_more_to_show_lights_up() {
     let (short, long_row) = (row(&t, 2), row(&t, 1));
     t.on_mouse_moved(short, 3);
     assert_eq!(t.hover, None, "expanding it would show nothing more");
+    // Clicking it changes nothing, so it doesn't light up afterwards either.
+    let press = |kind| crossterm::event::MouseEvent {
+        kind,
+        column: 3,
+        row: short,
+        modifiers: crossterm::event::KeyModifiers::NONE,
+    };
+    use crossterm::event::{MouseButton, MouseEventKind};
+    t.on_mouse(press(MouseEventKind::Down(MouseButton::Left)));
+    t.on_mouse(press(MouseEventKind::Up(MouseButton::Left)));
+    let at = t.blocks.len() - 2;
+    assert!(!t.blocks[at].expanded, "nothing to open");
+    term.draw(|f| t.app.draw(f)).unwrap();
+    t.on_mouse_moved(short, 3);
+    assert_eq!(t.hover, None, "a click doesn't make it clickable");
     t.on_mouse_moved(long_row, 3);
     assert!(matches!(t.hover, Some(mouse::Hover::Block(_))));
     // Open, it can still be clicked closed.

@@ -94,11 +94,13 @@ impl App {
             Hover::Link(row, start, end) => vec![Rect::new(start, row, end - start, 1)],
             Hover::Block(bi) => {
                 let a = self.transcript_area;
+                // The line a click means, not what's inside the block.
                 self.row_map
                     .iter()
-                    .enumerate()
-                    .filter(|(r, b)| **b == bi && (*r as u16) < a.height)
-                    .map(|(r, _)| Rect::new(a.x, a.y + r as u16, a.width, 1))
+                    .position(|b| *b == bi)
+                    .filter(|r| (*r as u16) < a.height)
+                    .map(|r| Rect::new(a.x, a.y + r as u16, a.width, 1))
+                    .into_iter()
                     .collect()
             }
         };
@@ -110,9 +112,17 @@ impl App {
                 continue;
             }
             // Grey text goes to the terminal's normal color; text with a color of
-            // its own keeps it.
+            // its own keeps it, and so does the time at the end of a block's line,
+            // which a click doesn't act on.
             for y in rect.top()..rect.bottom() {
-                for x in rect.left()..rect.right() {
+                let end = match hover {
+                    Hover::Block(_) => (rect.left()..rect.right())
+                        .rev()
+                        .find(|x| buffer[(*x, y)].symbol() == "·")
+                        .unwrap_or(rect.right()),
+                    _ => rect.right(),
+                };
+                for x in rect.left()..end {
                     let cell = &mut buffer[(x, y)];
                     if cell.fg == pal().dim || cell.fg == faint() {
                         cell.fg = Color::Reset;
@@ -242,8 +252,7 @@ impl App {
                     if m.row >= a.y && m.row < a.y + a.height {
                         let r = (m.row - a.y) as usize;
                         if let Some(&bi) = self.row_map.get(r)
-                            && bi < self.blocks.len()
-                            && self.blocks[bi].expandable()
+                            && self.block_opens(bi, a.width)
                         {
                             let b = &mut self.blocks[bi];
                             b.expanded = !b.expanded;
