@@ -119,8 +119,11 @@
     "_comment": [
       "tests/perf/responsive.py. idle_bytes is exact: an idle app draws nothing.",
       "Timing ceilings have room: on October 31, 2026 idle was 0.43% of a core on",
-      "Linux and 0.87% on macOS, a key's first output under 2 ms, PageUp about",
-      "18-28 ms. Shell cost and bytes per key report only until runs set them."
+      "Linux and 0.87% on macOS, and a key's first output under 2 ms. On one run:",
+      "a key drew 58 bytes, and a shell command took 3 / 35 / 342 ms of CPU on",
+      "Linux / macOS / Windows, with 3.2 processes on Windows. Shell ceilings sit",
+      "about 1.5 times that, since they come from one run; a full redraw on a key",
+      "would pass 200 bytes. Windows' cost is starting PowerShell for each command."
     ],
     "linux": {
       "idle_percent": 2,
@@ -129,7 +132,10 @@
       "idle_after_long_bytes": 0,
       "typing_ms": 8,
       "typing_after_long_ms": 8,
-      "page_up_ms": 50
+      "page_up_ms": 50,
+      "typing_bytes": 200,
+      "typing_after_long_bytes": 200,
+      "shell_cpu_ms": 5
     },
     "darwin": {
       "idle_percent": 3,
@@ -138,9 +144,15 @@
       "idle_after_long_bytes": 0,
       "typing_ms": 16,
       "typing_after_long_ms": 16,
-      "page_up_ms": 80
+      "page_up_ms": 80,
+      "typing_bytes": 200,
+      "typing_after_long_bytes": 200,
+      "shell_cpu_ms": 55
     },
-    "windows": {}
+    "windows": {
+      "shell_cpu_ms": 520,
+      "shell_processes": 3.5
+    }
   },
   "budgets": {
     "linux": {
