@@ -261,6 +261,10 @@ pub struct ProjectMcp {
     pub enabled_mcpjson_servers: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub disabled_mcpjson_servers: Vec<String>,
+    /// What each approved `.mcp.json` server looked like when it was approved,
+    /// by digest: a changed one has to be approved again.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcpjson_digests: BTreeMap<String, String>,
 }
 
 fn state_file() -> PathBuf {
@@ -311,12 +315,42 @@ pub fn set_disabled(cwd: &Path, name: &str, off: bool) -> anyhow::Result<()> {
     update_project(cwd, |p| set(&mut p.disabled_mcp_servers, name, off))
 }
 
-/// Approve (or reject) a project `.mcp.json` server for this project.
+/// Approve (or reject) a project `.mcp.json` server for this project, as it
+/// is now.
 pub fn set_mcpjson_approval(cwd: &Path, name: &str, approve: bool) -> anyhow::Result<()> {
+    let digest = mcpjson_servers(cwd)
+        .and_then(|s| s.get(name).map(server_digest))
+        .filter(|_| approve);
     update_project(cwd, |p| {
         set(&mut p.enabled_mcpjson_servers, name, approve);
         set(&mut p.disabled_mcpjson_servers, name, !approve);
+        match digest {
+            Some(d) => p.mcpjson_digests.insert(name.to_string(), d),
+            None => p.mcpjson_digests.remove(name),
+        };
     })
+}
+
+/// Remember these `.mcp.json` servers as approved, as they are now.
+pub fn pin_mcpjson(cwd: &Path, pins: BTreeMap<String, String>) -> anyhow::Result<()> {
+    update_project(cwd, |p| p.mcpjson_digests.extend(pins))
+}
+
+/// A server's `.mcp.json` entry as a digest. Everything in it counts: command,
+/// arguments, URL, headers and environment can each change what runs.
+pub fn server_digest(server: &Json) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(server.to_string())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn mcpjson_servers(cwd: &Path) -> Option<serde_json::Map<String, Json>> {
+    read_json(&cwd.join(".mcp.json"))?
+        .get("mcpServers")?
+        .as_object()
+        .cloned()
 }
 
 // ---------------------------------------------------------------- sources
@@ -380,6 +414,9 @@ pub enum Approval {
     Approved,
     /// Not approved yet: `/mcp enable <name>` (or trusting the folder) approves it.
     Pending,
+    /// New or changed since this project's servers were approved:
+    /// `/mcp enable <name>` approves it as it is now.
+    Changed,
     /// Named in `disabledMcpjsonServers`.
     Rejected,
 }
@@ -399,6 +436,8 @@ pub struct Approvals {
     repo_all: bool,
     repo: Vec<String>,
     rejected: Vec<String>,
+    /// What this project's approved servers looked like (`ProjectMcp`).
+    digests: BTreeMap<String, String>,
 }
 
 impl Approvals {
@@ -411,6 +450,7 @@ impl Approvals {
         let mine = project_state(cwd);
         a.user.extend(mine.enabled_mcpjson_servers);
         a.rejected.extend(mine.disabled_mcpjson_servers);
+        a.digests = mine.mcpjson_digests;
         let mut user_docs = managed_docs();
         let mut repo_docs = Vec::new();
         if compat.claude {
@@ -457,6 +497,34 @@ impl Approvals {
             Approval::Approved
         } else {
             Approval::Pending
+        }
+    }
+}
+
+impl Approvals {
+    /// [`Approvals::decide`] for a server as `.mcp.json` has it now. Trusting a
+    /// folder approves what it held then, not whatever a later pull puts there.
+    /// The one exception is the user's own `enableAllProjectMcpServers`, which
+    /// asks for exactly that. A project with nothing recorded yet starts from
+    /// what's there: the first run in a trusted folder, or after upgrading.
+    pub fn is_recorded(&self, name: &str, server: &Json) -> bool {
+        self.digests
+            .get(name)
+            .is_some_and(|d| *d == server_digest(server))
+    }
+
+    pub fn decide_server(&self, name: &str, server: &Json) -> Approval {
+        let decision = self.decide(name);
+        if decision != Approval::Approved || self.user_all {
+            return decision;
+        }
+        match self.digests.get(name) {
+            Some(digest) if *digest == server_digest(server) => Approval::Approved,
+            Some(_) => Approval::Changed,
+            None if self.digests.is_empty() || self.user.iter().any(|n| n == name) => {
+                Approval::Approved
+            }
+            None => Approval::Changed,
         }
     }
 }
@@ -509,9 +577,9 @@ pub fn unloaded_mcpjson(
         return vec![];
     };
     servers
-        .keys()
-        .filter(|n| !loaded.contains_key(*n))
-        .map(|n| (n.clone(), approvals.decide(n)))
+        .iter()
+        .filter(|(n, _)| !loaded.contains_key(*n))
+        .map(|(n, s)| (n.clone(), approvals.decide_server(n, s)))
         .filter(|(_, a)| *a != Approval::Approved)
         .collect()
 }
@@ -648,6 +716,35 @@ mod tests {
             soft.check("mine", &stdio(&["a"])).is_ok(),
             "without the lock, users can broaden it"
         );
+    }
+
+    #[test]
+    fn a_trusted_folder_asks_again_when_a_server_changes_or_appears() {
+        let first = json!({"command": "linter"});
+        let later = json!({"command": "linter", "args": ["--other"]});
+        let mut a = Approvals {
+            trusted: true,
+            trusted_here: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            a.decide_server("lint", &first),
+            Approval::Approved,
+            "nothing recorded yet: starts from what's there"
+        );
+        a.digests.insert("lint".into(), server_digest(&first));
+        assert_eq!(a.decide_server("lint", &first), Approval::Approved);
+        assert_eq!(a.decide_server("lint", &later), Approval::Changed);
+        assert_eq!(a.decide_server("added", &first), Approval::Changed);
+        // A repository's own settings can't approve what it just changed.
+        a.repo = vec!["lint".into()];
+        assert_eq!(a.decide_server("lint", &later), Approval::Changed);
+        // The user's own blanket setting is what it says.
+        a.user_all = true;
+        assert_eq!(a.decide_server("lint", &later), Approval::Approved);
+        // An untrusted folder still doesn't start anything.
+        let none = Approvals::default();
+        assert_eq!(none.decide_server("lint", &first), Approval::Pending);
     }
 
     #[test]

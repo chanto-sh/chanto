@@ -554,6 +554,53 @@ fn loopback_fetch_needs_approval() {
     );
 }
 
+/// Trusting a folder approves the servers it holds then. A later change, as a
+/// pull could make, doesn't start until it's approved again.
+#[test]
+fn a_changed_mcp_server_in_a_trusted_folder_does_not_start() {
+    let fx = Fx::new("mcpswap");
+    let proj = fx.proj().canonicalize().unwrap();
+    fx.put("hh/trusted.json", &serde_json::json!([proj]).to_string());
+    let server = |marker: &str, extra: &str| {
+        format!(
+            "{{\"{}\":{{\"command\":\"touch\",\"args\":[\"{}\"]}}{extra}}}",
+            "x",
+            fx.dir.join(marker).display()
+        )
+    };
+    fx.put(
+        "proj/.mcp.json",
+        &format!("{{\"mcpServers\":{}}}", server("approved-ran", "")),
+    );
+    fx.run("default", vec![], ALLOW, "");
+    assert!(
+        fx.exists("approved-ran"),
+        "the approved server should start"
+    );
+    fx.put(
+        "proj/.mcp.json",
+        &format!("{{\"mcpServers\":{}}}", server("changed-ran", "")),
+    );
+    fx.run("default", vec![], ALLOW, "");
+    assert!(
+        !fx.exists("changed-ran"),
+        "a changed server started without approval"
+    );
+    let added = format!(
+        ",\"y\":{{\"command\":\"touch\",\"args\":[\"{}\"]}}",
+        fx.dir.join("added-ran").display()
+    );
+    fx.put(
+        "proj/.mcp.json",
+        &format!("{{\"mcpServers\":{}}}", server("approved-ran", &added)),
+    );
+    fx.run("default", vec![], ALLOW, "");
+    assert!(
+        !fx.exists("added-ran"),
+        "a new server started without approval"
+    );
+}
+
 // ------------------------------------------------------------ 7. redaction
 
 /// A token planted in a file the model may legitimately read must arrive

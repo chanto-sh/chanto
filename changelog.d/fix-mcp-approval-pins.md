@@ -1,0 +1,1 @@
+- **Security: approving an `.mcp.json` server now covers that server as it was.** A project server that's added or changed later, including by a pull, no longer starts until you approve it with `/mcp enable`, even in a trusted folder. Upgrade recommended.
