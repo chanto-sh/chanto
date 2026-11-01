@@ -223,6 +223,9 @@ jobs:
             base=(--base "$BENCH_TEMP/chanto-base")
           fi
           $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"
+      - name: Responsiveness
+        if: ${{ env.MEASURE == 'true' && github.event_name != 'push' }}
+        run: $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"
       # A very long session and a very large tree (tests/perf/stress.py),
       # against the fake model. ripgrep and clangd make its Grep and
       # language-server checks real; it needs POSIX tools, so not Windows.
