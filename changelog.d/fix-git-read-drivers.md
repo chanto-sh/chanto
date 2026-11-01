@@ -1,0 +1,1 @@
+- **Security: git commands ask first in a repository whose own config runs programs.** Diff and filter drivers, an fsmonitor or a pager set in `.git/config` no longer run through a read-only `git diff` without approval. Git LFS and ordinary repositories don't change.

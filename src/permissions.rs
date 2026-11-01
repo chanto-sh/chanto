@@ -1345,6 +1345,80 @@ fn auto_safe_simple(p: &str) -> bool {
     }
 }
 
+/// Whether this repository's own git config names programs for git to run: diff
+/// and filter drivers, an fsmonitor, a pager or an included file. A "read-only"
+/// `git diff` runs them. Few repositories have any, and Git LFS's are standard.
+fn repo_config_runs_programs(cwd: &Path) -> bool {
+    let Some(dotgit) = cwd.ancestors().map(|d| d.join(".git")).find(|p| p.exists()) else {
+        return false;
+    };
+    let gitdir = if dotgit.is_dir() {
+        dotgit
+    } else {
+        // A worktree's `.git` file names its git directory.
+        let Some(dir) = std::fs::read_to_string(&dotgit)
+            .ok()
+            .and_then(|t| t.strip_prefix("gitdir:").map(|p| p.trim().to_string()))
+        else {
+            return true;
+        };
+        dotgit.parent().unwrap_or(cwd).join(dir)
+    };
+    let common = std::fs::read_to_string(gitdir.join("commondir"))
+        .map(|c| gitdir.join(c.trim()))
+        .unwrap_or_else(|_| gitdir.clone());
+    [gitdir.join("config.worktree"), common.join("config")]
+        .iter()
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .any(|config| config_runs_programs(&config))
+}
+
+fn config_runs_programs(config: &str) -> bool {
+    let mut section = String::new();
+    for line in config.lines() {
+        let line = line.trim().to_ascii_lowercase();
+        if line.starts_with('[') {
+            section = line
+                .trim_start_matches('[')
+                .trim_end_matches(']')
+                .to_string();
+            if section.starts_with("include") {
+                return true;
+            }
+            continue;
+        }
+        let key = line.split('=').next().unwrap_or("").trim();
+        let value = line.split_once('=').map_or("", |(_, v)| v.trim());
+        let runs = match section.split_whitespace().next().unwrap_or("") {
+            "diff" => matches!(key, "external" | "command" | "textconv"),
+            "filter" => {
+                !section.contains("\"lfs\"") && matches!(key, "clean" | "smudge" | "process")
+            }
+            "core" => {
+                matches!(
+                    key,
+                    "pager" | "sshcommand" | "gitproxy" | "hookspath" | "attributesfile"
+                ) || (key == "fsmonitor" && !matches!(value, "" | "false" | "0" | "no" | "off"))
+            }
+            "pager" => !matches!(value, "" | "false" | "true" | "0" | "1"),
+            _ => false,
+        };
+        if runs {
+            return true;
+        }
+    }
+    false
+}
+
+/// A git command in a repository that would have git run the repository's programs.
+fn git_would_run_repo_programs(cmd: &str, cwd: &Path) -> bool {
+    use std::sync::OnceLock;
+    static GIT: OnceLock<regex::Regex> = OnceLock::new();
+    GIT.get_or_init(|| regex::Regex::new(r"(^|[\s;&|(`])git\s").unwrap())
+        .is_match(cmd)
+        && repo_config_runs_programs(cwd)
+}
+
 pub fn dangerous_reason(cmd: &str) -> Option<String> {
     use std::sync::OnceLock;
     static RES: OnceLock<Vec<regex::Regex>> = OnceLock::new();
@@ -1577,6 +1651,13 @@ pub fn static_decision(
 ) -> Option<Decision> {
     // Secret files (.env, keys, ~/.ssh, ~/.aws, ...) always need a human.
     if mode != Mode::Bypass && secret_file_target(kind, tool, args, cwd).is_some() {
+        return Some(Decision::Ask);
+    }
+    // So does git in a repository whose config has it run programs of its own.
+    if mode != Mode::Bypass
+        && kind == ToolKind::Execute
+        && git_would_run_repo_programs(args["command"].as_str().unwrap_or(""), cwd)
+    {
         return Some(Decision::Ask);
     }
     // So do URLs that reach local files outside the project or cloud
@@ -2577,6 +2658,31 @@ mod tests {
         assert!(!auto_safe_command("rm -rf ${HOME}"));
         assert!(!auto_safe_command("awk 'BEGIN{system(\"x\")}'"));
         assert!(!auto_safe_command("perl -e 'system 1'"));
+    }
+
+    #[test]
+    fn git_config_that_runs_programs_is_recognised() {
+        for config in [
+            "[diff \"x\"]\n\ttextconv = sh\n",
+            "[diff \"x\"]\n\tcommand = sh\n",
+            "[diff]\n\texternal = sh\n",
+            "[filter \"x\"]\n\tclean = sh\n",
+            "[core]\n\tfsmonitor = sh\n",
+            "[CORE]\n\tsshCommand = sh\n",
+            "[core]\n\tpager = sh\n",
+            "[include]\n\tpath = x\n",
+            "[includeIf \"gitdir:/\"]\n\tpath = x\n",
+        ] {
+            assert!(config_runs_programs(config), "{config}");
+        }
+        for config in [
+            "[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tfsmonitor = false\n",
+            "[remote \"origin\"]\n\turl = git@github.com:a/b.git\n",
+            "[filter \"lfs\"]\n\tclean = git-lfs clean -- %f\n\tprocess = git-lfs filter-process\n",
+            "[user]\n\tname = pager\n",
+        ] {
+            assert!(!config_runs_programs(config), "{config}");
+        }
     }
 
     #[test]
