@@ -5,6 +5,8 @@
            it must draw nothing, and stay under a CPU ceiling.
   typing   (Unix) bytes drawn per key, which a full redraw would multiply, and
            the time to the first output after a key and after PageUp.
+  paste    (Unix) bytes drawn for a 1 MB paste, of many lines and of one long
+           line: it collapses to a tag, so it must not grow with the paste.
   shell    40 turns that each run one command: processes started per command
            (Windows, from its job accounting) and CPU per turn, against ceilings.
 
@@ -143,6 +145,20 @@ class Tui:
             raise gate.GateError("a key drew nothing")
         return statistics.median(r[0] for r in rows), statistics.median(r[1] for r in rows)
 
+    def paste(self, text):
+        """(bytes drawn until it settles, ms to the first draw) for a bracketed paste."""
+        drawn = self.drawn
+        start = time.perf_counter()
+        data = b"\x1b[200~" + text.encode() + b"\x1b[201~"
+        sent = 0
+        while sent < len(data):
+            sent += os.write(self.fd, data[sent:sent + 65536])
+        while self.drawn == drawn and time.perf_counter() - start < 30:
+            time.sleep(0.001)
+        first = (self.last - start) * 1000
+        self.settle(0.4, 30)
+        return self.drawn - drawn, first
+
     def close(self):
         import signal
 
@@ -157,6 +173,20 @@ def tui_scenario(work):
     scenario = work / "tui.json"
     scenario.write_text(json.dumps([{"text": long_reply, "chunk": 4000}]))
     return scenario
+
+
+def paste_metrics(binary, work):
+    tui = Tui(binary, tui_scenario(work), work)
+    try:
+        tui.start()
+        size = 1024 * 1024
+        line = "the quick brown fox jumps over the lazy dog, again and again\n"
+        out = {}
+        out["paste_lines_bytes"], out["paste_lines_ms"] = tui.paste((line * (size // len(line) + 1))[:size])
+        out["paste_one_line_bytes"], out["paste_one_line_ms"] = tui.paste("x" * size)
+        return out
+    finally:
+        tui.close()
 
 
 def tui_metrics(binary, work):
@@ -293,6 +323,8 @@ def main():
         if not WINDOWS:
             (tmp / "tui").mkdir()
             metrics.update(tui_metrics(binary, tmp / "tui"))
+            (tmp / "paste").mkdir()
+            metrics.update(paste_metrics(binary, tmp / "paste"))
     failed = failures(metrics, ceilings)
     lines = ["### Responsiveness", "| metric | value | ceiling | |", "|---|--:|--:|---|"]
     for name, value in metrics.items():
