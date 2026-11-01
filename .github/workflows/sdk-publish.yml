@@ -1,9 +1,12 @@
 name: sdk publish
-# Publishes the SDKs by hand, at a release's version, through trusted publishing:
-# no long-lived secret. Each package must first trust this workflow on
-# npmjs.com and pypi.org. It stays out of release.yml until that's done and
-# they've published once, so a failure here can't affect a release.
+# Publishes the SDKs for each release, through trusted publishing: no long-lived
+# secret. Separate from release.yml, so a failure here can't affect a release.
+# Nothing is published unless the built packages install and work against a real
+# server, because a published version can't be replaced. It can be rerun: a
+# version that's already on a registry is left alone.
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
@@ -19,25 +22,39 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    env:
+      VERSION: ${{ inputs.version || github.ref_name }}
     steps:
+      - name: Version
+        run: echo "VERSION=${VERSION#v}" >> "$GITHUB_ENV"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: v${{ inputs.version }}
+          ref: v${{ env.VERSION }}
           persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           # Trusted publishing needs npm 11.5.1+, which Node 24 ships.
           node-version: 24
           registry-url: https://registry.npmjs.org
           package-manager-cache: false
+      - run: cargo build --locked -j 2
       - name: Build
-        env:
-          VERSION: ${{ inputs.version }}
         run: python3 packaging/sdk.py "$VERSION"
+      - name: Check the packages work
+        run: python3 packaging/sdk_check.py --binary target/debug/chanto
       - name: Publish to npm
         working-directory: sdk/typescript/package
-        run: npm publish --access public --provenance
+        run: |
+          if npm view "@chanto/sdk@$VERSION" version >/dev/null 2>&1; then
+            echo "@chanto/sdk@$VERSION is already on npm"
+          else
+            npm publish --access public --provenance
+          fi
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: sdk/python/dist
+          skip-existing: true
+      - name: Check what was published works
+        run: python3 packaging/sdk_check.py --binary target/debug/chanto --published "$VERSION"
