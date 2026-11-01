@@ -60,6 +60,19 @@ fn setup() -> (Ctx, Arc<BgShell>, Arc<Capture>, std::path::PathBuf) {
 }
 
 #[tokio::test]
+async fn stopping_a_job_names_it_without_its_id() {
+    let (ctx, _shell, _, _dir) = setup();
+    assert_eq!(
+        KillShell.label_in(&json!({"shell_id":"bash_6"}), &ctx.env),
+        "KillShell(Build release binary)"
+    );
+    assert_eq!(
+        KillShell.label_in(&json!({"shell_id":"missing"}), &ctx.env),
+        "KillShell(missing)"
+    );
+}
+
+#[tokio::test]
 async fn output_poll_names_the_job_and_previews_only_new_lines() {
     let (ctx, shell, _, dir) = setup();
     assert_eq!(
