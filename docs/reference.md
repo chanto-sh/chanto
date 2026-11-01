@@ -344,6 +344,7 @@ chanto -r                               # pick a previous session to resume
 chanto --completions zsh > ~/.zfunc/_chanto
 chanto goal "make the importer handle CSV files"   # work until agreed criteria pass
 chanto team "add OAuth login and a settings page" --agents 3
+chanto batch "fix the lint errors in {}" --from files.txt --jobs 4 -- --mode acceptEdits  # once per line; a rerun skips what succeeded
 ```
 
 Text output (`-p` without `--output-format`, or with `--verbose`) drops terminal escape sequences and control characters from the model's text, whether or not stdout is a terminal, so a reply can't retitle the window or write to the clipboard; `json` and `stream-json` carry the text unchanged.
@@ -958,7 +959,7 @@ To let the agent read one specific file without asking, add an allow rule such a
 ## Resource limits
 
 Agents can't take the machine down:
-- **Concurrency:** at most 3 subagents (`max_parallel_agents`) and 4 shell commands (`max_parallel_commands`) run at once across all agents; the rest wait their turn. At most 8 background agents can be alive (`max_background_agents`), and subagents can't start subagents, so there's no recursive fan-out.
+- **Concurrency:** at most 6 subagents (`max_parallel_agents`) and 4 shell commands (`max_parallel_commands`) run at once across all agents; the rest wait their turn. At most 8 background agents can be alive (`max_background_agents`), and subagents can't start subagents, so there's no recursive fan-out.
 - **Memory-aware starts:** new subagents and commands wait while free memory is below `min_free_memory_mb` (default 5% of RAM, at least 1 GB), then fail with a message telling the model to work sequentially. On macOS this uses the kernel's memory-pressure figure, not resident size.
 - **Watchdog:** if Chanto's child processes use more than `memory_limit_percent` of RAM (default 70%), or the system is nearly out of memory, Chanto kills the largest one's process group. That's the runaway build or test, never Chanto itself, and the model is told why. On macOS it measures physical footprint, so compressed and swapped memory count.
 - **Bounded output:** command output kept in memory is capped (head and tail), so a command that floods output can't exhaust RAM.
@@ -966,7 +967,8 @@ Agents can't take the machine down:
 
 ```toml
 [resources]
-max_parallel_agents = 3
+max_parallel_agents = 6
+max_agent_depth = 1                 # 2 or 3 lets subagents start their own, at most 20 of those at once
 max_parallel_commands = 4
 max_background_agents = 8
 # min_free_memory_mb = 2048

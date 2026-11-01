@@ -1682,7 +1682,11 @@ impl Agent {
             cwd: &self.cwd_override.clone().unwrap_or_else(|| env.cwd()),
             model: &self.model(),
             skills: &env.skills.read().unwrap(),
-            agents: if self.depth == 0 { &agents } else { &[] },
+            agents: if self.depth < crate::resources::agent_depth(&env.config.resources) {
+                &agents
+            } else {
+                &[]
+            },
             mcp_note,
             instructions: !self.sub.omit_instructions,
         });
@@ -1902,11 +1906,10 @@ impl Agent {
         {
             return false;
         }
-        if self.depth > 0
-            && matches!(
-                name,
-                "Task" | "ExitPlanMode" | "AskUserQuestion" | "TodoWrite"
-            )
+        if self.depth > 0 && matches!(name, "ExitPlanMode" | "AskUserQuestion" | "TodoWrite") {
+            return false;
+        }
+        if name == "Task" && self.depth >= crate::resources::agent_depth(&self.env.config.resources)
         {
             return false;
         }

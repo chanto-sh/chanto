@@ -6738,3 +6738,69 @@ async fn a_read_only_turn_takes_no_snapshot_but_still_rewinds() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn subagents_nest_only_as_deep_as_configured() {
+    let task = |prompt: &str| tc("Task", json!({"description": "d", "prompt": prompt}));
+    let run = async |depth: Option<usize>, replies: Vec<serde_json::Value>| {
+        let dir = tmpdir("nesting");
+        let (base, seen) = mock_server(replies).await;
+        let mut agent = Agent::new(make_env_with(&base, &dir, Mode::Bypass, 32768, |c| {
+            c.resources.max_agent_depth = depth
+        }));
+        agent
+            .run_turn("go", vec![], CancellationToken::new())
+            .await
+            .unwrap();
+        seen.lock().unwrap().clone()
+    };
+    let first_prompt = |body: &serde_json::Value| {
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "user")
+            .unwrap()["content"]
+            .to_string()
+    };
+    // The default: a subagent asking for one doesn't get it.
+    let bodies = run(
+        None,
+        vec![
+            json!({"tool_calls": task("one")}),
+            json!({"tool_calls": task("two")}),
+            json!({"content": "one done"}),
+            json!({"content": "done"}),
+        ],
+    )
+    .await;
+    assert_eq!(bodies.len(), 4);
+    assert!(bodies.iter().all(|b| first_prompt(b) != "\"two\""));
+    // Depth 2: the subagent's own subagent runs, and one more level doesn't.
+    let bodies = run(
+        Some(2),
+        vec![
+            json!({"tool_calls": task("one")}),
+            json!({"tool_calls": task("two")}),
+            json!({"tool_calls": task("three")}),
+            json!({"content": "two done"}),
+            json!({"content": "one done"}),
+            json!({"content": "done"}),
+        ],
+    )
+    .await;
+    assert_eq!(bodies.len(), 6);
+    assert_eq!(first_prompt(&bodies[2]), "\"two\"");
+    assert!(bodies.iter().all(|b| first_prompt(b) != "\"three\""));
+    assert!(bodies[4].to_string().contains("two done"));
+    assert!(bodies[5].to_string().contains("one done"));
+}
+
+#[test]
+fn nesting_is_capped_and_gives_its_room_back() {
+    let held: Vec<_> = std::iter::from_fn(crate::resources::nested_agent).collect();
+    assert!(held.len() <= 20);
+    assert!(crate::resources::nested_agent().is_none());
+    drop(held);
+    assert!(crate::resources::nested_agent().is_some());
+}
