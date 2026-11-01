@@ -1021,6 +1021,12 @@ struct App {
     /// Where the "↓ jump to latest" pill was drawn while scrolled up (empty
     /// otherwise), so a click on it can jump to the bottom.
     jump_area: Rect,
+    /// Where the mouse last moved, for the hover highlight.
+    hover_pos: Option<(u16, u16)>,
+    /// What's under it, so moving within one target draws nothing.
+    hover: Option<mouse::Hover>,
+    /// `block_opens`' last answer.
+    hover_opens: std::cell::Cell<Option<mouse::BlockOpens>>,
     /// Rows of output that arrived below the view since it was scrolled up.
     scroll_new: usize,
     work_start: usize,

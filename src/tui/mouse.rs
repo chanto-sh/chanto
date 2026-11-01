@@ -1,9 +1,127 @@
 //! Mouse handling and selection: drag to copy, double-click for a word, and
-//! painting the selection over the finished frame.
+//! painting the selection and the hover highlight over the finished frame.
 
 use super::*;
 
+/// What a click would act on, shown by lighter text under the mouse.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Hover {
+    Jump,
+    /// An agents-panel row.
+    Work(u16),
+    /// A link's cells: row, first column, one past the last.
+    Link(u16, u16, u16),
+    /// A transcript block that a click expands or collapses.
+    Block(usize),
+}
+
+/// Whether a block has more to show: (block, its version, width), and the answer.
+pub(super) type BlockOpens = ((usize, u64, u16), bool);
+
 impl App {
+    /// What a click at this cell would act on, as `on_mouse` decides it.
+    fn hover_at(&self, row: u16, col: u16) -> Option<Hover> {
+        if self.help || self.selection.is_some() {
+            return None;
+        }
+        let j = self.jump_area;
+        if self.scroll > 0 && j.width > 0 && row == j.y && col >= j.x && col < j.x + j.width {
+            return Some(Hover::Jump);
+        }
+        let w = self.work_area;
+        if w.height > 0 && row >= w.y && row < w.y + w.height {
+            let i = self.work_start + (row - w.y) as usize;
+            let items = self.background_work().len();
+            let (_, end, _) = agents_panel::window(items, self.work_sel, w.height as usize);
+            return (i < end.min(items)).then_some(Hover::Work(row));
+        }
+        if self.web_link_at(row, col).is_some() {
+            let (y, start, end, _) = self.screen_link_at(row, col)?;
+            return Some(Hover::Link(*y, *start, *end));
+        }
+        let a = self.transcript_area;
+        if row >= a.y && row < a.y + a.height {
+            let bi = *self.row_map.get((row - a.y) as usize)?;
+            return self.block_opens(bi, a.width).then_some(Hover::Block(bi));
+        }
+        None
+    }
+
+    /// Whether clicking a block would show anything different: a one-line tool
+    /// result looks the same either way. Rendering twice isn't free and a mouse
+    /// move asks each time, so the last answer is kept until the block changes.
+    fn block_opens(&self, bi: usize, width: u16) -> bool {
+        let Some(b) = self.blocks.get(bi).filter(|b| b.expandable()) else {
+            return false;
+        };
+        let key = (bi, b.version, width);
+        if let Some((k, opens)) = self.hover_opens.get()
+            && k == key
+        {
+            return opens;
+        }
+        // An open block can always be closed.
+        let shown = |expanded| render_block(b, width as usize, expanded, false);
+        let opens = b.expanded || shown(true) != shown(false);
+        self.hover_opens.set(Some((key, opens)));
+        opens
+    }
+
+    /// The mouse moved. True when what's under it changed, and only then, so
+    /// moving across the screen doesn't redraw it.
+    pub(super) fn on_mouse_moved(&mut self, row: u16, col: u16) -> bool {
+        self.hover_pos = Some((row, col));
+        let hover = self.hover_at(row, col);
+        let changed = hover != self.hover;
+        self.hover = hover;
+        changed
+    }
+
+    /// The highlight, from where the mouse is now: scrolling or streaming
+    /// can move a different block under it without the mouse moving.
+    pub(super) fn paint_hover(&mut self, f: &mut Frame) {
+        let hover = self
+            .hover_pos
+            .and_then(|(row, col)| self.hover_at(row, col));
+        self.hover = hover;
+        let Some(hover) = hover else {
+            return;
+        };
+        let frame = f.area();
+        let rects: Vec<Rect> = match hover {
+            Hover::Jump => vec![self.jump_area],
+            Hover::Work(row) => vec![Rect::new(self.work_area.x, row, self.work_area.width, 1)],
+            Hover::Link(row, start, end) => vec![Rect::new(start, row, end - start, 1)],
+            Hover::Block(bi) => {
+                let a = self.transcript_area;
+                self.row_map
+                    .iter()
+                    .enumerate()
+                    .filter(|(r, b)| **b == bi && (*r as u16) < a.height)
+                    .map(|(r, _)| Rect::new(a.x, a.y + r as u16, a.width, 1))
+                    .collect()
+            }
+        };
+        let buffer = f.buffer_mut();
+        for rect in rects {
+            let rect = rect.intersection(frame);
+            if theme::no_color() {
+                buffer.set_style(rect, Style::default().add_modifier(Modifier::UNDERLINED));
+                continue;
+            }
+            // Grey text goes to the terminal's normal color; text with a color of
+            // its own keeps it.
+            for y in rect.top()..rect.bottom() {
+                for x in rect.left()..rect.right() {
+                    let cell = &mut buffer[(x, y)];
+                    if cell.fg == pal().dim || cell.fg == faint() {
+                        cell.fg = Color::Reset;
+                    }
+                }
+            }
+        }
+    }
+
     pub(super) fn on_mouse(&mut self, m: crossterm::event::MouseEvent) {
         match m.kind {
             MouseEventKind::ScrollUp => {

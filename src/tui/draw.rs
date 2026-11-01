@@ -247,6 +247,7 @@ impl App {
         if self.help {
             self.draw_help(f, area);
         }
+        self.paint_hover(f);
         // The overlay owns the screen: nothing under it should appear selected.
         if let Some(sel) = self.selection.filter(|_| !self.help) {
             self.paint_selection(f, sel);
