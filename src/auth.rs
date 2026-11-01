@@ -808,6 +808,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn the_commands_print_what_they_have_to_say() {
+        let _g = crate::compat::TEST_HOME_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let d =
+            std::env::temp_dir().join(format!("chanto-printed-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&d).unwrap();
+        // SAFETY: test-only, serialized by TEST_HOME_LOCK.
+        let previous = std::env::var_os("CHANTO_HOME");
+        unsafe { std::env::set_var("CHANTO_HOME", &d) };
+        let printed = async |args: &[&str]| {
+            let out = std::sync::Mutex::new(String::new());
+            let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+            cli(&args, &|m| out.lock().unwrap().push_str(m))
+                .await
+                .unwrap();
+            out.into_inner().unwrap()
+        };
+        assert!(
+            printed(&["login", "--help"])
+                .await
+                .starts_with("Usage: chanto login")
+        );
+        assert!(
+            printed(&["logout", "--help"])
+                .await
+                .starts_with("Usage: chanto logout")
+        );
+        assert!(printed(&["providers"]).await.contains("openrouter"));
+        assert!(
+            printed(&["login"])
+                .await
+                .ends_with("Usage: chanto login <provider> [--as <name>]")
+        );
+        assert_eq!(
+            printed(&["logout", "groq"]).await,
+            "Wasn't logged in to groq."
+        );
+        unsafe {
+            match previous {
+                Some(previous) => std::env::set_var("CHANTO_HOME", previous),
+                None => std::env::remove_var("CHANTO_HOME"),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[tokio::test]
     async fn named_accounts_sit_beside_the_default_login() {
         let _g = crate::compat::TEST_HOME_LOCK
             .lock()
