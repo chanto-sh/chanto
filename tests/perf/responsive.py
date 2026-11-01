@@ -388,7 +388,8 @@ def main():
     cfg = json.loads(BUDGETS.read_text())["responsive"]
     ceilings = cfg[gate.PLATFORM]
     metrics = {}
-    with tempfile.TemporaryDirectory() as tmp:
+    # A folder Windows won't let go of yet shouldn't lose the measurements.
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tmp:
         tmp = Path(tmp).resolve()
         (tmp / "shell").mkdir()
         metrics.update(shell_metrics(binary, tmp / "shell"))
