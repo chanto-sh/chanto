@@ -15,6 +15,9 @@ pub(super) enum Hover {
     Block(usize),
 }
 
+/// Whether a block has more to show: (block, its version, width), and the answer.
+pub(super) type BlockOpens = ((usize, u64, u16), bool);
+
 impl App {
     /// What a click at this cell would act on, as `on_mouse` decides it.
     fn hover_at(&self, row: u16, col: u16) -> Option<Hover> {
