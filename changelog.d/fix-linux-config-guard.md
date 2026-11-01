@@ -1,0 +1,1 @@
+- **Security: on Linux, sandboxed commands can no longer leave changes to files that run code later.** Changes to `.git/hooks`, `.git/config`, `.chanto`, `.mcp.json` and similar files are put back when the command ends, and reported. A command that really needs this, such as installing git hooks, asks for approval to run outside the sandbox. Upgrade recommended.

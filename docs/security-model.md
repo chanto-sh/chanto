@@ -125,13 +125,15 @@ Landlock and seccomp on Linux, a write-restricted token on Windows):
   (`.chanto/`, `.claude/`, `.mcp.json`, `.husky/`, `.githooks/`,
   `.vscode/{settings,tasks}.json`), Chanto's own home, shell startup files and
   toolchain bins and settings;
-- on Linux those in-project guards are **not** enforced: Landlock can only
-  grant, and carving `.git` or `.chanto` out of the project would also take
-  away the right to create files at its root or in `.git`, which breaks
-  `git commit` and every build. Shell commands can write them; the
-  permission layer still keeps the file tools from changing them without
-  asking. The home guards apply only where a widened tree (`allow_write`,
-  `--add-dir`) covers them;
+- on Linux Landlock can only grant, and carving `.git` or `.chanto` out of the
+  project would also take away the right to create files at its root or in
+  `.git`, which breaks `git commit` and every build. So those files are compared
+  around each sandboxed command in the project, and a change is put
+  back and reported. The check runs when the command ends, so a process it
+  leaves running can change them afterwards, and nested repositories' hooks
+  aren't covered. The permission layer still keeps the file tools from changing
+  them without asking. The home guards apply only where a widened tree
+  (`allow_write`, `--add-dir`) covers them;
 - on macOS and Linux, reads of known credential locations are denied (private
   keys, cloud and registry logins, Chanto's own token files), and network
   access can be turned off or limited to an allowlist of domains (on Windows
