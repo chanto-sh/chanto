@@ -2,8 +2,9 @@
 //! binary was installed. Release lookup and install-method detection are
 //! shared with the daily notice in `update_check.rs`.
 //!
-//! - Homebrew: Homebrew owns the binary; say `brew upgrade chanto`, or run it
-//!   when the user confirms.
+//! - Homebrew, npm and Scoop: the package manager owns the binary; Chanto runs
+//!   its upgrade when the user confirms, then checks the new version really
+//!   arrived.
 //! - The installer (install.sh / install.ps1): download the release archive for
 //!   this platform, check it against the release's `SHA256SUMS`, make sure the
 //!   new binary runs, and swap it in (remove, then move into place: macOS kills
@@ -14,6 +15,7 @@
 
 use crate::update_check::{self, InstallMethod};
 use anyhow::{Context, Result, bail};
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -290,8 +292,165 @@ pub async fn install_release(
 enum Plan {
     UpToDate,
     Report(String),
-    Brew,
+    /// A package manager owns the binary and upgrades it on request.
+    Package(Manager),
     Install,
+}
+
+/// A package manager that owns the binary, and the command that moves it on.
+/// Chanto runs these itself, so every install it can upgrade is upgraded by
+/// `chanto upgrade` rather than by a command the user has to pick.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Manager {
+    Brew,
+    Npm,
+    Scoop,
+}
+
+impl Manager {
+    fn of(method: InstallMethod) -> Option<Manager> {
+        match method {
+            InstallMethod::Homebrew => Some(Manager::Brew),
+            InstallMethod::Npm => Some(Manager::Npm),
+            InstallMethod::Scoop => Some(Manager::Scoop),
+            _ => None,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Manager::Brew => "Homebrew",
+            Manager::Npm => "npm",
+            Manager::Scoop => "Scoop",
+        }
+    }
+
+    fn program(self) -> &'static str {
+        match self {
+            Manager::Brew => "brew",
+            Manager::Npm => "npm",
+            Manager::Scoop => "scoop",
+        }
+    }
+
+    /// The command that upgrades this install, as the user would type it.
+    fn command(self) -> &'static str {
+        match self {
+            Manager::Brew => InstallMethod::Homebrew.command(),
+            Manager::Npm => InstallMethod::Npm.command(),
+            Manager::Scoop => InstallMethod::Scoop.command(),
+        }
+    }
+
+    /// Where a release has to appear before the manager can install it.
+    fn source(self) -> &'static str {
+        match self {
+            Manager::Brew => "the tap",
+            Manager::Npm => "the registry",
+            Manager::Scoop => "the bucket",
+        }
+    }
+
+    /// Run the manager's upgrade, then ask the binary it manages what version
+    /// it reports: the exit code can't say the new version arrived, since
+    /// Homebrew on a stale tap and Scoop on a stale bucket exit 0 with nothing
+    /// to do.
+    fn upgrade(self, program: &OsStr, exe: &Path, latest: &str) -> Result<()> {
+        match self {
+            Manager::Brew => {
+                // A failed refresh (offline, say) may still leave a tap new enough.
+                let _ = std::process::Command::new(program).arg("update").status();
+                run_manager(program, &["upgrade", "chanto"], "brew upgrade chanto")?;
+                let prefix = manager_output(program, &["--prefix", "chanto"])?;
+                let bin = Path::new(prefix.trim()).join("bin").join(binary_name());
+                version_arrived(&bin, latest, self)
+            }
+            Manager::Npm => {
+                run_manager(
+                    program,
+                    &["install", "-g", "@chanto/cli@latest"],
+                    self.command(),
+                )?;
+                // npm replaces the package in place, so the path this binary
+                // runs from is where the new one lands.
+                version_arrived(exe, latest, self)
+            }
+            Manager::Scoop => {
+                // `scoop update <app>` reads the bucket it already has; a
+                // stale bucket is caught by the version check below.
+                run_manager(program, &["update", "chanto"], "scoop update chanto")?;
+                // Each version lives in its own directory and `current` moves
+                // onto the new one, so the path this binary runs from is the
+                // one it is leaving. The file keeps its place inside the app
+                // directory.
+                let prefix = manager_output(program, &["prefix", "chanto"])?;
+                version_arrived(&scoop_current(exe, prefix.trim()), latest, self)
+            }
+        }
+    }
+}
+
+/// Run one of the manager's commands, failing with what the user would type.
+fn run_manager(program: &OsStr, args: &[&str], shown: &str) -> Result<()> {
+    let status = std::process::Command::new(program)
+        .args(args)
+        .status()
+        .with_context(|| format!("running `{shown}`"))?;
+    if !status.success() {
+        bail!("`{shown}` failed ({status})");
+    }
+    Ok(())
+}
+
+/// The manager's stdout, for the paths it can tell us about.
+fn manager_output(program: &OsStr, args: &[&str]) -> Result<String> {
+    let out = std::process::Command::new(program)
+        .args(args)
+        .output()
+        .with_context(|| format!("running `{} {}`", program.to_string_lossy(), args.join(" ")))?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// What the manager left behind, from the binary it installed. Nothing
+/// readable counts as the old version, not as success.
+fn version_arrived(bin: &Path, latest: &str, manager: Manager) -> Result<()> {
+    let printed = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .ok()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .unwrap_or_default();
+    let version = printed.rsplit(' ').next().unwrap_or_default();
+    if version.is_empty() || update_check::newer(latest, version) {
+        bail!(
+            "{} didn't install {latest}: `chanto --version` still says {}. \
+             A release can take a few minutes to reach {}. Try `{}`.",
+            manager.name(),
+            if version.is_empty() {
+                "nothing"
+            } else {
+                version
+            },
+            manager.source(),
+            manager.command()
+        );
+    }
+    Ok(())
+}
+
+/// The binary inside Scoop's versioned app directory (`apps/chanto/<version>/…`),
+/// kept at the same place under the directory `scoop prefix` now names.
+fn scoop_current(exe: &Path, prefix: &str) -> PathBuf {
+    let text = exe.to_string_lossy().replace('\\', "/");
+    let lower = text.to_lowercase();
+    let tail = lower
+        .find("/scoop/apps/chanto/")
+        .and_then(|at| text.get(at + "/scoop/apps/chanto/".len()..))
+        .and_then(|rest| rest.split_once('/').map(|(_, tail)| tail));
+    match tail {
+        Some(tail) if !prefix.is_empty() => Path::new(prefix).join(tail),
+        _ => exe.to_path_buf(),
+    }
 }
 
 fn plan(t: &Target, latest: &str, opts: &Options) -> Plan {
@@ -306,25 +465,18 @@ fn plan(t: &Target, latest: &str, opts: &Options) -> Plan {
         format!("Reinstalling Chanto {latest}.")
     };
     match t.method {
-        InstallMethod::Homebrew if !opts.check => Plan::Brew,
+        method @ (InstallMethod::Homebrew | InstallMethod::Npm | InstallMethod::Scoop)
+            if !opts.check =>
+        {
+            Plan::Package(Manager::of(method).expect("a package-managed install"))
+        }
         InstallMethod::Installer if !opts.check => Plan::Install,
-        InstallMethod::Homebrew | InstallMethod::Installer => Plan::Report(format!(
-            "{what} Run `{}`.",
-            if t.method == InstallMethod::Homebrew {
-                t.method.command()
-            } else {
-                "chanto upgrade"
-            }
-        )),
-        InstallMethod::Npm | InstallMethod::Scoop => Plan::Report(format!(
-            "{what}\nThis Chanto ({path}) is managed by {}; upgrade it with:\n  {}",
-            if t.method == InstallMethod::Npm {
-                "npm"
-            } else {
-                "Scoop"
-            },
-            t.method.command()
-        )),
+        // The manager owns the binary, so `chanto upgrade` is the command that
+        // moves it on -- and the one the notice names.
+        InstallMethod::Homebrew
+        | InstallMethod::Npm
+        | InstallMethod::Scoop
+        | InstallMethod::Installer => Plan::Report(format!("{what} Run `chanto upgrade`.")),
         InstallMethod::Cargo => Plan::Report(format!(
             "{what}\nThis Chanto ({path}) was installed with cargo; upgrade it with:\n  {}",
             update_check::CARGO_COMMAND
@@ -339,47 +491,6 @@ fn plan(t: &Target, latest: &str, opts: &Options) -> Plan {
             update_check::INSTALL_COMMAND
         )),
     }
-}
-
-/// Upgrade through Homebrew and check it worked. Homebrew doesn't always
-/// refresh a tap by itself, and on a stale one `brew upgrade` finds nothing to
-/// do and exits 0, so the exit code can't say the new version arrived.
-fn brew_upgrade(brew: &std::ffi::OsStr, latest: &str) -> Result<()> {
-    use std::process::Command;
-    // A failed refresh (offline, say) may still leave a tap new enough.
-    let _ = Command::new(brew).arg("update").status();
-    let status = Command::new(brew)
-        .args(["upgrade", "chanto"])
-        .status()
-        .context("running brew")?;
-    if !status.success() {
-        bail!("`brew upgrade chanto` failed ({status})");
-    }
-    let prefix = Command::new(brew)
-        .args(["--prefix", "chanto"])
-        .output()
-        .context("running brew")?;
-    let prefix = String::from_utf8_lossy(&prefix.stdout);
-    let installed = Command::new(Path::new(prefix.trim()).join("bin").join(binary_name()))
-        .arg("--version")
-        .output()
-        .ok()
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-        .unwrap_or_default();
-    let version = installed.rsplit(' ').next().unwrap_or_default();
-    if version.is_empty() || update_check::newer(latest, version) {
-        bail!(
-            "Homebrew didn't install {latest}: `chanto --version` still says {}. \
-             A release can take a few minutes to reach the tap. Try `{}`.",
-            if version.is_empty() {
-                "nothing"
-            } else {
-                version
-            },
-            InstallMethod::Homebrew.command()
-        );
-    }
-    Ok(())
 }
 
 /// The upgrade itself; `confirm` asks the user (false when nobody can answer).
@@ -405,18 +516,20 @@ pub async fn run(
             t.current
         )),
         Plan::Report(s) => Ok(s),
-        Plan::Brew => {
+        Plan::Package(m) => {
+            let command = m.command();
             let q = format!(
-                "chanto {latest} is available (you have v{}). Homebrew manages this install. Run `brew upgrade chanto` now?",
-                t.current
+                "chanto {latest} is available (you have v{}). {} manages this install. Run `{command}` now?",
+                t.current,
+                m.name()
             );
             if !(opts.yes || confirm(&q)) {
                 return Ok(format!(
-                    "chanto {latest} is available. Upgrade with `brew upgrade chanto`."
+                    "chanto {latest} is available. Upgrade with `{command}`."
                 ));
             }
-            brew_upgrade(std::ffi::OsStr::new("brew"), &latest)?;
-            Ok(format!("Upgraded Chanto to {latest} with Homebrew."))
+            m.upgrade(OsStr::new(m.program()), &t.exe, &latest)?;
+            Ok(format!("Upgraded Chanto to {latest} with {}.", m.name()))
         }
         Plan::Install => {
             let triple = target_triple()?;
@@ -458,9 +571,10 @@ fn ask(q: &str) -> bool {
 }
 
 pub const USAGE: &str = "usage: chanto upgrade [--check] [--yes] [--force]\n\n\
-Upgrades Chanto to the latest release the way it was installed: Homebrew runs `brew upgrade chanto`,\n\
-the installer's binary is replaced with the checksum-verified release, and cargo or source builds get\n\
-the command to run. --check only reports; --yes skips the confirmation; --force reinstalls the latest.";
+Upgrades Chanto to the latest release the way it was installed: Homebrew, npm and Scoop run their\n\
+own upgrade and the new version is checked, the installer's binary is replaced with the\n\
+checksum-verified release, and cargo or source builds get the command to run. --check only reports;\n\
+--yes skips the confirmation; --force reinstalls the latest.";
 
 /// `chanto upgrade [--check] [--yes] [--force]`.
 pub async fn cli(args: &[String]) -> Result<String> {
@@ -575,7 +689,9 @@ mod tests {
     fn brew_refreshes_a_stale_tap_before_upgrading() {
         let dir = tempfile_dir("brew-stale");
         let brew = fake_brew(&dir, "1.2.0", true, 0);
-        brew_upgrade(brew.as_os_str(), "v1.3.0").unwrap();
+        Manager::Brew
+            .upgrade(brew.as_os_str(), Path::new("/x/chanto"), "v1.3.0")
+            .unwrap();
         let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
         assert!(calls.starts_with("update\nupgrade chanto\n"), "{calls}");
     }
@@ -587,7 +703,8 @@ mod tests {
     fn brew_leaving_the_old_version_is_an_error() {
         let dir = tempfile_dir("brew-noop");
         let brew = fake_brew(&dir, "1.2.0", false, 0);
-        let e = brew_upgrade(brew.as_os_str(), "v1.3.0")
+        let e = Manager::Brew
+            .upgrade(brew.as_os_str(), Path::new("/x/chanto"), "v1.3.0")
             .unwrap_err()
             .to_string();
         assert!(e.contains("didn't install v1.3.0"), "{e}");
@@ -600,10 +717,111 @@ mod tests {
     fn a_failing_brew_upgrade_is_reported() {
         let dir = tempfile_dir("brew-fail");
         let brew = fake_brew(&dir, "1.2.0", true, 3);
-        let e = brew_upgrade(brew.as_os_str(), "v1.3.0")
+        let e = Manager::Brew
+            .upgrade(brew.as_os_str(), Path::new("/x/chanto"), "v1.3.0")
             .unwrap_err()
             .to_string();
         assert!(e.contains("failed"), "{e}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn npm_installs_and_the_new_version_is_checked() {
+        let dir = tempfile_dir("npm-upgrade");
+        let bin = dir.join("node_modules/@chanto/cli/bin/chanto");
+        script(&bin, "#!/bin/sh\necho chanto 1.2.0\n");
+        let npm = dir.join("npm");
+        script(
+            &npm,
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{calls}'\nprintf '#!/bin/sh\\necho chanto 1.3.0\\n' > '{bin}'\n",
+                calls = dir.join("calls").display(),
+                bin = bin.display(),
+            ),
+        );
+        Manager::Npm
+            .upgrade(npm.as_os_str(), &bin, "v1.3.0")
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("calls")).unwrap().trim(),
+            "install -g @chanto/cli@latest"
+        );
+    }
+
+    /// npm exits 0 for the version the registry already had; the binary it
+    /// leaves behind is what says whether that was the new one.
+    #[cfg(unix)]
+    #[test]
+    fn npm_claiming_a_version_it_did_not_install_is_an_error() {
+        let dir = tempfile_dir("npm-noop");
+        let bin = dir.join("chanto");
+        script(&bin, "#!/bin/sh\necho chanto 1.2.0\n");
+        let npm = dir.join("npm");
+        script(&npm, "#!/bin/sh\nexit 0\n");
+        let e = Manager::Npm
+            .upgrade(npm.as_os_str(), &bin, "v1.3.0")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("npm didn't install v1.3.0"), "{e}");
+        assert!(e.contains("1.2.0"), "{e}");
+        assert!(e.contains("npm install -g @chanto/cli@latest"), "{e}");
+    }
+
+    /// Scoop keeps each version in its own directory and moves `current` onto
+    /// the new one, so the path the running binary came from is the one it is
+    /// leaving.
+    #[cfg(unix)]
+    #[test]
+    fn scoop_upgrade_checks_the_version_scoop_now_points_at() {
+        let dir = tempfile_dir("scoop-upgrade");
+        let old = dir.join("scoop/apps/chanto/1.2.0/chanto");
+        let new = dir.join("scoop/apps/chanto/1.3.0/chanto");
+        for (path, version) in [(&old, "1.2.0"), (&new, "1.3.0")] {
+            script(path, &format!("#!/bin/sh\necho chanto {version}\n"));
+        }
+        let scoop = dir.join("bin/scoop");
+        script(
+            &scoop,
+            &format!(
+                "#!/bin/sh\necho \"$*\" >> '{calls}'\ncase \"$1\" in\nprefix) echo '{prefix}' ;;\nesac\n",
+                calls = dir.join("calls").display(),
+                prefix = new.parent().unwrap().display(),
+            ),
+        );
+        Manager::Scoop
+            .upgrade(scoop.as_os_str(), &old, "v1.3.0")
+            .unwrap();
+        let calls = std::fs::read_to_string(dir.join("calls")).unwrap();
+        assert!(
+            calls.starts_with("update chanto\nprefix chanto\n"),
+            "{calls}"
+        );
+    }
+
+    #[test]
+    fn a_scoop_binary_is_found_under_the_version_scoop_moved_to() {
+        let exe = Path::new("C:/Users/me/scoop/apps/chanto/1.2.0/chanto.exe");
+        assert_eq!(
+            scoop_current(exe, "C:/Users/me/scoop/apps/chanto/1.3.0"),
+            Path::new("C:/Users/me/scoop/apps/chanto/1.3.0/chanto.exe")
+        );
+        // Anything it can't place stays where it was.
+        assert_eq!(
+            scoop_current(Path::new("/x/chanto"), ""),
+            Path::new("/x/chanto")
+        );
+        assert_eq!(
+            scoop_current(Path::new("/x/chanto"), "/new"),
+            Path::new("/x/chanto")
+        );
+    }
+
+    #[cfg(unix)]
+    fn script(path: &Path, body: &str) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
     #[cfg(unix)]
@@ -615,7 +833,7 @@ mod tests {
     }
 
     #[test]
-    fn npm_and_scoop_get_their_own_command() {
+    fn npm_and_scoop_installs_are_upgraded_by_chanto_itself() {
         let npm = Path::new("/usr/lib/node_modules/@chanto/cli/bin/chanto");
         assert_eq!(
             InstallMethod::classify(npm, false, false),
@@ -627,14 +845,33 @@ mod tests {
             InstallMethod::Scoop
         );
         let o = Options::default();
-        let Plan::Report(s) = plan(&target(InstallMethod::Npm, npm), "v1.3.0", &o) else {
-            panic!("npm owns this install");
+        assert_eq!(
+            plan(&target(InstallMethod::Npm, npm), "v1.3.0", &o),
+            Plan::Package(Manager::Npm)
+        );
+        assert_eq!(
+            plan(&target(InstallMethod::Scoop, scoop), "v1.3.0", &o),
+            Plan::Package(Manager::Scoop)
+        );
+        // `--check` names the command that moves the install on, which is now
+        // Chanto's own rather than the manager's.
+        let check = Options {
+            check: true,
+            ..Default::default()
         };
-        assert!(s.contains("npm install -g @chanto/cli@latest"), "{s}");
-        let Plan::Report(s) = plan(&target(InstallMethod::Scoop, scoop), "v1.3.0", &o) else {
-            panic!("Scoop owns this install");
-        };
-        assert!(s.contains("scoop update chanto"), "{s}");
+        for (method, exe) in [
+            (InstallMethod::Npm, npm),
+            (InstallMethod::Scoop, scoop),
+            (InstallMethod::Homebrew, npm),
+        ] {
+            let Plan::Report(s) = plan(&target(method, exe), "v1.3.0", &check) else {
+                panic!("{method:?} owns this install")
+            };
+            assert!(s.contains("Run `chanto upgrade`."), "{s}");
+        }
+        // The manager's own command is still what runs behind it.
+        assert_eq!(Manager::Npm.command(), "npm install -g @chanto/cli@latest");
+        assert_eq!(Manager::Scoop.command(), "scoop update chanto");
     }
 
     #[test]
@@ -671,12 +908,12 @@ mod tests {
         );
         assert_eq!(
             plan(&target(InstallMethod::Homebrew, exe), "v1.3.0", &o),
-            Plan::Brew
+            Plan::Package(Manager::Brew)
         );
         let Plan::Report(s) = plan(&target(InstallMethod::Homebrew, exe), "v1.3.0", &check) else {
             panic!()
         };
-        assert!(s.contains("brew upgrade chanto"), "{s}");
+        assert!(s.contains("Run `chanto upgrade`."), "{s}");
         let Plan::Report(s) = plan(&target(InstallMethod::Installer, exe), "v1.3.0", &check) else {
             panic!()
         };

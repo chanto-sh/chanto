@@ -179,7 +179,21 @@ impl InstallMethod {
         InstallMethod::classify(exe, installer, cargo)
     }
 
-    /// The command that upgrades this install, for the notice.
+    /// The command the upgrade notice names. Chanto runs the package managers
+    /// it can (Homebrew, npm, Scoop) and replaces the binary its installer put
+    /// there, so all four upgrade with `chanto upgrade`; cargo, a source
+    /// checkout and an install it can't place keep the command they need.
+    pub fn notice_command(self) -> &'static str {
+        match self {
+            InstallMethod::Homebrew
+            | InstallMethod::Npm
+            | InstallMethod::Scoop
+            | InstallMethod::Installer => "chanto upgrade",
+            method => method.command(),
+        }
+    }
+
+    /// The command that upgrades this install, whichever way it is run.
     pub fn command(self) -> &'static str {
         match self {
             InstallMethod::Homebrew => "brew update && brew upgrade chanto",
@@ -209,13 +223,16 @@ fn worth_announcing(tag: &str, announced: Option<&str>) -> bool {
     newer(tag, env!("CARGO_PKG_VERSION")) && announced != Some(tag)
 }
 
-/// The one line the user sees, when `tag` is newer than this binary.
+/// The one line the user sees, when `tag` is newer than this binary: the
+/// version it runs now, the release it can move to, and the one command that
+/// does it. Plain text — the callers dim it or colour it, so backticks would
+/// show up literally.
 fn upgrade_notice(tag: &str, method: InstallMethod) -> Option<String> {
     newer(tag, env!("CARGO_PKG_VERSION")).then(|| {
         format!(
-            "chanto {tag} is available (you have v{}) — run `{}`",
+            "chanto v{} → {tag} · run {}",
             env!("CARGO_PKG_VERSION"),
-            method.command()
+            method.notice_command()
         )
     })
 }
@@ -454,12 +471,33 @@ mod tests {
     #[test]
     fn a_release_is_announced_once_with_the_command_that_upgrades_it() {
         let notice = upgrade_notice("v99.0.0", InstallMethod::Homebrew).unwrap();
-        assert!(notice.contains("v99.0.0"), "{notice}");
-        assert!(
-            notice.contains(&format!("you have v{}", env!("CARGO_PKG_VERSION"))),
-            "{notice}"
+        // What it runs now, what it can move to, and the one command that does it.
+        assert_eq!(
+            notice,
+            format!(
+                "chanto v{} → v99.0.0 · run chanto upgrade",
+                env!("CARGO_PKG_VERSION")
+            )
         );
-        assert!(notice.contains("brew upgrade chanto"), "{notice}");
+        // The caller dims or colours the line; backticks would show up literally.
+        assert!(!notice.contains('`'), "{notice}");
+        // Every install `chanto upgrade` can move on says so, whichever
+        // package manager owns the binary.
+        for method in [
+            InstallMethod::Homebrew,
+            InstallMethod::Npm,
+            InstallMethod::Scoop,
+            InstallMethod::Installer,
+        ] {
+            let notice = upgrade_notice("v99.0.0", method).unwrap();
+            assert!(
+                notice.ends_with("· run chanto upgrade"),
+                "{method:?}: {notice}"
+            );
+        }
+        // One it can't still names the command that does the job.
+        let cargo = upgrade_notice("v99.0.0", InstallMethod::Cargo).unwrap();
+        assert!(cargo.ends_with(CARGO_COMMAND), "{cargo}");
         assert!(upgrade_notice("v0.0.1", InstallMethod::Homebrew).is_none());
         // The same release a second time is old news; a newer one is not.
         assert!(worth_announcing("v99.0.0", None));
@@ -522,6 +560,13 @@ mod tests {
         assert!(Cargo.command().starts_with("cargo install"));
         assert_eq!(Installer.command(), "chanto upgrade");
         assert!(Unknown.command().contains("install."));
+        // The notice names the channel command only where Chanto can't
+        // upgrade itself.
+        assert_eq!(Homebrew.notice_command(), "chanto upgrade");
+        assert_eq!(Installer.notice_command(), "chanto upgrade");
+        assert_eq!(Npm.notice_command(), "chanto upgrade");
+        assert_eq!(Scoop.notice_command(), "chanto upgrade");
+        assert!(Cargo.notice_command().starts_with("cargo install"));
     }
 
     #[cfg(unix)]
