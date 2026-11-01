@@ -39,13 +39,29 @@ impl App {
         let a = self.transcript_area;
         if row >= a.y && row < a.y + a.height {
             let bi = *self.row_map.get((row - a.y) as usize)?;
-            return self
-                .blocks
-                .get(bi)
-                .is_some_and(|b| b.expandable())
-                .then_some(Hover::Block(bi));
+            return self.block_opens(bi, a.width).then_some(Hover::Block(bi));
         }
         None
+    }
+
+    /// Whether clicking a block would show anything different: a one-line tool
+    /// result looks the same either way. Rendering twice isn't free and a mouse
+    /// move asks each time, so the last answer is kept until the block changes.
+    fn block_opens(&self, bi: usize, width: u16) -> bool {
+        let Some(b) = self.blocks.get(bi).filter(|b| b.expandable()) else {
+            return false;
+        };
+        let key = (bi, b.version, width);
+        if let Some((k, opens)) = self.hover_opens.get()
+            && k == key
+        {
+            return opens;
+        }
+        // An open block can always be closed.
+        let shown = |expanded| render_block(b, width as usize, expanded, false);
+        let opens = b.expanded || shown(true) != shown(false);
+        self.hover_opens.set(Some((key, opens)));
+        opens
     }
 
     /// The mouse moved. True when what's under it changed, and only then, so

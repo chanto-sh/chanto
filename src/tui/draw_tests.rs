@@ -678,3 +678,47 @@ async fn hovering_highlights_what_a_click_acts_on_and_redraws_only_on_change() {
     t.help = true;
     assert!(!t.on_mouse_moved(block_row, 3));
 }
+
+#[tokio::test]
+async fn only_a_block_with_more_to_show_lights_up() {
+    let tool = |display: &str, content: &str| {
+        Kind::Tool(ToolBlock {
+            id: "t".into(),
+            label: "Write(b.txt)".into(),
+            display: Some(display.into()),
+            content: Some(content.into()),
+            is_error: false,
+            children: vec![],
+            started: Instant::now(),
+            elapsed: Some(Duration::from_secs(1)),
+            progress: None,
+        })
+    };
+    let mut t = test_app();
+    t.push(tool("Wrote 1 line to b.txt", "Wrote 1 line to b.txt"));
+    let long = (0..40)
+        .map(|i| format!("line {i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    t.push(tool(&long, &long));
+    let mut term = Terminal::new(ratatui::backend::TestBackend::new(60, 30)).unwrap();
+    term.draw(|f| t.app.draw(f)).unwrap();
+    let a = t.transcript_area;
+    let row = |t: &TestApp, want: usize| {
+        let at = t.blocks.len() - want;
+        a.y + t.row_map.iter().position(|bi| *bi == at).unwrap() as u16
+    };
+    let (short, long_row) = (row(&t, 2), row(&t, 1));
+    t.on_mouse_moved(short, 3);
+    assert_eq!(t.hover, None, "expanding it would show nothing more");
+    t.on_mouse_moved(long_row, 3);
+    assert!(matches!(t.hover, Some(mouse::Hover::Block(_))));
+    // Open, it can still be clicked closed.
+    let last = t.blocks.len() - 1;
+    t.blocks[last].expanded = true;
+    t.blocks[last].touch();
+    term.draw(|f| t.app.draw(f)).unwrap();
+    let open_row = row(&t, 1);
+    t.on_mouse_moved(open_row, 3);
+    assert!(matches!(t.hover, Some(mouse::Hover::Block(_))));
+}

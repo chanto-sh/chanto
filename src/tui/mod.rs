@@ -1025,6 +1025,8 @@ struct App {
     hover_pos: Option<(u16, u16)>,
     /// What's under it, so moving within one target draws nothing.
     hover: Option<mouse::Hover>,
+    /// `block_opens`' last answer: (block, its version, width), and the answer.
+    hover_opens: std::cell::Cell<Option<((usize, u64, u16), bool)>>,
     /// Rows of output that arrived below the view since it was scrolled up.
     scroll_new: usize,
     work_start: usize,

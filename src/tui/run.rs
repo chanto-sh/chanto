@@ -288,6 +288,7 @@ impl App {
             jump_area: Rect::default(),
             hover_pos: None,
             hover: None,
+            hover_opens: std::cell::Cell::new(None),
             scroll_new: 0,
             work_start: 0,
             agent_view: None,
