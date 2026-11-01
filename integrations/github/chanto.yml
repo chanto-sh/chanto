@@ -29,11 +29,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: chanto-sh/chanto/action@main
+      - uses: chanto-sh/chanto/action@eda3f9288afccb98be7b889a0fc50deac5402f1b # v0.1.13
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # provider_config: ${{ secrets.CHANTO_PROVIDERS }}   # [providers.<name>] tables; select <name>/<model> in .chanto/review.toml
