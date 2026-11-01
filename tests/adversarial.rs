@@ -598,6 +598,8 @@ fn a_changed_mcp_server_in_a_trusted_folder_does_not_start() {
     assert!(
         !fx.exists("added-ran"),
         "a new server started without approval"
+    );
+}
 
 /// A fooled classifier and a command that reads a saved login: the keychain
 /// answers outside the sandbox, not inside it. The keychain is a throwaway one.
