@@ -204,7 +204,7 @@ def check_common(run, output):
                 raise Failure(f"sessions parse: temp file left: {path.name}")
             if path.suffix == ".json":
                 try:
-                    json.loads(path.read_text())
+                    json.loads(path.read_text(encoding="utf-8"))
                 except ValueError as e:
                     raise Failure(f"sessions parse: {path.name}: {e}") from None
     if sorted(p.name for p in run.outside.iterdir()) != ["keep.txt"] or (
@@ -437,7 +437,7 @@ def crash_case(index, seed):
             if logs_ok.is_dir():
                 for path in logs_ok.rglob("*.json"):
                     try:
-                        json.loads(path.read_text())
+                        json.loads(path.read_text(encoding="utf-8"))
                     except ValueError as e:
                         raise Failure(f"sessions parse after kill: {e}") from None
             hello = scene(run, "again.json", json.dumps([{"text": "still here"}]))
