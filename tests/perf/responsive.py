@@ -7,6 +7,8 @@
            the time to the first output after a key and after PageUp.
   paste    (Unix) bytes drawn for a 1 MB paste, of many lines and of one long
            line: it collapses to a tag, so it must not grow with the paste.
+  fan-out  subagents all alive at once, against a slow model: memory and CPU each
+           one adds, and that the limit on parallel agents holds.
   shell    40 turns that each run one command: processes started per command
            (Windows, from its job accounting) and CPU per turn, against ceilings.
 
@@ -303,6 +305,76 @@ def shell_metrics(binary, work, reps=5):
     return out
 
 
+FAN_OUT = 6
+SLOW_S = 0.5
+
+
+def fan_out_scenario(work, agents):
+    """`agents` Task calls in one reply, each subagent reading a 40 KB file so
+    it holds some context, with every reply slow enough that they overlap."""
+    (work / "big.txt").write_text("a line of text in a file\n" * 1600)
+    scenario = work / f"fan{agents}.py"
+    scenario.write_text(
+        "def respond(body, n):\n"
+        "    users = [m for m in body['messages'] if m['role'] == 'user']\n"
+        "    if 'do task' in str(users[0]['content']):\n"
+        "        if len(body['messages']) <= 2:\n"
+        f"            return {{'sleep_s': {SLOW_S}, 'tool_calls': [{{'name': 'Read', 'args': {{'file_path': 'big.txt'}}}}]}}\n"
+        f"        return {{'sleep_s': {SLOW_S}, 'text': 'done'}}\n"
+        f"    if n == 0 and {agents}:\n"
+        "        return {'tool_calls': [{'name': 'Task', 'id': f'c{i}', 'args': "
+        f"{{'description': f'd{{i}}', 'prompt': f'do task {{i}}'}}}} for i in range({agents})]}}\n"
+        "    return {'text': 'all done'}\n"
+    )
+    return scenario
+
+
+def fan_out_run(binary, work, agents, reps=5):
+    """(median CPU ms, largest peak MB, median wall ms) of a run starting `agents`."""
+    home = work / f"home{agents}"
+    home.mkdir()
+    scenario = fan_out_scenario(work, agents)
+    rows = []
+    for _ in range(reps):
+        log = work / f"fan{agents}.log"
+        log.write_text("")
+        mock, port = gate.mock_start(scenario, log)
+        try:
+            usage, code = gate.wait_with_usage(
+                binary, ["-p", "fan out", "--mode", "bypassPermissions", "--cwd", str(work)],
+                gate.child_env(home, port),
+            )
+        finally:
+            mock.kill()
+            mock.wait()
+        if code != 0:
+            raise gate.GateError(f"{binary} exited {code} fanning out to {agents}")
+        made = gate.chat_requests(log)
+        # Two requests each, and the main agent's two.
+        if agents and made != 2 * agents + 2:
+            raise gate.GateError(f"fanning out to {agents} made {made} of {2 * agents + 2} requests")
+        rows.append(usage)
+    return (
+        statistics.median(u.cpu_ms for u in rows),
+        max(u.rss_mb for u in rows),
+        statistics.median(u.wall_ms for u in rows),
+    )
+
+
+def fan_out_metrics(binary, work):
+    none_cpu, none_mb, _ = fan_out_run(binary, work, 0)
+    cpu, mb, wall = fan_out_run(binary, work, FAN_OUT)
+    _, _, doubled = fan_out_run(binary, work, 2 * FAN_OUT, reps=3)
+    # Twice the agents past the limit takes about twice as long, so this is
+    # near 0.5; near 1 would mean the limit stopped holding.
+    return {
+        "fan_out_mb_per_agent": max(mb - none_mb, 0) / FAN_OUT,
+        "fan_out_cpu_ms_per_agent": max(cpu - none_cpu, 0) / FAN_OUT,
+        "fan_out_wall_ms": wall,
+        "fan_out_time_vs_double": wall / doubled,
+    }
+
+
 def failures(metrics, ceilings):
     """The metrics over their ceilings. A metric with no ceiling only reports."""
     return [m for m, v in metrics.items() if m in ceilings and v > ceilings[m]]
@@ -320,6 +392,8 @@ def main():
         tmp = Path(tmp).resolve()
         (tmp / "shell").mkdir()
         metrics.update(shell_metrics(binary, tmp / "shell"))
+        (tmp / "fan").mkdir()
+        metrics.update(fan_out_metrics(binary, tmp / "fan"))
         if not WINDOWS:
             (tmp / "tui").mkdir()
             metrics.update(tui_metrics(binary, tmp / "tui"))
