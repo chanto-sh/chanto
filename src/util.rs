@@ -656,10 +656,13 @@ pub fn strip_hidden(s: &str) -> std::borrow::Cow<'_, str> {
     // This runs on every tool result, so look for the bytes they encode to and
     // leave most text alone without decoding it.
     let bytes = s.as_bytes();
-    let found = memchr::memchr2_iter(0xE2, 0xF3, bytes).any(|i| match bytes[i..] {
-        [0xF3, 0xA0, 0x80 | 0x81, ..] => true,
-        [0xE2, 0x80, 0xAA..=0xAE, ..] | [0xE2, 0x81, 0xA6..=0xA9, ..] => true,
-        _ => false,
+    let found = memchr::memchr2_iter(0xE2, 0xF3, bytes).any(|i| {
+        matches!(
+            bytes[i..],
+            [0xF3, 0xA0, 0x80 | 0x81, ..]
+                | [0xE2, 0x80, 0xAA..=0xAE, ..]
+                | [0xE2, 0x81, 0xA6..=0xA9, ..]
+        )
     });
     if !found {
         return s.into();
