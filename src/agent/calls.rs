@@ -131,6 +131,14 @@ impl Agent {
                 .await;
             self.cur_cancel = Some(cancel.clone());
             let authorization = self.authorize(tool.as_ref(), &mut call).await;
+            // Before it runs, so a call later in this batch already counts as after it.
+            if matches!(call.name.as_str(), "WebFetch" | "WebSearch" | "Browser")
+                || call.name.starts_with("mcp__")
+            {
+                self.env
+                    .read_outside
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             let base = self.cwd_override.clone().unwrap_or_else(|| self.env.cwd());
             match &authorization {
                 Auth::Allow => {

@@ -544,6 +544,8 @@ pub struct Env {
     /// classifier's only source of the user's intent, for the main agent and
     /// its subagents alike. See [`Env::record_user_request`].
     user_requests: Mutex<Vec<String>>,
+    /// This session has read something from outside it: the web or an MCP server.
+    pub(crate) read_outside: std::sync::atomic::AtomicBool,
     /// Connected editor (VS Code extension), if any.
     ide: RwLock<Option<Arc<crate::ide::Ide>>>,
     /// Current session id and transcript path (for hooks).
@@ -823,6 +825,7 @@ impl Env {
             rate_limits: Default::default(),
             pending_context: Default::default(),
             user_requests: Default::default(),
+            read_outside: Default::default(),
             ide: Default::default(),
             session_info: Default::default(),
             halt: Default::default(),
