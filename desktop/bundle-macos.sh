@@ -83,7 +83,7 @@ cat > "$app/Contents/Info.plist" <<EOF
 <dict>
   <key>CFBundleName</key><string>chanto</string>
   <key>CFBundleDisplayName</key><string>chanto</string>
-  <key>CFBundleIdentifier</key><string>dev.chanto.desktop</string>
+  <key>CFBundleIdentifier</key><string>sh.chanto.desktop</string>
   <key>CFBundleExecutable</key><string>chanto-desktop</string>
   <key>CFBundleIconFile</key><string>$icon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
