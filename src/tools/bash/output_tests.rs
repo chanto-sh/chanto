@@ -64,7 +64,7 @@ async fn output_poll_names_the_job_and_previews_only_new_lines() {
     let (ctx, shell, _, dir) = setup();
     assert_eq!(
         BashOutput.label_in(&json!({"bash_id":"bash_6"}), &ctx.env),
-        "BashOutput(Build release binary · bash_6)"
+        "BashOutput(Build release binary)"
     );
     *shell.output.lock().unwrap() = "one\ntwo\nthree\nfour\n".into();
     let out = BashOutput

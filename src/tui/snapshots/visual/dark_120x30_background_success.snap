@@ -6,7 +6,7 @@ expression: snapshot(buffer)
 --- screen ---
  > Build the release binary.
 
- ▸ BashOutput(Build release binary · bash_6) · 5s
+ ▸ BashOutput(Build release binary) · 5s
    ↳  Completed · exit 0 · 2 new lines
       Compiling chanto
       Finished release build
@@ -43,9 +43,9 @@ row 01 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_c
 row 02 cols 000..001: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 001..003: Style::new().green().bg(Color::Reset).underline_color(Color::Reset)
 row 02 cols 003..013: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset).bold()
-row 02 cols 013..044: Style::new().fg(Color::Rgb(210, 130, 70)).bg(Color::Reset).underline_color(Color::Reset)
-row 02 cols 044..049: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Reset).underline_color(Color::Reset)
-row 02 cols 049..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 02 cols 013..035: Style::new().fg(Color::Rgb(210, 130, 70)).bg(Color::Reset).underline_color(Color::Reset)
+row 02 cols 035..040: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Reset).underline_color(Color::Reset)
+row 02 cols 040..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 03 cols 000..001: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 03 cols 001..038: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Reset).underline_color(Color::Reset)
 row 03 cols 038..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)

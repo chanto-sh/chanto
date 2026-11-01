@@ -1,0 +1,1 @@
+- **Background commands read better in the transcript.** Polling or stopping one shows its description, not an internal id like `bash_20`.
