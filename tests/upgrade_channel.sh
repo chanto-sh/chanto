@@ -54,18 +54,17 @@ homebrew)
   check "$(brew --prefix chanto)/bin/chanto"
   ;;
 npm)
-  npm install -g "@chanto/cli@${prev#v}"
-  chanto --version
-  real="$(npm root -g)/@chanto/cli/node_modules/@chanto/cli-linux-x64/bin/chanto"
-  [ -f "$real" ] || real=$(find "$(npm root -g)" -type f -name chanto -path '*cli-linux*' | head -1)
-  cp "$head" "$real"
-  out=$("$real" upgrade --force)
+  # Where npm puts the binary; `upgrade` must recognise it and give npm's command.
+  # Not a real install: that would be an unpinned dependency, and release.yml's
+  # verify job already installs and checks the published package.
+  bin="$RUNNER_TEMP/lib/node_modules/@chanto/cli-linux-x64/bin/chanto"
+  mkdir -p "$(dirname "$bin")"
+  cp "$head" "$bin"
+  out=$("$bin" upgrade --force)
   echo "$out"
   grep -q 'npm install -g @chanto/cli@latest' <<<"$out" || { echo "::error::npm: upgrade doesn't give the npm command"; exit 1; }
-  npm install -g @chanto/cli@latest
-  got=$(chanto --version)
-  [ "$got" = "chanto ${latest#v}" ] || { echo "::error::npm: '$got', expected $latest"; exit 1; }
-  echo "npm: $got"
+  ! grep -q 'install.sh' <<<"$out" || { echo "::error::npm: upgrade offers the install script"; exit 1; }
+  echo "npm: gives the npm command"
   ;;
 *) echo "unknown channel $CHANNEL"; exit 2 ;;
 esac

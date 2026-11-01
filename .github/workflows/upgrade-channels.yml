@@ -3,8 +3,9 @@ name: upgrade channels
 # this commit's upgrade code: a real install is laid down, its binary replaced by
 # this build, and `upgrade --force` must leave the latest release in place.
 # Homebrew starts from a tap clone left at the old version, the case that once
-# reported success with nothing upgraded. Only Scoop and cargo aren't run:
-# their command is only reported, which unit tests cover.
+# reported success with nothing upgraded. npm is checked for the command it gives
+# from npm's install path, since `upgrade` doesn't run it; Scoop and cargo are
+# the same, in unit tests.
 on:
   pull_request:
     paths:
