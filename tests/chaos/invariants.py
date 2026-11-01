@@ -81,7 +81,8 @@ class Run:
         self.env = {}
 
     def start_model(self, scenario, case=None):
-        env = dict(os.environ, FAKE_DUMP=str(self.dumps))
+        # UTF-8 on Windows too: scenario files hold emoji.
+        env = dict(os.environ, FAKE_DUMP=str(self.dumps), PYTHONUTF8="1")
         if case:
             env["CASE"] = case
         self.mock = subprocess.Popen(
