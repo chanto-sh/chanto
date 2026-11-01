@@ -1,0 +1,1 @@
+- **Tidier hover in the transcript.** Clicking a tool line with nothing more to show no longer leaves it highlighted, and hovering lights only the line a click acts on, leaving the time taken alone.
