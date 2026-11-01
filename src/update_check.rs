@@ -112,6 +112,10 @@ pub(crate) async fn latest_version_at(url: &str, timeout: Duration) -> anyhow::R
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InstallMethod {
     Homebrew,
+    /// `npm install -g @chanto/cli`: the binary sits in `node_modules`.
+    Npm,
+    /// `scoop install chanto`.
+    Scoop,
     /// install.sh / install.ps1 (a `chanto.install-method` marker next to the binary).
     Installer,
     Cargo,
@@ -135,6 +139,10 @@ impl InstallMethod {
         let path = exe.to_string_lossy().replace('\\', "/");
         if path.contains("/Cellar/chanto/") || path.contains("/homebrew/opt/chanto/") {
             InstallMethod::Homebrew
+        } else if path.contains("/node_modules/") {
+            InstallMethod::Npm
+        } else if path.to_lowercase().contains("/scoop/apps/chanto/") {
+            InstallMethod::Scoop
         } else if installer {
             InstallMethod::Installer
         } else if cargo || path.contains("/.cargo/bin/") {
@@ -174,7 +182,9 @@ impl InstallMethod {
     /// The command that upgrades this install, for the notice.
     pub fn command(self) -> &'static str {
         match self {
-            InstallMethod::Homebrew => "brew upgrade chanto",
+            InstallMethod::Homebrew => "brew update && brew upgrade chanto",
+            InstallMethod::Npm => "npm install -g @chanto/cli@latest",
+            InstallMethod::Scoop => "scoop update chanto",
             InstallMethod::Cargo => CARGO_COMMAND,
             InstallMethod::Installer => "chanto upgrade",
             InstallMethod::Source => "git pull && cargo build --release",
@@ -508,7 +518,7 @@ mod tests {
             Source
         );
         assert_eq!(m("/usr/local/bin/chanto", false, false), Unknown);
-        assert_eq!(Homebrew.command(), "brew upgrade chanto");
+        assert_eq!(Homebrew.command(), "brew update && brew upgrade chanto");
         assert!(Cargo.command().starts_with("cargo install"));
         assert_eq!(Installer.command(), "chanto upgrade");
         assert!(Unknown.command().contains("install."));
