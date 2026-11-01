@@ -1,0 +1,2 @@
+- **Security: text a person can't see no longer reaches the model.** Hidden Unicode tag characters and direction overrides are removed from project instructions, MCP tool descriptions and tool results.
+- **A model endpoint reporting absurd token counts can't crash a run.**

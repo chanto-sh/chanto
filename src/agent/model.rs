@@ -241,7 +241,7 @@ impl Agent {
         let mut images_dropped = false;
         // Times this request waited out a usage limit (a reset that doesn't take mustn't loop forever).
         let mut limit_waits = 0;
-        let resp = loop {
+        let mut resp = loop {
             // Masked above (`message_redactor`).
             let fut = provider.chat_masked(&req, &mut on_delta);
             let r = tokio::select! {
@@ -419,13 +419,26 @@ impl Agent {
         } else {
             0.0
         };
+        // Whatever a provider reports: everything downstream adds these up.
+        const MOST_TOKENS: u64 = 1 << 40;
+        for n in [
+            &mut resp.usage.prompt_tokens,
+            &mut resp.usage.completion_tokens,
+            &mut resp.usage.cached_tokens,
+            &mut resp.usage.cache_write_tokens,
+        ] {
+            *n = (*n).min(MOST_TOKENS);
+        }
         if resp.usage.prompt_tokens > 0 {
-            self.last_prompt_tokens = resp.usage.prompt_tokens + resp.usage.completion_tokens;
+            self.last_prompt_tokens = resp
+                .usage
+                .prompt_tokens
+                .saturating_add(resp.usage.completion_tokens);
             self.msgs_at_last_usage = self.messages.len() + 1;
         }
-        self.total_in += resp.usage.prompt_tokens;
-        self.total_out += resp.usage.completion_tokens;
-        self.total_cached += resp.usage.cached_tokens;
+        self.total_in = self.total_in.saturating_add(resp.usage.prompt_tokens);
+        self.total_out = self.total_out.saturating_add(resp.usage.completion_tokens);
+        self.total_cached = self.total_cached.saturating_add(resp.usage.cached_tokens);
         let prefill = first_token
             .lock()
             .unwrap()

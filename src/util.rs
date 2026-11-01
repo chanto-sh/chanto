@@ -645,3 +645,50 @@ mod emoji_tests {
         assert_eq!(e(":fire::rocket:"), "🔥🚀");
     }
 }
+
+/// Characters that put text in front of a model that a person can't see in it:
+/// Unicode tags, which spell out hidden ASCII, and the bidi controls that make
+/// text display in a different order. Tags after a black flag are how subdivision
+/// flag emoji are spelled, so those stay. Directional marks and joiners stay too:
+/// real writing needs them.
+pub fn strip_hidden(s: &str) -> std::borrow::Cow<'_, str> {
+    let hidden = |c: char| matches!(c, '\u{E0000}'..='\u{E007F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    if !s.contains(hidden) {
+        return s.into();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut in_flag = false;
+    for c in s.chars() {
+        if ('\u{E0000}'..='\u{E007F}').contains(&c) && in_flag {
+            out.push(c);
+            continue;
+        }
+        in_flag = c == '\u{1F3F4}';
+        if !hidden(c) {
+            out.push(c);
+        }
+    }
+    out.into()
+}
+
+#[cfg(test)]
+mod strip_hidden_tests {
+    use super::strip_hidden;
+
+    #[test]
+    fn hidden_characters_go_and_real_writing_stays() {
+        assert_eq!(
+            strip_hidden("a\u{E0069}\u{E0067}b\u{202E}c\u{2066}d"),
+            "abcd"
+        );
+        // England's flag, a family emoji, and Persian with a joiner and a mark.
+        for real in [
+            "\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}",
+            "\u{1F468}\u{200D}\u{1F469}",
+            "\u{0645}\u{200C}\u{0627}\u{200F}",
+            "plain",
+        ] {
+            assert_eq!(strip_hidden(real), real);
+        }
+    }
+}
