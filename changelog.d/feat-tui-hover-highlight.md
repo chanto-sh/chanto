@@ -1,1 +1,1 @@
-- **Clickable things light up under the mouse.** In the full-screen TUI, tool and thinking blocks, links, agent rows and the jump-to-latest pill get a soft background on hover, or an underline with `NO_COLOR`. Moving the mouse also no longer redraws the screen unless what's under it changed.
+- **Clickable things light up under the mouse.** In the full-screen TUI, tool and thinking blocks, links, agent rows and the jump-to-latest pill show lighter text on hover, or an underline with `NO_COLOR`. Moving the mouse also no longer redraws the screen unless what's under it changed.

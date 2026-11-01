@@ -653,16 +653,20 @@ async fn hovering_highlights_what_a_click_acts_on_and_redraws_only_on_change() {
         "within it: nothing to draw"
     );
     term.draw(|f| t.app.draw(f)).unwrap();
-    let bg = |term: &Terminal<ratatui::backend::TestBackend>, row| {
-        term.backend().buffer()[(a.x + 1, row)].bg
+    // The block's grey text lightens, and only while the mouse is on it.
+    let greys = |term: &Terminal<ratatui::backend::TestBackend>| {
+        let buf = term.backend().buffer();
+        (a.x..a.x + a.width)
+            .filter(|x| buf[(*x, block_row)].fg == pal().dim)
+            .count()
     };
-    assert_eq!(bg(&term, block_row), pal().panel_bg);
+    assert_eq!(greys(&term), 0, "lightened on hover");
 
     assert!(t.on_mouse_moved(text_row, 3), "off it: drawn once more");
     assert!(t.hover.is_none(), "text isn't clickable");
     assert!(!t.on_mouse_moved(text_row, 9));
     term.draw(|f| t.app.draw(f)).unwrap();
-    assert_ne!(bg(&term, block_row), pal().panel_bg);
+    assert!(greys(&term) > 0, "back to grey");
 
     // Nothing lights up under a selection or the help overlay.
     t.selection = Some(Selection {

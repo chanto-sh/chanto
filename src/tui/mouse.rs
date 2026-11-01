@@ -3,7 +3,7 @@
 
 use super::*;
 
-/// What a click would act on, shown by a soft highlight under the mouse.
+/// What a click would act on, shown by lighter text under the mouse.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Hover {
     Jump,
@@ -58,7 +58,7 @@ impl App {
         changed
     }
 
-    /// The soft highlight, from where the mouse is now: scrolling or streaming
+    /// The highlight, from where the mouse is now: scrolling or streaming
     /// can move a different block under it without the mouse moving.
     pub(super) fn paint_hover(&mut self, f: &mut Frame) {
         let hover = self
@@ -67,11 +67,6 @@ impl App {
         self.hover = hover;
         let Some(hover) = hover else {
             return;
-        };
-        let style = if theme::no_color() {
-            Style::default().add_modifier(Modifier::UNDERLINED)
-        } else {
-            Style::default().bg(pal().panel_bg)
         };
         let frame = f.area();
         let rects: Vec<Rect> = match hover {
@@ -88,8 +83,23 @@ impl App {
                     .collect()
             }
         };
+        let buffer = f.buffer_mut();
         for rect in rects {
-            f.buffer_mut().set_style(rect.intersection(frame), style);
+            let rect = rect.intersection(frame);
+            if theme::no_color() {
+                buffer.set_style(rect, Style::default().add_modifier(Modifier::UNDERLINED));
+                continue;
+            }
+            // Grey text goes to the terminal's normal color; text with a color of
+            // its own keeps it.
+            for y in rect.top()..rect.bottom() {
+                for x in rect.left()..rect.right() {
+                    let cell = &mut buffer[(x, y)];
+                    if cell.fg == pal().dim || cell.fg == faint() {
+                        cell.fg = Color::Reset;
+                    }
+                }
+            }
         }
     }
 
