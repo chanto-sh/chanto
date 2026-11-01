@@ -115,6 +115,33 @@
       "prompt_bytes": 23500
     }
   },
+  "responsive": {
+    "_comment": [
+      "tests/perf/responsive.py. idle_bytes is exact: an idle app draws nothing.",
+      "Timing ceilings have room: on October 31, 2026 idle was 0.43% of a core on",
+      "Linux and 0.87% on macOS, a key's first output under 2 ms, PageUp about",
+      "18-28 ms. Shell cost and bytes per key report only until runs set them."
+    ],
+    "linux": {
+      "idle_percent": 2,
+      "idle_bytes": 0,
+      "idle_after_long_percent": 2,
+      "idle_after_long_bytes": 0,
+      "typing_ms": 8,
+      "typing_after_long_ms": 8,
+      "page_up_ms": 50
+    },
+    "darwin": {
+      "idle_percent": 3,
+      "idle_bytes": 0,
+      "idle_after_long_percent": 3,
+      "idle_after_long_bytes": 0,
+      "typing_ms": 16,
+      "typing_after_long_ms": 16,
+      "page_up_ms": 80
+    },
+    "windows": {}
+  },
   "budgets": {
     "linux": {
       "startup_cpu_ms": 28,
