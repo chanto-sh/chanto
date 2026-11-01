@@ -1,0 +1,31 @@
+name: code scanning watch
+# A pull request's scan can miss a finding that the full scan on main then
+# reports, and nothing says so. This fails, which emails the maintainer, while
+# CodeQL has an open alert on main.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/code-scanning-watch.yml
+
+permissions:
+  contents: read
+  security-events: read
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          alerts=$(gh api "repos/$GITHUB_REPOSITORY/code-scanning/alerts?state=open&tool_name=CodeQL&ref=refs/heads/main&per_page=100" --paginate \
+            --jq '.[] | "#\(.number) \(.rule.security_severity_level // .rule.severity) \(.rule.id) \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line) \(.html_url)"')
+          if [ -n "$alerts" ]; then
+            echo "$alerts" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "::error::CodeQL has open alerts on main"
+            exit 1
+          fi
+          echo "No open CodeQL alerts on main." | tee -a "$GITHUB_STEP_SUMMARY"
