@@ -286,6 +286,8 @@ impl App {
             viewing: None,
             work_area: Rect::default(),
             jump_area: Rect::default(),
+            hover_pos: None,
+            hover: None,
             scroll_new: 0,
             work_start: 0,
             agent_view: None,
@@ -669,6 +671,15 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         tokio::select! {
             ev = events.next() => {
+                // Most mouse movement changes nothing on screen, and a move
+                // isn't the user coming back after a pause: draw only when it
+                // lands on something new.
+                if let Some(Ok(TermEvent::Mouse(m))) = &ev
+                    && m.kind == MouseEventKind::Moved
+                {
+                    dirty |= app.on_mouse_moved(m.row, m.column);
+                    continue;
+                }
                 // Coming back after a pause: the window may have been restored
                 // or the terminal repainted its own content, so rewrite every
                 // cell on this first frame rather than leaving its glyphs in
@@ -688,6 +699,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                     }
                     Some(Ok(TermEvent::FocusLost)) => {
                         app.focused = Some(false);
+                        app.hover_pos = None;
+                        app.hover = None;
                         app.check_attention();
                     }
                     Some(Ok(TermEvent::Paste(s))) => {

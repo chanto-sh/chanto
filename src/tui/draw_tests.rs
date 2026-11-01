@@ -624,3 +624,53 @@ async fn heights_make_room_for_each_panel() {
     let hs = t.heights(80, 30);
     assert_eq!((hs.status, hs.bottom), (2, 5));
 }
+
+#[tokio::test]
+async fn hovering_highlights_what_a_click_acts_on_and_redraws_only_on_change() {
+    let mut t = test_app();
+    t.push(Kind::Markdown("plain text".into()));
+    t.push(Kind::Thinking {
+        text: "reasoning\nmore reasoning".into(),
+        started: Instant::now(),
+        elapsed: Some(Duration::from_secs(1)),
+    });
+    let mut term = Terminal::new(ratatui::backend::TestBackend::new(60, 20)).unwrap();
+    term.draw(|f| t.app.draw(f)).unwrap();
+    let a = t.transcript_area;
+    let find = |t: &TestApp, want: fn(&Kind) -> bool| {
+        t.row_map
+            .iter()
+            .position(|bi| t.blocks.get(*bi).is_some_and(|b| want(&b.kind)))
+            .map(|r| a.y + r as u16)
+    };
+    let block_row =
+        find(&t, |k| matches!(k, Kind::Thinking { .. })).expect("the block is on screen");
+    let text_row = find(&t, |k| matches!(k, Kind::Markdown(_))).expect("the text is on screen");
+
+    assert!(t.on_mouse_moved(block_row, 3), "onto the block");
+    assert!(
+        !t.on_mouse_moved(block_row, 9),
+        "within it: nothing to draw"
+    );
+    term.draw(|f| t.app.draw(f)).unwrap();
+    let bg = |term: &Terminal<ratatui::backend::TestBackend>, row| {
+        term.backend().buffer()[(a.x + 1, row)].bg
+    };
+    assert_eq!(bg(&term, block_row), pal().panel_bg);
+
+    assert!(t.on_mouse_moved(text_row, 3), "off it: drawn once more");
+    assert!(t.hover.is_none(), "text isn't clickable");
+    assert!(!t.on_mouse_moved(text_row, 9));
+    term.draw(|f| t.app.draw(f)).unwrap();
+    assert_ne!(bg(&term, block_row), pal().panel_bg);
+
+    // Nothing lights up under a selection or the help overlay.
+    t.selection = Some(Selection {
+        anchor: (block_row, 1),
+        head: (block_row, 2),
+    });
+    assert!(!t.on_mouse_moved(block_row, 3));
+    t.selection = None;
+    t.help = true;
+    assert!(!t.on_mouse_moved(block_row, 3));
+}

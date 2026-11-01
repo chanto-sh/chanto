@@ -39,11 +39,16 @@ impl App {
         if self.help || self.popup.is_some() {
             return None;
         }
+        self.screen_link_at(row, col)
+            .map(|(_, _, _, url)| url.as_str())
+    }
+
+    /// The link's `(row, first column, one past the last, url)` under a cell.
+    pub(super) fn screen_link_at(&self, row: u16, col: u16) -> Option<&(u16, u16, u16, String)> {
         self.screen_links
             .iter()
             .rev()
             .find(|(y, start, end, _)| row == *y && (*start..*end).contains(&col))
-            .map(|(_, _, _, url)| url.as_str())
     }
 }
 
