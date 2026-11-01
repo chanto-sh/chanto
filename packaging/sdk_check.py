@@ -7,12 +7,15 @@ before publishing, and with --published, against the registries after it.
     python3 packaging/sdk_check.py --binary target/debug/chanto --published X.Y.Z
 """
 import argparse
+import base64
+import json
 import os
 import pathlib
 import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 sdk = pathlib.Path(__file__).resolve().parents[1] / "sdk"
 
@@ -48,6 +51,42 @@ def retrying(*cmd, cwd):
     raise SystemExit(f"never became available: {' '.join(map(str, cmd))}")
 
 
+def fetch(url):
+    with urllib.request.urlopen(url, timeout=30) as response:
+        return json.load(response)
+
+
+def npm_source(attestations):
+    """The repository, workflow and ref an npm package's provenance names."""
+    for attestation in attestations["attestations"]:
+        if attestation["predicateType"].startswith("https://slsa.dev/provenance/"):
+            payload = attestation["bundle"]["dsseEnvelope"]["payload"]
+            workflow = json.loads(base64.b64decode(payload))["predicate"]["buildDefinition"]["externalParameters"]["workflow"]
+            return workflow["repository"], workflow["path"], workflow["ref"]
+    raise SystemExit("no SLSA provenance on the npm package")
+
+
+def pypi_source(provenance):
+    """The repository and workflow a PyPI file's attestations name."""
+    publisher = provenance["attestation_bundles"][0]["publisher"]
+    return publisher["repository"], publisher["workflow"]
+
+
+def check_source(version):
+    """A signature only says a pipeline built something: require that it was
+    ours, from this repository, workflow and tag."""
+    got = npm_source(fetch(f"https://registry.npmjs.org/-/npm/v1/attestations/@chanto%2fsdk@{version}"))
+    want = ("https://github.com/chanto-sh/chanto", ".github/workflows/sdk-publish.yml", f"refs/tags/v{version}")
+    if got != want:
+        raise SystemExit(f"npm provenance names {got}, expected {want}")
+    release = fetch(f"https://pypi.org/pypi/chanto-sdk/{version}/json")
+    for file in release["urls"]:
+        got = pypi_source(fetch(f"https://pypi.org/integrity/chanto-sdk/{version}/{file['filename']}/provenance"))
+        if got != ("chanto-sh/chanto", "sdk-publish.yml"):
+            raise SystemExit(f"{file['filename']} provenance names {got}")
+    print("provenance names chanto-sh/chanto, sdk-publish.yml")
+
+
 def check_python(binary, published, home):
     with tempfile.TemporaryDirectory() as d:
         d = pathlib.Path(d)
@@ -70,6 +109,7 @@ def check_typescript(binary, published, home):
         (d / "package.json").write_text('{"private": true, "type": "module"}\n')
         if published:
             retrying("npm", "install", "--ignore-scripts", "--prefer-online", f"@chanto/sdk@{published}", cwd=d)
+            run("npm", "audit", "signatures", cwd=d)
         else:
             run("npm", "pack", "--pack-destination", d, cwd=sdk / "typescript/package")
             tarball = next(d.glob("*.tgz"))
@@ -87,6 +127,8 @@ def main():
     with tempfile.TemporaryDirectory() as home:
         check_python(binary, a.published, home)
         check_typescript(binary, a.published, home)
+    if a.published:
+        check_source(a.published)
 
 
 if __name__ == "__main__":
