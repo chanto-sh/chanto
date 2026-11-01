@@ -2212,8 +2212,8 @@ pub async fn run() {
         argv.get(1).map(String::as_str),
         Some("login" | "logout" | "providers")
     ) {
-        match auth::cli(&argv[1..]).await {
-            Ok(out) => println!("{out}"),
+        match auth::cli(&argv[1..], &|m| println!("{m}")).await {
+            Ok(()) => {}
             Err(e) => {
                 ui::error(&format!("{e:#}"));
                 std::process::exit(1);

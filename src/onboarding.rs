@@ -330,7 +330,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                 } else {
                     "openrouter"
                 };
-                crate::auth::cli(&["login".into(), p.into()]).await?;
+                crate::auth::cli(&["login".into(), p.into()], &|_| {}).await?;
                 let c = Candidate {
                     source: config::home_dir().join("auth.json").display().to_string(),
                     provider: p.into(),
@@ -350,7 +350,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                     .map(|h| h.id.to_string())
                     .collect::<Vec<_>>();
                 let p = &labels[choose("API key provider", &labels, plain)?];
-                crate::auth::cli(&["login".into(), p.clone(), "--key".into()]).await?;
+                crate::auth::cli(&["login".into(), p.clone(), "--key".into()], &|_| {}).await?;
                 let c = Candidate {
                     source: config::home_dir().join("auth.json").display().to_string(),
                     provider: p.clone(),
@@ -362,7 +362,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                 Ok(c)
             }
             3 => {
-                crate::auth::cli(&["login".into(), "openrouter".into()]).await?;
+                crate::auth::cli(&["login".into(), "openrouter".into()], &|_| {}).await?;
                 let free = openrouter_free_models().await?;
                 if free.is_empty() {
                     bail!(
@@ -389,7 +389,8 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                 println!(
                     "Create a free key at https://aistudio.google.com/apikey, then paste it below."
                 );
-                crate::auth::cli(&["login".into(), "gemini".into(), "--key".into()]).await?;
+                crate::auth::cli(&["login".into(), "gemini".into(), "--key".into()], &|_| {})
+                    .await?;
                 let provider = crate::llm::builtin_provider("gemini", "")
                     .context("The Gemini key wasn't saved; rerun chanto setup")?;
                 let mut models: Vec<String> = tokio::time::timeout(
