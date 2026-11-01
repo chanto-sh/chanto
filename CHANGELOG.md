@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## v0.1.13 (November 1, 2026)
+
+- **The example config no longer turns the sandbox off.** `chanto --example-config` printed `[sandbox] enabled = false`, while the sandbox is on by default, so anyone who copied the template lost it without noticing. It now says `true`.
+- **Large pastes aren't lost.** A paste that can't fit the model's context now warns when you paste it. Pressing enter keeps it in the box instead of clearing it, and pressing enter again saves it to a file the model reads from, keeping whatever you typed around it.
+- **Stuck on an old version with Homebrew?** If `chanto upgrade` said it upgraded but `chanto --version` didn't change, run `brew update && brew upgrade chanto` once by hand. Upgrades work normally from this version on.
+- **`chanto upgrade` tells the truth on Homebrew.** On a stale tap, `brew upgrade` finds nothing to do, and Chanto still said it had upgraded. It now refreshes the tap first and checks the installed version, with an error if the new one didn't arrive. npm and Scoop installs now get their own upgrade command, not the install script.
+- **Clickable things light up under the mouse.** In the full-screen TUI, tool and thinking blocks, links, agent rows and the jump-to-latest pill show lighter text on hover, or an underline with `NO_COLOR`. Moving the mouse also no longer redraws the screen unless what's under it changed.
+- **More subagents at once, and nesting if you want it.** The default goes from 3 to 6 subagents at a time. `[resources] max_agent_depth` (default 1, up to 3) lets subagents start their own, with at most 20 of those running at once. Nesting spends tokens quickly, so it stays off by default.
+- **`chanto batch`.** Runs a prompt once per line of a file, in parallel, saving each result to a JSON Lines file. A rerun skips the lines that already succeeded.
+- **SDKs can start Chanto themselves.** `Chanto.start()` in Python and TypeScript runs a private server for your program, and both SDKs now check the server is new enough, with a clear message if it isn't.
+
 ## v0.1.12 (October 31, 2026)
 
 - **Faster one-shot runs on Windows.** Each start launched a command to check that the sandbox works, even if the run never used the shell. A one-shot run now checks just before its first shell command, and that command waits for the answer, so the sandbox protects it as before. If the sandbox can't start, the warning now appears at that point too.

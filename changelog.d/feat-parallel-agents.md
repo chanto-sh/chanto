@@ -1,2 +1,0 @@
-- **More subagents at once, and nesting if you want it.** The default goes from 3 to 6 subagents at a time. `[resources] max_agent_depth` (default 1, up to 3) lets subagents start their own, with at most 20 of those running at once. Nesting spends tokens quickly, so it stays off by default.
-- **`chanto batch`.** Runs a prompt once per line of a file, in parallel, saving each result to a JSON Lines file. A rerun skips the lines that already succeeded.

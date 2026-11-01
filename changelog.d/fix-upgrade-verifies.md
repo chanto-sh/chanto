@@ -1,1 +1,0 @@
-- **`chanto upgrade` tells the truth on Homebrew.** On a stale tap, `brew upgrade` finds nothing to do, and Chanto still said it had upgraded. It now refreshes the tap first and checks the installed version, with an error if the new one didn't arrive. npm and Scoop installs now get their own upgrade command, not the install script.
