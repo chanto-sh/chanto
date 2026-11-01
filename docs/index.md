@@ -20,6 +20,6 @@ Chanto is a fast, lean coding agent for your terminal. It's a single small Rust 
 
 - [Quickstart](./quickstart.md): install, first run and the basics in five minutes.
 - [Models](./models.md): local models, hosted APIs, your ChatGPT plan and cloud providers.
-- [Reference](./reference.md): every feature in detail, generated from the CLI's own documentation.
+- [Reference](./reference.md): every feature in detail.
 
 Chanto is open source under Apache-2.0. Releases are on the [download page](https://chanto.sh/download), and the [changelog](https://chanto.sh/changelog) lists what changed in each.

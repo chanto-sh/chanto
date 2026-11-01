@@ -5,9 +5,11 @@ order: 30
 description: 'Queue runs and execute them on your own runners or hosted ones.'
 ---
 
+> Chanto cloud isn't publicly available yet. This describes the client interface and how it will work; nothing else in Chanto needs it.
+
 Chanto cloud is a shared run queue. You (or your team, CI, a script) queue a run in an org, and a runner takes it: one of your own machines, or a hosted runner. Every run is an ordinary Chanto background run on the runner, with its own worktree and branch, verified mode, budgets and sandbox. When it finishes, its branch is pushed to your repository.
 
-[Sign in with GitHub](https://app.chanto.sh/login) to get started, or run `chanto cloud login` from your terminal. To keep everything on a server of your own instead, use `chanto serve --runs` ([Remote runs](./reference.md#remote-runs-your-own-server)).
+To keep everything on a server of your own instead, use `chanto serve --runs` ([Remote runs](./reference.md#remote-runs-your-own-server)).
 
 ## Where runs go
 

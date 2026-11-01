@@ -5,6 +5,8 @@ order: 32
 description: 'The HTTP API used by the CLI, runners and the dashboard.'
 ---
 
+> Chanto cloud isn't publicly available yet. This describes the client interface and how it will work; nothing else in Chanto needs it.
+
 Everything is JSON over HTTPS. Authenticated routes take `Authorization: Bearer <token>`. Errors are a JSON body with a non-2xx status:
 
 ```json
@@ -14,7 +16,7 @@ Everything is JSON over HTTPS. Authenticated routes take `Authorization: Bearer 
 }
 ```
 
-Error codes: `unauthorized`, `forbidden`, `not_found`, `conflict`, `bad_request`, `too_large`, `quota_exceeded`, `expired`, `access_denied`, `not_configured`, `upstream`, `internal`. Clients should treat unknown codes as errors too. The wire types are in the Chanto repository's `proto/` crate (MIT or Apache-2.0).
+Error codes: `unauthorized`, `forbidden`, `not_found`, `conflict`, `bad_request`, `too_large`, `quota_exceeded`, `rate_limited`, `expired`, `access_denied`, `not_configured`, `upstream`, `internal`. Clients should treat unknown codes as errors too. The wire types are in the Chanto repository's `proto/` crate (MIT or Apache-2.0).
 
 ## Accounts
 

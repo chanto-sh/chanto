@@ -23,7 +23,7 @@ Cycle with `shift+tab`: `default` → `acceptEdits` → `plan` → `auto`, plus 
 
 ## Tools
 
-`Read` (text, images, PDF, notebooks), `Write`, `Edit`, `MultiEdit` (a file that isn't UTF-8 is refused with its likely encoding, UTF-16 or Latin-1, and an `iconv` command to convert it; a `Write` or `Edit` whose arguments arrived as broken JSON, likely cut off, isn't run on a repaired guess: the model is asked to resend it in smaller pieces), `NotebookEdit`, `Glob`, `Grep` (ripgrep), `Ls`, `RepoMap` (a ranked, token-budgeted map of the project's symbols (functions, types, classes, modules), most-referenced first, for getting oriented in a large or unfamiliar tree before grepping; `path` limits it to a subdirectory, `tokens` sets the budget, default 1024), `SemanticSearch` (vector search over the codebase: files are split into overlapping chunks and embedded through the `[embeddings]` provider, the vectors are cached under `~/.chanto/cache/embeddings/` and refreshed when a file changes, and results are ranked by cosine similarity; `query` is required, `k` (default 8) and `path` are optional), `Bash` (persistent cwd inside the project and `--add-dir`/`additionalDirectories` directories: a command that ends outside them, like `cd /`, leaves the shell back at the project root and the output says `Shell cwd was reset to <root>`; `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` (or `CHANTO_BASH_MAINTAIN_PROJECT_WORKING_DIR`) starts every command at the project root, timeouts, background shells via `BashOutput`/`KillShell`; runs through bash on Unix, with your shell's PATH, variables, aliases and functions (see [Your shell setup in Bash](#your-shell-setup-in-bash)), and through a `bash`/PowerShell/cmd on Windows, whichever exists (override with `CHANTO_SHELL`); files a command changed show as a diff), `Monitor` (runs a command in the background and hands each line it prints to the model as it arrives, so it reacts to a log, a file change or a CI status without polling; ends when the command exits or at `timeout_ms`, default 5 minutes, at most 30 (10 in `-p` runs, which wait for the watch to finish); it is a background shell, so `/bashes`, `BashOutput` and `KillShell` see it, and `Bash(...)` permission rules apply to its command), `CronCreate`/`CronList`/`CronDelete` and `ScheduleWakeup` (in-session scheduled prompts and the self-paced `/loop`; offered in the TUI and the `--plain` REPL only, and not at all with `CLAUDE_CODE_DISABLE_CRON=1`), `WebSearch`, `WebFetch`, `Browser` (Chrome over CDP: navigate, snapshot with element refs, click, type, keys, screenshots for vision models, tabs, JS eval), `Computer` (opt-in desktop control: screenshots, mouse, keyboard, apps; see [Computer use](#computer-use)), `TodoWrite`, `Task` (subagents with their own context), `AskUserQuestion`, `ExitPlanMode`, `Skill`, `Memory` (see [Durable memory](#durable-memory)), `Lsp` (see [Language servers](#language-servers)), `ToolSearch` (see [MCP servers](#mcp-servers)), `ChantoCloud` (cloud runs and agents, once you've signed in with `chanto cloud login`)
+`Read` (text, images, PDF, notebooks), `Write`, `Edit`, `MultiEdit` (a file that isn't UTF-8 is refused with its likely encoding, UTF-16 or Latin-1, and an `iconv` command to convert it; a `Write` or `Edit` whose arguments arrived as broken JSON, likely cut off, isn't run on a repaired guess: the model is asked to resend it in smaller pieces), `NotebookEdit`, `Glob`, `Grep` (ripgrep), `Ls`, `RepoMap` (a ranked, token-budgeted map of the project's symbols (functions, types, classes, modules), most-referenced first, for getting oriented in a large or unfamiliar tree before grepping; `path` limits it to a subdirectory, `tokens` sets the budget, default 1024), `SemanticSearch` (vector search over the codebase: files are split into overlapping chunks and embedded through the `[embeddings]` provider, the vectors are cached under `~/.chanto/cache/embeddings/` and refreshed when a file changes, and results are ranked by cosine similarity; `query` is required, `k` (default 8) and `path` are optional), `Bash` (persistent cwd inside the project and `--add-dir`/`additionalDirectories` directories: a command that ends outside them, like `cd /`, leaves the shell back at the project root and the output says `Shell cwd was reset to <root>`; `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` (or `CHANTO_BASH_MAINTAIN_PROJECT_WORKING_DIR`) starts every command at the project root, timeouts, background shells via `BashOutput`/`KillShell`; runs through bash on Unix, with your shell's PATH, variables, aliases and functions (see [Your shell setup in Bash](#your-shell-setup-in-bash)), and through PowerShell (then cmd) on Windows while the sandbox is on, which is the default, or with it off through Git Bash if present, then PowerShell, then cmd (override with `CHANTO_SHELL`, though Git Bash can't start inside the sandbox); files a command changed show as a diff), `Monitor` (runs a command in the background and hands each line it prints to the model as it arrives, so it reacts to a log, a file change or a CI status without polling; ends when the command exits or at `timeout_ms`, default 5 minutes, at most 30 (10 in `-p` runs, which wait for the watch to finish); it is a background shell, so `/bashes`, `BashOutput` and `KillShell` see it, and `Bash(...)` permission rules apply to its command), `CronCreate`/`CronList`/`CronDelete` and `ScheduleWakeup` (in-session scheduled prompts and the self-paced `/loop`; offered in the TUI and the `--plain` REPL only, and not at all with `CLAUDE_CODE_DISABLE_CRON=1`), `WebSearch`, `WebFetch`, `Browser` (Chrome over CDP: navigate, snapshot with element refs, click, type, keys, screenshots for vision models, tabs, JS eval), `Computer` (opt-in desktop control: screenshots, mouse, keyboard, apps; see [Computer use](#computer-use)), `TodoWrite`, `Task` (subagents with their own context), `AskUserQuestion`, `ExitPlanMode`, `Skill`, `Memory` (see [Durable memory](#durable-memory)), `Lsp` (see [Language servers](#language-servers)), `ToolSearch` (see [MCP servers](#mcp-servers)), `ChantoCloud` (cloud runs and agents, once you've signed in with `chanto cloud login`)
 
 ## Sandbox
 
@@ -34,7 +34,7 @@ The sandbox is on by default (macOS Seatbelt, Linux Landlock, and on Windows a w
 - **Local IPC (macOS):** commands start in a new session without a controlling terminal, can't read, write or `ioctl` Chanto's terminal or the other terminal windows' ttys (ptys they open themselves, as `script` does, work), can't send Apple Events, use LaunchServices (`open`, `osascript`), the clipboard or Shortcuts, and can connect to Unix sockets only inside the project and their own `$TMPDIR` (so not `docker.sock`, SSH or GPG agents, tmux, or other apps' sockets in the shared temp dirs). The SSH, GPG, D-Bus, X11/Wayland, Docker and `XDG_RUNTIME_DIR` environment variables are removed.
 - **Linux status:** Landlock grants the project, temp dirs and `/dev` whole, because carving a path out of a tree takes away the right to create files next to it (`target/`, `.git/index.lock`). So the in-project guards above (`.git`, `.chanto`, `.claude`, …) are not enforced by the sandbox on Linux; the permission layer still asks before the file tools touch them, but a shell command can write them. The home guards apply where a configured `allow_write` or `--add-dir` covers them. Unix sockets aren't scoped: removing the environment variables is advisory, and a command that knows a socket's path (`/var/run/docker.sock`, `/run/user/<uid>/bus`) can connect to it. Seccomp refuses TIOCSTI and TIOCLINUX, and UDP/raw sockets when the network is restricted.
 - **Network** stays allowed by default. Set `sandbox.network = "deny"` to block it, or `"allowlist"` to use the domain filtering proxy (`deny_network = true` remains a legacy alias; an explicit `network` wins); neither is enforced on Windows.
-- **Windows status:** commands run under a restricted copy of your own token (`WRITE_RESTRICTED`) inside a job object. No administrator, driver, extra account or AppContainer is needed. What's enforced: writes are limited to the project, the temp dir, `allow_write` and `--add-dir` paths, the package managers' download caches (`.cargo\registry`, `.cargo\git`, `.gradle\caches`, `.m2\repository`, `.bun\install\cache`, `go\pkg` and `.nuget\packages` in your profile; the npm, pnpm, Yarn, pip, uv, Go build and Poetry caches under `%LOCALAPPDATA%`), plus the rare locations that grant write access to Everyone; and the job kills every descendant when the shell or the launcher exits (the launcher also watches the Chanto process). What isn't: none of the read-only guards above apply, and reads are not restricted at all (Windows only consults a write-restricted token's extra SIDs for writes), so `deny_read` and the built-in credential denials don't apply and commands can read anything you can. The network isn't restricted either: `network = "deny"` gets a startup warning and commands keep network access, and `network = "allowlist"` fails closed with an error. With `sandbox.auto_allow`, Chanto warns at startup that auto-allowed commands can read credentials and use the network.
+- **Windows status:** commands run under a restricted copy of your own token (`WRITE_RESTRICTED`) inside a job object. They run in PowerShell, because Git Bash can't start under this token. No administrator, driver, extra account or AppContainer is needed. What's enforced: writes are limited to the project, the temp dir, `allow_write` and `--add-dir` paths, the package managers' download caches (`.cargo\registry`, `.cargo\git`, `.gradle\caches`, `.m2\repository`, `.bun\install\cache`, `go\pkg` and `.nuget\packages` in your profile; the npm, pnpm, Yarn, pip, uv, Go build and Poetry caches under `%LOCALAPPDATA%`), plus the rare locations that grant write access to Everyone; and the job kills every descendant when the shell or the launcher exits (the launcher also watches the Chanto process). What isn't: none of the read-only guards above apply, and reads are not restricted at all (Windows only consults a write-restricted token's extra SIDs for writes), so `deny_read` and the built-in credential denials don't apply and commands can read anything you can. The network isn't restricted either: `network = "deny"` gets a startup warning and commands keep network access, and `network = "allowlist"` fails closed with an error. With `sandbox.auto_allow`, Chanto warns at startup that auto-allowed commands can read credentials and use the network.
 - On Windows each writable root gets its own write SID (derived from its path) and an inheritable allow ACE for it. The ACE stays on the directory after the command: the first grant on a big tree waits while Windows propagates it to existing files, later commands only check it. The tool caches are granted in the background when Chanto starts, so commands don't wait on them. It grants nothing to ordinary processes, since that SID can only narrow a token's access. Files with protected ACLs, or moved in from elsewhere with their own ACL, stay read-only inside the sandbox. Grant paths must be on an ACL-capable filesystem, and setup failures stop the command rather than running it without isolation. WSL shells can't be contained and are refused. If the startup probe fails, Chanto warns and runs commands unsandboxed, as on any system without a sandbox.
 - When the sandbox blocks a command, the model can retry it with `dangerouslyDisableSandbox: true`. That is never automatic and always needs a human: you're asked in default, acceptEdits and plan modes, auto mode asks too (the classifier does not get to hand the sandbox back), and only bypass mode allows it. An explicit `Bash(...)` allow rule you wrote also covers it.
 - `/sandbox` shows the policy and `/sandbox on|off` toggles it for the session; `[sandbox] enabled = false` turns it off. `--sandbox read-only | workspace-write | danger-full-access` work as in Codex; `[sandbox] read_only = true` sets the read-only policy in config, whatever the permission mode.
@@ -65,7 +65,7 @@ denied_domains = ["untrusted.npmjs.org"]
 
 Snapshots use a private Git object store in `~/.chanto/history/<project-hash>/`; the project's own Git index, HEAD, refs, and stash are untouched. Snapshots include working-directory files, including untracked files, while honoring `.gitignore`. Ignored files, `.git`, `node_modules`, `target`, `.venv`, and files over the size cap are excluded. Restoring removes newly created files and recreates deleted files within that scope. External side effects (databases, network calls, package caches outside the project, and Git pushes) are not undone. Snapshots run at each prompt and before mutating Bash calls; read-only shell calls skip the extra snapshot. A project's first snapshot stores every file, written as a single pack (a few seconds for 30,000 small files), and may take up to 30 s; later ones only re-read files whose size or modification time changed (well under a second for the same project).
 
-If Git is unavailable or a snapshot exceeds its budget, a warning appears once and that checkpoint uses file-edit snapshots. This fallback covers Write/Edit/MultiEdit/NotebookEdit/apply_patch; Bash changes cannot be recovered by the fallback. Web UI and SDK file snapshots remain supported.
+If Git is unavailable or a snapshot exceeds its budget, a warning appears once and that checkpoint uses file-edit snapshots. This fallback covers Write/Edit/MultiEdit/NotebookEdit/apply_patch; Bash changes cannot be recovered by the fallback. Web UI file snapshots remain supported.
 
 Configure snapshot limits in TOML:
 
@@ -130,7 +130,7 @@ macOS and Linux (arm64 or x86_64):
 ```sh
 curl -fsSL https://chanto.sh/install.sh | sh
 # Pin a release or change the install prefix (binary goes in PREFIX/bin):
-curl -fsSL https://chanto.sh/install.sh | sh -s -- --version v0.1.4 --prefix "$HOME/.local"
+curl -fsSL https://chanto.sh/install.sh | sh -s -- --version v0.1.12 --prefix "$HOME/.local"
 ```
 
 Windows x64, in PowerShell:
@@ -138,7 +138,7 @@ Windows x64, in PowerShell:
 ```powershell
 irm https://chanto.sh/install.ps1 | iex
 # For options, download install.ps1, then:
-./install.ps1 -Version v0.1.4 -Prefix "$env:LOCALAPPDATA/chanto"
+./install.ps1 -Version v0.1.12 -Prefix "$env:LOCALAPPDATA/chanto"
 ```
 
 The shell installer defaults to `~/.local/bin`; PowerShell defaults to
@@ -298,7 +298,8 @@ reinstalls the latest release):
   platform, verifies it against the release's `SHA256SUMS`, checks that the new
   binary runs, then replaces the old one (removed, then the new one moved into
   place). On a mismatch or any failure the old binary stays.
-- **Homebrew**: offers to run `brew upgrade chanto`.
+- **Homebrew**: offers to run `brew update` and `brew upgrade chanto`, then checks the new version arrived and says so if it didn't.
+- **npm and Scoop**: prints the command to run (`npm install -g @chanto/cli@latest` or `scoop update chanto`).
 - **Cargo**: prints the `cargo install` command; a build in a source checkout is
   told to `git pull` and rebuild. If the install method can't be told, nothing
   is replaced and Chanto says how to install a release.
@@ -344,7 +345,7 @@ chanto -r                               # pick a previous session to resume
 chanto --completions zsh > ~/.zfunc/_chanto
 chanto goal "make the importer handle CSV files"   # work until agreed criteria pass
 chanto team "add OAuth login and a settings page" --agents 3
-chanto batch "fix the lint errors in {}" --from files.txt --jobs 4 -- --mode acceptEdits  # once per line; a rerun skips what succeeded
+chanto batch "fix the lint errors in {}" --from files.txt --jobs 4 -- --mode acceptEdits  # once per line; a rerun skips what succeeded; runs share this folder, so keep items from editing the same files
 ```
 
 Text output (`-p` without `--output-format`, or with `--verbose`) drops terminal escape sequences and control characters from the model's text, whether or not stdout is a terminal, so a reply can't retitle the window or write to the clipboard; `json` and `stream-json` carry the text unchanged.
@@ -699,7 +700,7 @@ Bash commands run under `bash -c`, which reads no startup files. So that tools t
 - functions, except completion, prompt and hook functions (names starting with `_`, `prompt_`, `precmd`, `preexec`, …) and ones that would replace builtins Chanto relies on (`cd`, `pwd`, `exit`, …). Each is defined through its own `eval`, so one bash can't parse (zsh-only syntax) is skipped; functions and aliases whose text looks like it holds a secret are left out too;
 - aliases, with `expand_aliases` on.
 
-The startup files run with no terminal, stdin from `/dev/null` and their output thrown away, so ones that print, fail or wait for input don't matter, and with `CHANTO_SHELL_SNAPSHOT=1` set, which they can test to skip slow work. If they take more than 5 seconds, Chanto warns once and commands run with Chanto's own environment. Commands still run under bash (not your shell) so quoting and the tool's behavior are the same for everyone; variables always carry over from zsh, and functions do when bash can parse them. fish isn't captured. The snapshot is sourced inside the command's process, so the sandbox applies to it, and `CLAUDE_ENV_FILE` files run after it, so they can build on it. Not in a background run's container, and not on Windows, where commands run in Git Bash or PowerShell as before.
+The startup files run with no terminal, stdin from `/dev/null` and their output thrown away, so ones that print, fail or wait for input don't matter, and with `CHANTO_SHELL_SNAPSHOT=1` set, which they can test to skip slow work. If they take more than 5 seconds, Chanto warns once and commands run with Chanto's own environment. Commands still run under bash (not your shell) so quoting and the tool's behavior are the same for everyone; variables always carry over from zsh, and functions do when bash can parse them. fish isn't captured. The snapshot is sourced inside the command's process, so the sandbox applies to it, and `CLAUDE_ENV_FILE` files run after it, so they can build on it. Not in a background run's container, and not on Windows.
 
 Turn it off with `shell_snapshot = false`, `CHANTO_SHELL_SNAPSHOT=0`, or Claude Code's `CLAUDE_BASH_NO_LOGIN=1`.
 
@@ -959,7 +960,7 @@ To let the agent read one specific file without asking, add an allow rule such a
 ## Resource limits
 
 Agents can't take the machine down:
-- **Concurrency:** at most 6 subagents (`max_parallel_agents`) and 4 shell commands (`max_parallel_commands`) run at once across all agents; the rest wait their turn. At most 8 background agents can be alive (`max_background_agents`), and subagents can't start subagents, so there's no recursive fan-out.
+- **Concurrency:** at most 6 subagents (`max_parallel_agents`) and 4 shell commands (`max_parallel_commands`) run at once across all agents; the rest wait their turn. At most 8 background agents can be alive (`max_background_agents`), and by default subagents can't start subagents; `max_agent_depth` 2 or 3 allows it, with at most 20 nested agents at once.
 - **Memory-aware starts:** new subagents and commands wait while free memory is below `min_free_memory_mb` (default 5% of RAM, at least 1 GB), then fail with a message telling the model to work sequentially. On macOS this uses the kernel's memory-pressure figure, not resident size.
 - **Watchdog:** if Chanto's child processes use more than `memory_limit_percent` of RAM (default 70%), or the system is nearly out of memory, Chanto kills the largest one's process group. That's the runaway build or test, never Chanto itself, and the model is told why. On macOS it measures physical footprint, so compressed and swapped memory count.
 - **Bounded output:** command output kept in memory is capped (head and tail), so a command that floods output can't exhaust RAM.
@@ -1157,6 +1158,8 @@ WantedBy=multi-user.target
 
 ### Queue runners: taking runs from Chanto cloud
 
+Chanto cloud isn't publicly available yet.
+
 `chanto runner connect` turns a machine into a runner for a run queue (Chanto cloud, or any server that implements the runner protocol in `proto/src/runs.rs`). The runner only makes outbound HTTPS requests, so it works behind a firewall.
 
 ```bash
@@ -1178,7 +1181,7 @@ Nobody watches these runs, so permission prompts are denied with an explanation 
 
 ### Cloud runs from the CLI
 
-Sign in to [Chanto cloud](https://chanto.sh) with GitHub, then send a task from your terminal, follow it there, and get its branch back:
+Chanto cloud isn't publicly available yet. Once it is, you'll sign in, then send a task from your terminal, follow it there, and get its branch back:
 
 ```bash
 chanto cloud login                                      # browser sign-in; the token goes in ~/.chanto/auth.json (0600)
@@ -1218,7 +1221,7 @@ Jobs live in `.chanto/runner.toml` in a project, or in `~/.chanto/runner.toml` f
 
 ```toml
 [[job]]
-name = "nightly-review"             # letters, digits, - _ .; unique across all job files
+name = "nightly-review"             # letters, digits, - _ .; unique within a file
 schedule = "0 3 * * *"              # 5-field cron (local time), or an interval: 30m, 2h, 1d
 prompt = "Review yesterday's commits and write up the risks in REVIEW.md."
 verify = true                       # the rest default to [background]
@@ -1286,10 +1289,10 @@ Once signed in, the built-in provider `chanto` uses the cloud's model gateway, b
 ```bash
 chanto cloud models                     # what the gateway offers, with prices per million tokens
 chanto models chanto                   # the same names as chanto/<model>
-chanto -m chanto/claude-sonnet-4-5
+chanto -m chanto/<model>
 ```
 
-`/model chanto/<model>` works too, and `chanto providers` and `chanto doctor` show the sign-in. Claude models go to the gateway's Anthropic Messages API (`/v1/model/anthropic`), others to its OpenAI-compatible API (`/v1/model/openai/v1`). Requests carry your token as `x-api-key` (or a bearer token) and the org as `x-chanto-org` when one is selected. A `402` means the org can't spend more: it reached its monthly spending limit or has no trial credit left, so an org admin needs to raise the limit or turn on billing. A `401` means the token was revoked or expired: run `chanto cloud login` again.
+`/model chanto/<model>` works too, and `chanto providers` and `chanto doctor` show the sign-in.
 
 ### Agents
 
