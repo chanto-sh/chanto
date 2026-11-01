@@ -1286,7 +1286,7 @@ impl Tool for BashOutput {
         let shell = env.shells.lock().unwrap().get(id).cloned();
         shell.map_or_else(
             || self.label(args),
-            |sh| format!("BashOutput({} · {id})", sh.title()),
+            |sh| format!("BashOutput({})", sh.title()),
         )
     }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput> {
@@ -1462,6 +1462,14 @@ impl Tool for KillShell {
     }
     fn label(&self, args: &Value) -> String {
         format!("KillShell({})", args["shell_id"].as_str().unwrap_or(""))
+    }
+    fn label_in(&self, args: &Value, env: &crate::agent::Env) -> String {
+        let id = args["shell_id"].as_str().unwrap_or("");
+        let shell = env.shells.lock().unwrap().get(id).cloned();
+        shell.map_or_else(
+            || self.label(args),
+            |sh| format!("KillShell({})", sh.title()),
+        )
     }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput> {
         let id = args["shell_id"]
