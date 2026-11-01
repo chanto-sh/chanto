@@ -194,6 +194,9 @@ impl Region {
     }
 }
 
+/// How long a hint stays up without a key press.
+const HINT_LIFETIME: Duration = Duration::from_secs(10);
+
 impl App {
     /// The state a session starts with. `run` adds what needs a subprocess or
     /// a background watcher (the branch, the pull request status).
@@ -383,6 +386,16 @@ impl App {
         // knows one, and mid-session when one ships while this runs.
         if let Some(notice) = crate::update_check::take_notice() {
             self.note(notice, pal().accent);
+            dirty = true;
+        }
+        // A hint is redrawn on each tick, so one left up would keep an idle
+        // app drawing until the next key.
+        if self
+            .hint
+            .as_ref()
+            .is_some_and(|(_, since)| since.elapsed() >= HINT_LIFETIME)
+        {
+            self.hint = None;
             dirty = true;
         }
         // An in-flight `/btw` ask animates its panel's spinner.

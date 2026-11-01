@@ -332,6 +332,21 @@ async fn typed_text_too_large_is_saved_whole() {
 }
 
 #[tokio::test]
+async fn a_hint_goes_away_so_an_idle_app_stops_drawing() {
+    let mut t = test_app();
+    t.hint = Some(("recent".into(), Instant::now()));
+    t.on_tick();
+    assert!(t.hint.is_some());
+    t.hint = Some((
+        "old".into(),
+        Instant::now() - std::time::Duration::from_secs(11),
+    ));
+    assert!(t.on_tick(), "drawn once more to remove it");
+    assert!(t.hint.is_none());
+    assert!(!t.on_tick(), "then nothing to draw");
+}
+
+#[tokio::test]
 async fn messages_that_fit_and_commands_are_not_held() {
     let mut t = test_app();
     t.busy = true;
