@@ -37,6 +37,13 @@ def typescript():
         "repository": {"type": "git", "url": "git+https://github.com/chanto-sh/chanto.git", "directory": "sdk/typescript"},
         "engines": {"node": ">=18"},
     }, indent=2) + "\n")
+    # What a user does first: a package that can't be imported can't be unpublished.
+    subprocess.run(
+        ["node", "--input-type=module", "-e",
+         'const {Chanto} = await import("./package/dist/index.js");'
+         'if (typeof Chanto !== "function") throw new Error("no Chanto export");'],
+        cwd=root, check=True,
+    )
 
 
 def python():

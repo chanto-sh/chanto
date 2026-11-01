@@ -361,6 +361,8 @@ jobs:
         working-directory: sdk/python
       - run: npm ci --ignore-scripts && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts
         working-directory: sdk/typescript
+      # Builds the packages as sdk-publish.yml does, and imports the TypeScript one.
+      - run: python3 packaging/sdk.py 0.0.1
   # The JetBrains plugin. Gradle's wrapper jar isn't committed (it would be an
   # unreviewable binary), so this installs the version gradle-wrapper.properties
   # names and runs it directly.
