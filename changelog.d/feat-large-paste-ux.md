@@ -1,1 +1,0 @@
-- **Large pastes aren't lost.** A paste that can't fit the model's context now warns when you paste it. Pressing enter keeps it in the box instead of clearing it, and pressing enter again saves it to a file the model reads from, keeping whatever you typed around it.

@@ -1,1 +1,0 @@
-- **SDKs can start Chanto themselves.** `Chanto.start()` in Python and TypeScript runs a private server for your program, and both SDKs now check the server is new enough, with a clear message if it isn't.
