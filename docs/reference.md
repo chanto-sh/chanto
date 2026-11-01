@@ -1158,6 +1158,8 @@ WantedBy=multi-user.target
 
 ### Queue runners: taking runs from Chanto cloud
 
+Chanto cloud isn't publicly available yet.
+
 `chanto runner connect` turns a machine into a runner for a run queue (Chanto cloud, or any server that implements the runner protocol in `proto/src/runs.rs`). The runner only makes outbound HTTPS requests, so it works behind a firewall.
 
 ```bash
@@ -1179,7 +1181,7 @@ Nobody watches these runs, so permission prompts are denied with an explanation 
 
 ### Cloud runs from the CLI
 
-Sign in to [Chanto cloud](https://chanto.sh) with GitHub, then send a task from your terminal, follow it there, and get its branch back:
+Chanto cloud isn't publicly available yet. Once it is, you'll sign in, then send a task from your terminal, follow it there, and get its branch back:
 
 ```bash
 chanto cloud login                                      # browser sign-in; the token goes in ~/.chanto/auth.json (0600)
@@ -1287,10 +1289,10 @@ Once signed in, the built-in provider `chanto` uses the cloud's model gateway, b
 ```bash
 chanto cloud models                     # what the gateway offers, with prices per million tokens
 chanto models chanto                   # the same names as chanto/<model>
-chanto -m chanto/claude-sonnet-4-5
+chanto -m chanto/<model>
 ```
 
-`/model chanto/<model>` works too, and `chanto providers` and `chanto doctor` show the sign-in. Claude models go to the gateway's Anthropic Messages API (`/v1/model/anthropic`), others to its OpenAI-compatible API (`/v1/model/openai/v1`). Requests carry your token as `x-api-key` (or a bearer token) and the org as `x-chanto-org` when one is selected. A `402` means the org can't spend more: it reached its monthly spending limit or has no trial credit left, so an org admin needs to raise the limit or turn on billing. A `401` means the token was revoked or expired: run `chanto cloud login` again.
+`/model chanto/<model>` works too, and `chanto providers` and `chanto doctor` show the sign-in.
 
 ### Agents
 

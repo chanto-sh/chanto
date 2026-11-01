@@ -5,6 +5,8 @@ order: 32
 description: 'The HTTP API used by the CLI, runners and the dashboard.'
 ---
 
+> Chanto cloud isn't publicly available yet. This describes the client interface and how it will work; nothing else in Chanto needs it.
+
 Everything is JSON over HTTPS. Authenticated routes take `Authorization: Bearer <token>`. Errors are a JSON body with a non-2xx status:
 
 ```json
