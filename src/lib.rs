@@ -31,6 +31,7 @@ mod doctor;
 mod feedback;
 mod format;
 // Crate internals the fuzz targets in fuzz/ call; not public API.
+mod batch;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzzing;
@@ -136,6 +137,7 @@ Commands:
   github install                Set up the GitHub review bot in this repository
   insights | logs [--tail]      Usage report, or the diagnostic log
   feedback <message>            Send feedback or a bug report (shows what is sent first)
+  batch <prompt> --from <file>  Run a prompt once per line of a file, in parallel
   upgrade [--check]             Update chanto
 
 Most commands accept --help. Docs: ",
@@ -2116,6 +2118,17 @@ pub async fn run() {
         if let Err(e) = runner::cli(&argv[2..]).await {
             ui::error(&format!("{e:#}"));
             std::process::exit(1);
+        }
+        return;
+    }
+    // `chanto batch <prompt> --from FILE [--jobs N] [--out FILE] [-- chanto args]`.
+    if argv.get(1).map(String::as_str) == Some("batch") {
+        match batch::cli(&argv[2..]).await {
+            Ok(out) => println!("{out}"),
+            Err(e) => {
+                ui::error(&format!("{e:#}"));
+                std::process::exit(1);
+            }
         }
         return;
     }

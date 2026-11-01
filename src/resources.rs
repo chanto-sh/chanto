@@ -12,8 +12,11 @@ use tokio::sync::Semaphore;
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ResourcesConfig {
-    /// Subagents running at the same time (default 3); more wait their turn.
+    /// Subagents running at the same time (default 6); more wait their turn.
     pub max_parallel_agents: Option<usize>,
+    /// How deep subagents can nest: 1 (default) lets only the main agent
+    /// start them, and more lets them start their own, up to 3.
+    pub max_agent_depth: Option<usize>,
     /// Background agents alive at once, running or queued (default 8).
     pub max_background_agents: Option<usize>,
     /// Shell commands running at the same time across all agents (default 4).
@@ -33,6 +36,7 @@ impl ResourcesConfig {
         }
         m!(
             max_parallel_agents,
+            max_agent_depth,
             max_background_agents,
             max_parallel_commands,
             min_free_memory_mb,
@@ -66,7 +70,7 @@ fn limits() -> &'static Limits {
 fn init_limits(c: &ResourcesConfig) -> Limits {
     let total = total_mb();
     Limits {
-        agents: Semaphore::new(c.max_parallel_agents.unwrap_or(3).max(1)),
+        agents: Semaphore::new(c.max_parallel_agents.unwrap_or(6).max(1)),
         commands: Semaphore::new(c.max_parallel_commands.unwrap_or(4).max(1)),
         max_background: c.max_background_agents.unwrap_or(8).max(1),
         min_free: c.min_free_memory_mb.unwrap_or((total / 20).max(1024)),
@@ -145,6 +149,38 @@ pub async fn wait_for_memory(what: &str, patience: Duration) -> Result<(), Strin
 }
 
 /// A slot for running a subagent; held until it finishes.
+/// Nested subagents alive at once, across the whole tree.
+const MAX_NESTED_AGENTS: usize = 20;
+static NESTED_AGENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts a nested subagent while it lives.
+pub struct NestedAgent;
+
+impl Drop for NestedAgent {
+    fn drop(&mut self) {
+        NESTED_AGENTS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Room for one more nested subagent, or None at the limit. They don't take an
+/// `agent_slot`: their parent holds one while it waits for them, so a tree
+/// that filled every slot with parents would wait on itself forever. This cap
+/// is what stops a tree fanning out without end instead.
+pub fn nested_agent() -> Option<NestedAgent> {
+    use std::sync::atomic::Ordering::Relaxed;
+    NESTED_AGENTS
+        .try_update(Relaxed, Relaxed, |n| {
+            (n < MAX_NESTED_AGENTS).then_some(n + 1)
+        })
+        .ok()
+        .map(|_| NestedAgent)
+}
+
+/// The nesting a config allows, from 1 to 3.
+pub fn agent_depth(c: &ResourcesConfig) -> usize {
+    c.max_agent_depth.unwrap_or(1).clamp(1, 3)
+}
+
 pub async fn agent_slot() -> tokio::sync::SemaphorePermit<'static> {
     limits().agents.acquire().await.expect("semaphore closed")
 }
