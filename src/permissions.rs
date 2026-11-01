@@ -507,7 +507,9 @@ impl Rules {
         let vouches = |r: &Rule, s: &str| {
             r.is_blanket()
                 || !matches!(tool, "Bash" | "Monitor")
-                || (!(has_dynamic_parts(s) || has_write_redirect(&strip_quoted(s)))
+                || (!(has_dynamic_parts(s)
+                    || has_write_redirect(&strip_quoted(s))
+                    || flag_runs_or_writes(s))
                     && (posix || plain_command(s)))
         };
         if subjects.iter().all(|s| {
@@ -519,6 +521,27 @@ impl Rules {
         }
         None
     }
+}
+
+/// Flags that make a command run a program or write a file, which a rule for
+/// `git log` or `rg` doesn't mean to allow. Plain `git grep -c` still counts lines.
+fn flag_runs_or_writes(simple: &str) -> bool {
+    if shell_flags::runs_or_writes(simple) {
+        return true;
+    }
+    let mut words = simple.split_whitespace();
+    if words.next() != Some("git") {
+        return false;
+    }
+    let rest: Vec<&str> = words.map(|w| w.trim_matches(['"', '\''])).collect();
+    rest.first().is_some_and(|w| {
+        *w == "-c" || w.starts_with("--config-env") || w.starts_with("--exec-path=")
+    }) || rest.iter().any(|w| {
+        w.starts_with("--output")
+            || w.starts_with("--ext-diff")
+            || w.starts_with("--open-files-in-pager")
+            || (w.starts_with("-O") && rest.contains(&"grep"))
+    })
 }
 
 /// Split a shell command into simple commands on `&&`, `||`, `;`, `|`, newlines.
@@ -2658,6 +2681,28 @@ mod tests {
         assert!(!auto_safe_command("rm -rf ${HOME}"));
         assert!(!auto_safe_command("awk 'BEGIN{system(\"x\")}'"));
         assert!(!auto_safe_command("perl -e 'system 1'"));
+    }
+
+    #[test]
+    fn a_prefix_rule_does_not_cover_flags_that_run_programs() {
+        for cmd in [
+            "git grep -O'touch x #' foo",
+            "git grep --open-files-in-pager=sh foo",
+            "git log -p --output=x",
+            "git diff --ext-diff",
+            "git -c core.pager=sh log",
+        ] {
+            assert!(flag_runs_or_writes(cmd), "{cmd}");
+        }
+        for cmd in [
+            "git log -p",
+            "git grep -c foo",
+            "git grep -n foo",
+            "git diff --stat",
+            "git commit -m x",
+        ] {
+            assert!(!flag_runs_or_writes(cmd), "{cmd}");
+        }
     }
 
     #[test]
