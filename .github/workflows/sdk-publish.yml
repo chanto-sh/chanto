@@ -1,0 +1,43 @@
+name: sdk publish
+# Publishes the SDKs by hand, at a release's version, through trusted publishing:
+# no long-lived secret. Each package must first trust this workflow on
+# npmjs.com and pypi.org. It stays out of release.yml until that's done and
+# they've published once, so a failure here can't affect a release.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, as X.Y.Z (a release that exists)
+        required: true
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: v${{ inputs.version }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          # Trusted publishing needs npm 11.5.1+, which Node 24 ships.
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Build
+        env:
+          VERSION: ${{ inputs.version }}
+        run: python3 packaging/sdk.py "$VERSION"
+      - name: Publish to npm
+        working-directory: sdk/typescript/package
+        run: npm publish --access public --provenance
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: sdk/python/dist

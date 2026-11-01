@@ -1426,12 +1426,17 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
     std::fs::create_dir_all(crate::config::home_dir())?;
     let path = server_file();
     // Owner-only from the start: the file holds the bearer token.
-    let _ = std::fs::remove_file(&path);
-    let mut opts = std::fs::OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
-    std::io::Write::write_all(&mut opts.open(&path)?, &serde_json::to_vec_pretty(&info)?)?;
+    // A program's private server (the SDKs' `start`) mustn't take over the
+    // file that says where the user's own server is.
+    let private = std::env::var_os("CHANTO_PRIVATE_SERVER").is_some();
+    if !private {
+        let _ = std::fs::remove_file(&path);
+        let mut opts = std::fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o600);
+        std::io::Write::write_all(&mut opts.open(&path)?, &serde_json::to_vec_pretty(&info)?)?;
+    }
     eprintln!(
         "chanto server listening on {url}\ntoken: {token}\n(connection details written to {})",
         path.display()
@@ -1517,7 +1522,9 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
     for s in all {
         close_session(&s).await;
     }
-    let _ = std::fs::remove_file(&path);
+    if !private {
+        let _ = std::fs::remove_file(&path);
+    }
     r?;
     Ok(())
 }
