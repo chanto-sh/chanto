@@ -1,7 +1,8 @@
 name: mutants
 # Breaks the lines a pull request changes, one at a time, and checks that a test
 # fails each time: coverage says a line ran, this says a test would notice. A
-# run takes one build per mutant, so it stays out of ci.yml, and it's advisory:
+# run takes a build per mutant, so it stays out of ci.yml, tests at most MAX of
+# them (a large change gets an even, repeatable sample), and it's advisory:
 # some mutants can't change behaviour a test could see. Missed mutants don't
 # fail the check; they're in the run's summary.
 on:
@@ -16,11 +17,12 @@ permissions:
   contents: read
 env:
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
+  MAX: 24
 
 jobs:
   mutants:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -45,8 +47,13 @@ jobs:
           git diff "$BASE...$HEAD" -- '*.rs' ':!*tests.rs' ':!tests/' ':!fuzz/' > "$RUNNER_TEMP/changes.diff"
           # In the diff's order and the baseline left to ci.yml: the same mutants
           # for the same change. Exits 2 and 3 are missed and timed-out mutants, reported below.
+          total=$(cargo mutants --list --in-diff "$RUNNER_TEMP/changes.diff" | wc -l)
+          shards=$(( (total + MAX - 1) / MAX ))
+          [ "$shards" -ge 1 ] || shards=1
+          echo "TOTAL=$total" >> "$GITHUB_ENV"
           status=0
           cargo mutants --in-diff "$RUNNER_TEMP/changes.diff" --no-shuffle --baseline=skip \
+            --shard "0/$shards" --jobs 3 \
             --timeout 300 --cargo-test-arg=--lib -o "$RUNNER_TEMP" || status=$?
           case "$status" in 0 | 2 | 3) ;; *) exit "$status" ;; esac
       - name: Summary
@@ -57,6 +64,7 @@ jobs:
           {
             echo '### Mutants on the changed lines'
             echo "caught $(wc -l < "$out/caught.txt"), missed $(wc -l < "$out/missed.txt"), timed out $(wc -l < "$out/timeout.txt")"
+            echo "(a sample of at most $MAX, of ${TOTAL:-?} on these lines)"
             if [ -s "$out/missed.txt" ]; then
               echo 'No test noticed these changes:'
               echo '```'
