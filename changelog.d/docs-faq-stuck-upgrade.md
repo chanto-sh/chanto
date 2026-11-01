@@ -1,0 +1,1 @@
+- **Stuck on an old version with Homebrew?** If `chanto upgrade` said it upgraded but `chanto --version` didn't change, run `brew update && brew upgrade chanto` once by hand. Upgrades work normally from this version on.
