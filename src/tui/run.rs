@@ -194,6 +194,9 @@ impl Region {
     }
 }
 
+/// How long a hint stays up without a key press.
+const HINT_LIFETIME: Duration = Duration::from_secs(10);
+
 impl App {
     /// The state a session starts with. `run` adds what needs a subprocess or
     /// a background watcher (the branch, the pull request status).
@@ -264,6 +267,7 @@ impl App {
             pr_status: Default::default(),
             mouse: !inline,
             pastes: vec![],
+            oversize_offer: None,
             images: vec![],
             pending_dialogs: VecDeque::new(),
             search: None,
@@ -355,6 +359,12 @@ impl App {
             self.input.insert(&format!("@{} ", t.replace(' ', "\\ ")));
         } else if (n_lines > 12 || s.len() > 1500) && self.env.config.collapse_pastes != Some(false)
         {
+            if let Some((tokens, max)) = self.oversized(&s) {
+                self.hint = Some((
+                    format!("That paste won't fit this model: ~{tokens} tokens of {max}"),
+                    Instant::now(),
+                ));
+            }
             self.pastes.push(s.clone());
             self.input.insert(&format!(
                 "[Pasted text #{} +{} lines]",
@@ -376,6 +386,16 @@ impl App {
         // knows one, and mid-session when one ships while this runs.
         if let Some(notice) = crate::update_check::take_notice() {
             self.note(notice, pal().accent);
+            dirty = true;
+        }
+        // A hint is redrawn on each tick, so one left up would keep an idle
+        // app drawing until the next key.
+        if self
+            .hint
+            .as_ref()
+            .is_some_and(|(_, since)| since.elapsed() >= HINT_LIFETIME)
+        {
+            self.hint = None;
             dirty = true;
         }
         // An in-flight `/btw` ask animates its panel's spinner.

@@ -251,6 +251,24 @@ fn pr_label(v: &serde_json::Value) -> Option<String> {
 /// Pasted text with `\n` line breaks. Terminal.app and many others send each
 /// line break of a bracketed paste as `\r`, which would count as one line and
 /// reach the model as carriage returns.
+fn paste_tag_range(text: &str, index: usize) -> Option<std::ops::Range<usize>> {
+    let start = text.find(&format!("[Pasted text #{} +", index + 1))?;
+    let end = text[start..].find(" lines]")?;
+    Some(start..start + end + 7)
+}
+
+/// `text` with its `[Pasted text #n +N lines]` tags replaced by the pastes. An
+/// expanded paste (ctrl+o) left no tag behind; it's already text.
+fn expand_pastes(text: &str, pastes: &[String]) -> String {
+    let mut text = text.to_string();
+    for (i, paste) in pastes.iter().enumerate() {
+        if let Some(range) = paste_tag_range(&text, i) {
+            text.replace_range(range, paste);
+        }
+    }
+    text
+}
+
 fn normalize_paste(s: &str) -> String {
     s.replace("\r\n", "\n").replace('\r', "\n")
 }
@@ -937,6 +955,9 @@ struct App {
     pr_status: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     mouse: bool,
     pastes: Vec<String>,
+    /// The input a too-large refusal is about: enter on it again saves the
+    /// text to a file and sends the path.
+    oversize_offer: Option<String>,
     /// Images pasted from the clipboard, in the order their `[Image #N]` tags
     /// appear in the prompt. Expanded back to `@path` for the model on submit.
     images: Vec<std::path::PathBuf>,
@@ -1831,6 +1852,86 @@ impl App {
         true
     }
 
+    /// The tokens and context window if `text` can't fit this model, when
+    /// that can be told now (a running turn holds the agent; it checks again).
+    fn oversized(&self, text: &str) -> Option<(u64, u64)> {
+        self.agent.try_lock().ok()?.oversized_tokens(text)
+    }
+
+    /// Enter on a message that can't fit: keep it in the box and say what can
+    /// be done, rather than clearing a paste that's refused a moment later.
+    /// Enter again on the same text saves it to a file and sends the path. True
+    /// when the message stays in the box.
+    fn hold_oversized(&mut self) -> bool {
+        let raw = self.input.text.clone();
+        let trimmed = raw.trim_start();
+        let full = expand_pastes(&raw, &self.pastes);
+        let too_big = if trimmed.is_empty() || trimmed.starts_with(['/', '!']) {
+            None
+        } else {
+            self.oversized(&full)
+        };
+        let Some((tokens, max)) = too_big else {
+            self.oversize_offer = None;
+            return false;
+        };
+        if self.oversize_offer.take().as_deref() != Some(raw.as_str()) {
+            self.note(
+                format!(
+                    "Too large to send: ~{tokens} tokens, and this model's context is {max}. It's still in the box. \
+                     Press enter again to save it to a file for the model to read from, or edit it, or switch with /model."
+                ),
+                pal().warning,
+            );
+            self.oversize_offer = Some(raw);
+            return true;
+        }
+        match self.message_with_saved_pastes(&raw, &full) {
+            Ok(text) => {
+                self.input.set(&text);
+                self.pastes.clear();
+                false
+            }
+            Err(e) => {
+                self.note(format!("Couldn't save it to a file: {e}"), pal().error);
+                true
+            }
+        }
+    }
+
+    /// `raw` with each paste saved to a file and replaced by its path, keeping
+    /// what was typed around them; the whole message in a file if that's still
+    /// too large, or if it was typed rather than pasted.
+    fn message_with_saved_pastes(&self, raw: &str, full: &str) -> std::io::Result<String> {
+        let mut text = raw.to_string();
+        for (i, paste) in self.pastes.iter().enumerate() {
+            if let Some(range) = paste_tag_range(&text, i)
+                && self.oversized(paste).is_some()
+            {
+                let path = attach::save_oversized_text(paste)?;
+                text.replace_range(
+                    range,
+                    &format!(
+                        "[Pasted text saved to {}; read what you need from it]",
+                        path.display()
+                    ),
+                );
+            }
+        }
+        if self
+            .oversized(&expand_pastes(&text, &self.pastes))
+            .is_none()
+            && text != raw
+        {
+            return Ok(expand_pastes(&text, &self.pastes));
+        }
+        let path = attach::save_oversized_text(full)?;
+        Ok(format!(
+            "My message was too large to send, so it's saved to {}. Read what you need from it.",
+            path.display()
+        ))
+    }
+
     fn submit(&mut self) {
         if let Some(p) = &self.popup
             && p.kind == PopupKind::Slash
@@ -1843,6 +1944,9 @@ impl App {
         }
         self.popup = None;
         self.suggestion = None;
+        if self.hold_oversized() {
+            return;
+        }
         let deliver = std::mem::take(&mut self.deliver);
         let mut text = self.input.take();
         if text.trim().is_empty() {
@@ -1852,15 +1956,8 @@ impl App {
         if !text.trim_start().starts_with(['/', '!']) {
             text = crate::util::emoji_shortcodes(&text);
         }
-        for (i, p) in self.pastes.drain(..).enumerate() {
-            // An expanded paste (ctrl+o) left no tag behind; it's already text.
-            let tag_prefix = format!("[Pasted text #{} +", i + 1);
-            if let Some(start) = text.find(&tag_prefix)
-                && let Some(end) = text[start..].find(" lines]")
-            {
-                text.replace_range(start..start + end + 7, &p);
-            }
-        }
+        text = expand_pastes(&text, &self.pastes);
+        self.pastes.clear();
         // An edited earlier prompt: branch there (the transcript reloads), then send it.
         if let Some((idx, mode)) = self.editing_prompt.take()
             && !text.trim_start().starts_with(['/', '!'])

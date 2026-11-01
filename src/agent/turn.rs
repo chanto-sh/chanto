@@ -63,9 +63,9 @@ impl Agent {
         end
     }
 
-    /// An error when `input` alone can't fit in the model's context window
-    /// beside the system prompt (counted up to half the window).
-    pub(super) fn oversized_input(&self, input: &str) -> Option<anyhow::Error> {
+    /// `input`'s tokens and the context window when it can't fit there beside
+    /// the system prompt (counted up to half the window).
+    pub fn oversized_tokens(&self, input: &str) -> Option<(u64, u64)> {
         let max = self.env.context_max();
         let tokens = llm::estimate_tokens(&[Message::user(input)]);
         let system = self
@@ -77,6 +77,12 @@ impl Agent {
         if max == 0 || tokens + system.min(max / 2) <= max {
             return None;
         }
+        Some((tokens, max))
+    }
+
+    /// An error when `input` alone can't fit in the model's context window.
+    pub(super) fn oversized_input(&self, input: &str) -> Option<anyhow::Error> {
+        let (tokens, max) = self.oversized_tokens(input)?;
         Some(anyhow::anyhow!(
             "The input is too large to send: ~{tokens} tokens, and the model's context is {max} tokens. Attach it as a file instead (save it and mention the path, so the model reads only what it needs) or trim it."
         ))
