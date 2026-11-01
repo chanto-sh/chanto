@@ -582,13 +582,20 @@ pub fn providers_table() -> String {
 }
 
 /// `chanto login [provider]` / `chanto logout <provider>` / `chanto providers`.
-pub async fn cli(args: &[String]) -> Result<String> {
+///
+/// `print` gets what the command has to tell the user, so the only text that
+/// leaves here is written for that, never a value from the login itself.
+pub async fn cli(args: &[String], print: &(dyn Fn(&str) + Send + Sync)) -> Result<()> {
     let say = |m: &str| eprintln!("{m}");
+    let done = |m: String| -> Result<()> {
+        print(&m);
+        Ok(())
+    };
     if args
         .get(1)
         .is_some_and(|a| matches!(a.as_str(), "--help" | "-h" | "help"))
     {
-        return Ok(match args.first().map(String::as_str) {
+        return done(match args.first().map(String::as_str) {
             Some("logout") => "Usage: chanto logout <provider> [--as <name>]\n\nRemove credentials Chanto saved for a provider (`--as`: a named account). `chanto providers` lists them.".into(),
             _ => "Usage: chanto login <provider> [--as <name>] [--with-api-key]\n\nLog in to a provider: in the browser where it supports that, otherwise by pasting an API key (`--with-api-key` reads it from stdin). `--as <name>` saves it as a separate account (e.g. work and personal); pick one with `account = \"<name>\"` in the config or `/login <provider> <name>` in a session. `chanto providers` lists the providers and saved logins.".into(),
         });
@@ -635,23 +642,23 @@ pub async fn cli(args: &[String]) -> Result<String> {
             if let Some(extra) = args.get(1) {
                 anyhow::bail!("unknown argument `{extra}`; usage: chanto providers");
             }
-            Ok(format!("{}\n{}", providers_table(), accounts_table()))
+            done(format!("{}\n{}", providers_table(), accounts_table()))
         }
         Some("logout") => {
             let id = args
                 .get(1)
                 .context("usage: chanto logout <provider> [--as <name>]")?;
             if remove(&account_key(id, account))? {
-                return Ok(format!("Logged out of {id}{as_note}."));
+                return done(format!("Logged out of {id}{as_note}."));
             }
             if crate::providers::find(id).is_none() {
                 anyhow::bail!("unknown provider {id}; see `chanto providers`");
             }
-            Ok(format!("Wasn't logged in to {id}{as_note}."))
+            done(format!("Wasn't logged in to {id}{as_note}."))
         }
         Some("login") => {
             let Some(id) = args.get(1) else {
-                return Ok(format!(
+                return done(format!(
                     "{}\n{}\nUsage: chanto login <provider> [--as <name>]",
                     providers_table(),
                     accounts_table()
@@ -674,7 +681,7 @@ pub async fn cli(args: &[String]) -> Result<String> {
                     bail!("{}", VERTEX_LOGIN);
                 }
                 set_as(h.id, account, Credential::ApiKey { key: key.into() })?;
-                return Ok(format!("Saved key for {}{as_note}.", h.id));
+                return done(format!("Saved key for {}{as_note}.", h.id));
             }
             match h.id {
                 "vertex" => bail!("{}", VERTEX_LOGIN),
@@ -696,17 +703,17 @@ pub async fn cli(args: &[String]) -> Result<String> {
                 }
             }
             if let Some(a) = account {
-                return Ok(format!(
+                return done(format!(
                     "Logged in to {}{as_note}. Use it with `account = \"{a}\"` in the config, or `/login {} {a}` in a session.",
                     h.name, h.id
                 ));
             }
-            Ok(format!(
+            done(format!(
                 "Logged in to {}. Use it as `{}/<model>` (for example `chanto --model {}/<model>`), or list models with /models.",
                 h.name, h.id, h.id
             ))
         }
-        _ => Ok(providers_table()),
+        _ => done(providers_table()),
     }
 }
 
@@ -822,12 +829,15 @@ mod tests {
             "no named accounts: nothing to show"
         );
         assert!(
-            cli(&[
-                "login".into(),
-                "groqtest".into(),
-                "--as".into(),
-                "bad name".into()
-            ])
+            cli(
+                &[
+                    "login".into(),
+                    "groqtest".into(),
+                    "--as".into(),
+                    "bad name".into()
+                ],
+                &|_| {}
+            )
             .await
             .is_err()
         );
@@ -870,10 +880,17 @@ mod tests {
         assert!(
             matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_personal")
         );
-        let msg = cli(&["logout".into(), "groqtest".into(), "--as=work".into()])
-            .await
-            .unwrap();
-        assert_eq!(msg, "Logged out of groqtest as account \"work\".");
+        let printed = std::sync::Mutex::new(String::new());
+        cli(
+            &["logout".into(), "groqtest".into(), "--as=work".into()],
+            &|m| printed.lock().unwrap().push_str(m),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            *printed.lock().unwrap(),
+            "Logged out of groqtest as account \"work\"."
+        );
         assert!(get("groqtest").is_some() && !accounts()["groqtest"].contains(&"work".to_string()));
         SESSION_ACCOUNTS.lock().unwrap().remove("groqtest");
         unsafe {
