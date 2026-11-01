@@ -137,9 +137,9 @@ Landlock and seccomp on Linux, a write-restricted token on Windows):
 - on macOS and Linux, reads of known credential locations are denied (private
   keys, cloud and registry logins, Chanto's own token files), and network
   access can be turned off or limited to an allowlist of domains (on Windows
-  the sandbox confines writes only). The macOS keychain stays reachable, so
-  credential helpers (`git credential-osxkeychain`, `gh auth token`) can still
-  hand out tokens;
+  the sandbox confines writes only). On macOS the keychain
+  is denied too, so credential helpers (`git credential-osxkeychain`, `gh auth
+  token`) can't hand out tokens inside the sandbox;
 - on macOS, local IPC that would reach a process outside the sandbox is
   blocked: no controlling terminal, no access to Chanto's or other terminal
   windows' ttys, no Apple Events, LaunchServices, clipboard or Shortcuts, and

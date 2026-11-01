@@ -1,0 +1,1 @@
+- **Security: sandboxed commands on macOS can no longer read logins from the keychain.** `gh`, `git push` over HTTPS and other commands that use a saved login now need your approval to run outside the sandbox. Upgrade recommended.
