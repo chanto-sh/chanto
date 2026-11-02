@@ -102,6 +102,15 @@ impl Agent {
             // A tool that says it only reads may help a plan, but it's the
             // tool's word: the user decides.
             _ if mode == Mode::Plan && tool.read_only_hint() => Decision::Ask,
+            // What came in from outside can steer the model, and the classifier
+            // doesn't see it, so sending data out takes a person from here on.
+            _ if mode == Mode::Auto
+                && kind == ToolKind::Execute
+                && env.read_outside.load(std::sync::atomic::Ordering::Relaxed)
+                && permissions::sends_data_out(args["command"].as_str().unwrap_or("")) =>
+            {
+                Decision::Ask
+            }
             _ => match permissions::static_decision(mode, kind, &name, args, &env.cwd()) {
                 Some(d) => d,
                 // Auto mode, fast path (opt-in): routine shell commands skip the
@@ -146,7 +155,16 @@ impl Agent {
             },
         };
         // Why a prompt is being shown, when it wasn't a static rule that asked.
-        let mut ask_because: Option<String> = None;
+        let mut ask_because: Option<String> = (mode == Mode::Auto
+            && matches!(decision, Decision::Ask)
+            && kind == ToolKind::Execute
+            && env
+                .read_outside
+                .load(std::sync::atomic::Ordering::Relaxed)
+            && permissions::sends_data_out(args["command"].as_str().unwrap_or("")))
+        .then(|| {
+            "This command sends data out, and this session has read from the web or an MCP server, which could be steering it. Allow it if you expected it.".to_string()
+        });
         if mode == Mode::Auto {
             if let Decision::Deny(r) = &decision {
                 self.consecutive_blocks += 1;
