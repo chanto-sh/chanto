@@ -1260,3 +1260,6 @@ mod tests {
         assert_eq!(cfg.feedback.share_errors, Some(false));
     }
 }
+
+#[cfg(test)]
+mod cli_tests;
