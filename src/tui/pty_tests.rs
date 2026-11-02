@@ -126,6 +126,24 @@ impl Pty {
         panic!("never saw {what:?} on screen:\n{}", self.text());
     }
 
+    /// Like `wait_for`, in text printed after this call was made.
+    async fn wait_for_any_case(&self, what: &str) {
+        let start = self.bytes().len();
+        let what = what.to_lowercase().replace(' ', "");
+        for _ in 0..3000 {
+            let new = plain(&self.bytes()[start..]);
+            let new: String = new.split_whitespace().collect();
+            if new.to_lowercase().contains(&what) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        panic!(
+            "never saw {what:?} on screen:\n{}",
+            plain(&self.bytes()[start..])
+        );
+    }
+
     fn keys(&mut self, keys: &str) {
         self.input.write_all(keys.as_bytes()).unwrap();
         self.input.flush().unwrap();
@@ -294,6 +312,99 @@ async fn remote_control_starts_reports_and_stops_from_the_session() {
     pty.wait_for("127.0.0.1:").await;
     pty.keys("/remote off\r");
     pty.wait_for("no longer works").await;
+    pty.keys("/exit\r");
+    let (code, bytes) = pty.finish().await;
+    assert_eq!(code, "0", "{}", plain(&bytes));
+}
+
+#[tokio::test]
+async fn plain_child() {
+    if let Ok(model) = std::env::var(CHILD_ENV) {
+        let cli = <Cli as clap::Parser>::parse_from([
+            "chanto",
+            "--provider",
+            "openai",
+            "--base-url",
+            &model,
+            "--model",
+            "mock",
+            "--mode",
+            "bypass",
+            "--plain",
+        ]);
+        let home = std::env::var("CHANTO_HOME").unwrap();
+        std::fs::write(
+            std::path::Path::new(&home).join("pid"),
+            std::process::id().to_string(),
+        )
+        .unwrap();
+        crate::repl::run(cli).await.unwrap();
+    }
+}
+
+#[tokio::test]
+async fn the_plain_prompt_answers_runs_commands_and_exits() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        return;
+    }
+    let (model, seen) = mock_server(vec![json!({"content": ANSWER})]).await;
+    let dir = tmpdir("pty-plain");
+    let mut pty = Pty::start("tui::pty_tests::plain_child", &model, &dir);
+    pty.wait_for("mock").await;
+    pty.keys("say hello\r");
+    pty.wait_for(ANSWER).await;
+    assert!(
+        seen.lock().unwrap()[0]["messages"]
+            .to_string()
+            .contains("say hello")
+    );
+    pty.keys("/help\r");
+    pty.wait_for("/exit").await;
+    pty.keys("/exit\r");
+    let (code, bytes) = pty.finish().await;
+    assert_eq!(code, "0", "{}", plain(&bytes));
+    assert!(
+        !String::from_utf8_lossy(&bytes).contains("\x1b[?1049h"),
+        "no alternate screen"
+    );
+}
+
+/// The panels a session opens. Redraws only print the cells that changed, so
+/// each check looks for one word.
+#[tokio::test]
+async fn session_commands_open_their_panels() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        return;
+    }
+    let (model, _) = mock_server(vec![json!({"content": ANSWER})]).await;
+    let dir = tmpdir("pty-panels");
+    let mut pty = Pty::start("tui::pty_tests::fullscreen_child", &model, &dir);
+    pty.wait_for("mock").await;
+    // A saved turn, so the resume and rewind pickers have something to list.
+    pty.keys("first prompt\r");
+    pty.wait_for(ANSWER).await;
+    for (command, expected) in [
+        ("/hooks\r", "hooks"),
+        ("/agents\r", "agent"),
+        ("/remote status\r", "off"),
+        ("/goal list\r", "goals"),
+        ("/team\r", "team"),
+        ("/mcp\r", "MCP"),
+    ] {
+        pty.keys(command);
+        pty.wait_for_any_case(expected).await;
+    }
+    // The MCP panel stays open until dismissed.
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    pty.keys("\x1b");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    // The resume picker lists the saved turn; Escape closes it. The pause keeps
+    // the Escape from reading as Alt with the next key.
+    pty.keys("/resume\r");
+    pty.wait_for_any_case("prompt").await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    pty.keys("\x1b");
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     pty.keys("/exit\r");
     let (code, bytes) = pty.finish().await;
     assert_eq!(code, "0", "{}", plain(&bytes));
