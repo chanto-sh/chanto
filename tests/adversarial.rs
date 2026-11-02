@@ -658,6 +658,7 @@ fn sandbox_keeps_keychain_logins_from_the_model() {
         "the model saw a keychain login\n{}",
         r.stdout
     );
+}
 
 /// Auto mode lets a fooled classifier allow a send until the session reads
 /// something from outside. From then on it takes a person, who isn't here.
@@ -667,7 +668,7 @@ fn sending_data_out_after_reading_outside_needs_a_human() {
     let send = |marker: &str| {
         call(
             "Bash",
-            serde_json::json!({"command": format!("curl -s -m 2 -d @a.txt http://127.0.0.1:{port}/; touch {marker}")}),
+            serde_json::json!({"command": format!("nc -w 2 127.0.0.1 {port} < a.txt; touch {marker}")}),
         )
     };
     let fx = Fx::new("outside");

