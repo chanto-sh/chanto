@@ -502,6 +502,8 @@ pub struct Recording {
     sox: bool,
     silence: Arc<AtomicBool>,
     log: Arc<std::sync::Mutex<String>>,
+    /// Copies the recorder's stderr into `log`; it ends when the recorder does.
+    reader: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Recording {
@@ -560,7 +562,7 @@ impl Recording {
             .context("starting the recorder")?;
         let flag = Arc::new(AtomicBool::new(false));
         let log = Arc::new(std::sync::Mutex::new(String::new()));
-        if let Some(err) = child.stderr.take() {
+        let reader = child.stderr.take().map(|err| {
             let (flag, log) = (flag.clone(), log.clone());
             tokio::spawn(async move {
                 use tokio::io::AsyncBufReadExt;
@@ -576,8 +578,8 @@ impl Recording {
                         log.push('\n');
                     }
                 }
-            });
-        }
+            })
+        });
         Ok(Recording {
             child,
             audio,
@@ -585,6 +587,7 @@ impl Recording {
             sox,
             silence: flag,
             log,
+            reader,
         })
     }
 
@@ -620,6 +623,12 @@ impl Recording {
                 None
             }
         };
+        // The recorder's last words (often the reason it failed) may still be
+        // on their way into the log. Something it started can hold the pipe
+        // open, so don't wait long.
+        if let Some(reader) = self.reader.take() {
+            let _ = tokio::time::timeout(Duration::from_secs(1), reader).await;
+        }
         let size = std::fs::metadata(self.audio.path())
             .map(|m| m.len())
             .unwrap_or(0);
