@@ -1286,7 +1286,7 @@ async fn login_logout_and_sandbox_without_side_effects() {
     );
     assert_eq!(
         run(&mut agent, "/sandbox maybe").await,
-        "Usage: /sandbox [on|off]"
+        "Usage: /sandbox [on|off|network allow|allowlist|deny]"
     );
     let s = run(&mut agent, "/sandbox").await;
     assert!(

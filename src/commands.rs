@@ -312,8 +312,8 @@ pub const BUILTIN: &[CommandInfo] = &[
     },
     CommandInfo {
         name: "sandbox",
-        args: "[on|off]",
-        help: "Show or toggle the sandbox for shell commands",
+        args: "[on|off|network <policy>]",
+        help: "Show or toggle the sandbox for shell commands, or set its network policy",
     },
     CommandInfo {
         name: "output-style",
@@ -1806,12 +1806,25 @@ pub async fn handle(agent: &mut Agent, line: &str) -> Outcome {
         "sandbox" => {
             use crate::tools::bash::{sandbox_available, sandbox_on, SANDBOX_ACTIVE};
             let cfg = &agent.env.config.sandbox;
+            if let Some(policy) = arg.strip_prefix("network").map(str::trim) {
+                if !matches!(policy, "allow" | "allowlist" | "deny") {
+                    return Outcome::Show("Usage: /sandbox network allow|allowlist|deny\n\n`allowlist` lets commands reach package registries and GitHub, and asks about anything else. `deny` blocks the network. `allow` leaves it open.".into());
+                }
+                if cfg!(windows) {
+                    return Outcome::Show("The sandbox can't limit the network on Windows.".into());
+                }
+                let path = crate::config::home_dir().join("config.toml");
+                return Outcome::Show(match crate::config::persist_sandbox_network(&path, policy) {
+                    Ok(()) => format!("Network for shell commands: **{policy}**, saved in {}. It applies from your next session; a project's own setting can still override it.", path.display()),
+                    Err(e) => format!("Couldn't save it: {e:#}"),
+                });
+            }
             match arg {
                 "on" if !sandbox_available() => return Outcome::Show("No sandbox is available on this system (needs working macOS Seatbelt, Linux Landlock or a Windows restricted token).".into()),
                 "on" => SANDBOX_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed),
                 "off" => SANDBOX_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed),
                 "" => {}
-                _ => return Outcome::Show("Usage: /sandbox [on|off]".into()),
+                _ => return Outcome::Show("Usage: /sandbox [on|off|network allow|allowlist|deny]".into()),
             }
             let status = if sandbox_on() {
                 "**on**"

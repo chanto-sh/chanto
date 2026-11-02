@@ -454,6 +454,14 @@ impl SandboxConfig {
                 "repo.maven.apache.org",
                 "rubygems.org",
                 "registry.yarnpkg.com",
+                "raw.githubusercontent.com",
+                "release-assets.githubusercontent.com",
+                "repo1.maven.org",
+                "plugins.gradle.org",
+                "services.gradle.org",
+                "index.rubygems.org",
+                "static.rust-lang.org",
+                "nodejs.org",
             ]
             .into_iter()
             .map(String::from)
@@ -921,6 +929,25 @@ fn project_key(cwd: &Path) -> String {
         .unwrap_or_else(|_| cwd.to_path_buf())
         .display()
         .to_string()
+}
+
+/// Save `[sandbox] network` in the config at `path`, keeping the rest of it.
+pub fn persist_sandbox_network(path: &Path, policy: &str) -> Result<()> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(e) => return Err(e.into()),
+    };
+    let mut doc: toml_edit::DocumentMut = text.parse()?;
+    if !doc.contains_key("sandbox") {
+        doc["sandbox"] = toml_edit::Item::Table(toml_edit::Table::new());
+    }
+    doc["sandbox"]["network"] = toml_edit::value(policy);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, doc.to_string())?;
+    Ok(())
 }
 
 pub fn persist_allow_rule(cwd: &Path, rule: &str) -> Result<PathBuf> {
@@ -2145,6 +2172,34 @@ auto_allow = false              # auto mode: sandboxed commands skip the classif
 mod tests {
     /// Someone who copies the template must get the defaults, not switch
     /// something off: every setting it spells out says what happens anyway.
+    #[test]
+    fn saving_the_network_policy_keeps_the_rest_of_the_config() {
+        let d = std::env::temp_dir().join(format!("chanto-net-{}", uuid::Uuid::new_v4().simple()));
+        let p = d.join("config.toml");
+        persist_sandbox_network(&p, "allowlist").unwrap();
+        assert!(
+            std::fs::read_to_string(&p)
+                .unwrap()
+                .contains("network = \"allowlist\"")
+        );
+        std::fs::write(
+            &p,
+            "model = \"m\" # mine\n[sandbox]\nnetwork = \"deny\"\nallow_write = [\"/x\"]\n",
+        )
+        .unwrap();
+        persist_sandbox_network(&p, "allow").unwrap();
+        let text = std::fs::read_to_string(&p).unwrap();
+        assert!(
+            text.contains("network = \"allow\"") && !text.contains("deny"),
+            "{text}"
+        );
+        assert!(
+            text.contains("# mine") && text.contains("allow_write"),
+            "{text}"
+        );
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
     #[test]
     fn the_example_config_only_states_defaults() {
         let parsed: Config = toml::from_str(EXAMPLE_CONFIG).unwrap();
