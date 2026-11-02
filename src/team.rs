@@ -1621,3 +1621,6 @@ mod tests {
         assert_eq!(one.len(), 1);
     }
 }
+
+#[cfg(test)]
+mod cli_entry_tests;

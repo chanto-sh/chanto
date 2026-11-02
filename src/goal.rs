@@ -2302,3 +2302,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod cli_entry_tests;
