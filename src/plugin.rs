@@ -522,3 +522,6 @@ mod tests {
         fs::remove_dir_all(home).unwrap();
     }
 }
+
+#[cfg(test)]
+mod registry_tests;
