@@ -876,3 +876,42 @@ async fn slash_bg_reports_a_failed_start() {
         "{out}"
     );
 }
+
+/// `daemon stop` signals the daemon's pid and waits for its health check to
+/// stop answering. The "daemon" is a `sleep` whose liveness the stand-in
+/// health endpoint reports.
+#[cfg(unix)]
+#[tokio::test]
+async fn daemon_stop_signals_a_live_daemon_and_waits_for_it() {
+    let _home = TestHome::new("cli-daemon-stop");
+    let child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let child = Arc::new(std::sync::Mutex::new(child));
+    let alive = child.clone();
+    let app = axum::Router::new().route(
+        "/health",
+        get(move || {
+            let alive = alive.clone();
+            async move {
+                // Reaps the child once it exits, so a signalled one reads as gone.
+                match alive.lock().unwrap().try_wait() {
+                    Ok(None) => {
+                        axum::Json(json!({"ok": true, "version": "0.0.0-test"})).into_response()
+                    }
+                    _ => "gone".into_response(),
+                }
+            }
+        }),
+    );
+    let (url, server) = serve(app).await;
+    write_server_file(&url, Some(pid));
+    daemon_cmd(&args(&["stop"])).await.unwrap();
+    let status = child.lock().unwrap().try_wait().unwrap();
+    let status = status.expect("the daemon was stopped");
+    use std::os::unix::process::ExitStatusExt;
+    assert_eq!(status.signal(), Some(libc::SIGTERM));
+    server.abort();
+}
