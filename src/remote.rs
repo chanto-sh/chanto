@@ -1355,3 +1355,6 @@ mod tests;
 
 #[cfg(test)]
 mod push_tests;
+
+#[cfg(all(test, unix))]
+mod cloud_tests;

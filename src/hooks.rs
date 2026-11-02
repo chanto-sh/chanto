@@ -2111,3 +2111,6 @@ mod handler_tests;
 
 #[cfg(all(test, unix))]
 mod event_tests;
+
+#[cfg(all(test, unix))]
+mod mcp_hook_tests;

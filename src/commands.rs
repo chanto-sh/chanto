@@ -3629,3 +3629,6 @@ mod arg_tests;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(all(test, unix))]
+mod mcp_tests;

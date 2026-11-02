@@ -1650,3 +1650,6 @@ mod tests;
 
 #[cfg(test)]
 mod cli_entry_tests;
+
+#[cfg(test)]
+mod cli_run_tests;
