@@ -82,6 +82,8 @@ mod shell;
 mod spend;
 mod structured;
 mod team;
+#[cfg(test)]
+mod test_support;
 pub mod tools;
 mod tui;
 mod ui;

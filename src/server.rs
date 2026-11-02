@@ -2626,3 +2626,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cwd);
     }
 }
+
+#[cfg(test)]
+mod api_tests;
