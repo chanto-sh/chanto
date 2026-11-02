@@ -327,3 +327,6 @@ mod tests {
         assert!(rx.try_recv().is_err(), "notifications get no reply");
     }
 }
+
+#[cfg(test)]
+mod stdio_tests;
