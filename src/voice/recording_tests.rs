@@ -2,8 +2,10 @@
 //! and whisper, so no microphone is opened and no model runs.
 
 use super::*;
+#[cfg(unix)]
 use crate::agent::tests::tmpdir;
 
+#[cfg(unix)]
 fn cfg() -> VoiceConfig {
     VoiceConfig::default()
 }

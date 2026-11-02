@@ -291,6 +291,7 @@ async fn an_empty_badge_is_not_sent() {
     let fake = Fake::start().await;
     let mut cfg = crate::config::BrowserConfig {
         port: Some(fake.port),
+        chrome_path: Some("/nonexistent/chrome".into()),
         badge: Some(String::new()),
         ..Default::default()
     };

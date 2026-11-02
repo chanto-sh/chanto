@@ -1627,5 +1627,5 @@ while True:
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod query_tests;

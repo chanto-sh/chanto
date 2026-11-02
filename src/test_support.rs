@@ -30,6 +30,10 @@ pub(crate) fn isolated_with(test_path: &str, config: &str) -> bool {
         .env("HOME", &home)
         .env("USERPROFILE", &home)
         .env("CHANTO_ISOLATED_TEST_CHILD", "1")
+        // No update check or price download: nothing leaves the machine.
+        .env("CHANTO_NO_UPDATE_CHECK", "1")
+        .env("CI", "1")
+        .env("CODEX_HOME", home.join(".codex"))
         .env_remove("CHANTO_BASE_URL")
         .env_remove("CHANTO_MODEL")
         .env_remove("CHANTO_SERVER_TOKEN")

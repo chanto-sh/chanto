@@ -63,6 +63,15 @@ impl Pty {
             ),
         );
         let wrapper = wrapper.display().to_string();
+        // The status line asks `gh` about pull requests; this one knows none.
+        let bin = home.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        shim(&bin.join("gh"), "exit 1");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
         let mut cmd = std::process::Command::new("script");
         if cfg!(target_os = "macos") {
             cmd.args(["-q", "/dev/null", &wrapper, "go"]);
@@ -76,6 +85,11 @@ impl Pty {
             .env("CHANTO_COMPAT_HOME", &home)
             .env("HOME", &home)
             .env("TERM", "xterm-256color")
+            .env("PATH", path)
+            // No update check or price download: nothing leaves the machine.
+            .env("CHANTO_NO_UPDATE_CHECK", "1")
+            .env("CI", "1")
+            .env("CODEX_HOME", home.join(".codex"))
             .env_remove("TMUX")
             .env_remove("CHANTO_MODEL")
             .env_remove("CHANTO_BASE_URL")

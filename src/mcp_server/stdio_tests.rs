@@ -97,6 +97,10 @@ async fn serve(model: &str) -> Client {
         .env("CHANTO_COMPAT_HOME", &home)
         .env("HOME", &home)
         .env("USERPROFILE", &home)
+        // No update check or price download: nothing leaves the machine.
+        .env("CHANTO_NO_UPDATE_CHECK", "1")
+        .env("CI", "1")
+        .env("CODEX_HOME", home.join(".codex"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

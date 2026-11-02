@@ -144,7 +144,6 @@ impl Project {
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn queries_format_each_answer_shape() {
     if isolated("lsp::query_tests::queries_format_each_answer_shape") {
@@ -210,7 +209,6 @@ async fn queries_format_each_answer_shape() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn workspace_symbols_search_the_given_files_server() {
     if isolated("lsp::query_tests::workspace_symbols_search_the_given_files_server") {
@@ -240,7 +238,6 @@ async fn workspace_symbols_search_the_given_files_server() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn diagnostics_report_errors_and_warnings_on_request() {
     if isolated("lsp::query_tests::diagnostics_report_errors_and_warnings_on_request") {
@@ -260,7 +257,6 @@ async fn diagnostics_report_errors_and_warnings_on_request() {
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn edits_append_only_errors_to_the_tool_output() {
     if isolated("lsp::query_tests::edits_append_only_errors_to_the_tool_output") {
@@ -320,7 +316,6 @@ async fn edits_append_only_errors_to_the_tool_output() {
     assert_eq!(out.content, "listed");
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn reading_a_file_warms_its_server() {
     if isolated("lsp::query_tests::reading_a_file_warms_its_server") {
@@ -345,7 +340,6 @@ async fn reading_a_file_warms_its_server() {
     panic!("the read didn't open the file on a server");
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_disabled_or_untrusted_setup_starts_nothing() {
     if isolated("lsp::query_tests::a_disabled_or_untrusted_setup_starts_nothing") {
@@ -381,7 +375,6 @@ async fn a_disabled_or_untrusted_setup_starts_nothing() {
     assert!(p.ask("hover", &other, 1, 1).await.is_err());
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn a_crashed_server_fails_its_request_and_is_replaced() {
     if isolated("lsp::query_tests::a_crashed_server_fails_its_request_and_is_replaced") {
