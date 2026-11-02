@@ -206,6 +206,8 @@ pub struct Snapshot {
     files: HashMap<PathBuf, String>,
     /// Files that must not change at all (e.g. approved acceptance criteria).
     locked: HashMap<PathBuf, String>,
+    /// The user's request, normalized: an expectation it quotes may change.
+    request: String,
 }
 
 pub fn snapshot(root: &Path) -> Snapshot {
@@ -237,10 +239,59 @@ pub fn snapshot(root: &Path) -> Snapshot {
     Snapshot {
         files,
         locked: HashMap::new(),
+        request: String::new(),
     }
 }
 
+/// Lowercase with whitespace collapsed, so quoted text matches however it wraps.
+fn normalize(text: &str) -> String {
+    text.split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Whether a line of an old test quotes text the request also quotes: the
+/// string literals on it, split at glob and regex syntax (`"*message*"`), each
+/// fragment long enough not to match by accident.
+fn named_in(request: &str, line: &str) -> bool {
+    if request.is_empty() {
+        return false;
+    }
+    let mut rest = line;
+    while let Some(start) = rest.find(['"', '\'']) {
+        let quote = rest[start..].chars().next().unwrap();
+        let body = &rest[start + 1..];
+        let Some(end) = body.find(quote) else { break };
+        let named = body[..end]
+            .split(['*', '?', '\\', '^', '$', '[', ']', '(', ')', '{', '}', '|'])
+            .map(normalize)
+            .any(|frag| frag.chars().count() >= 15 && request.contains(&frag));
+        if named {
+            return true;
+        }
+        rest = &body[end + 1..];
+    }
+    false
+}
+
+/// How existing tests changed since the snapshot.
+#[derive(Debug, Default)]
+pub struct TestChanges {
+    /// Tests deleted or skipped, assertions removed, locked files changed:
+    /// never right, whatever the request.
+    pub weakened: Vec<String>,
+    /// Expectations or test bodies changed, minus the ones whose old text the
+    /// request quotes. Right when the request asks for that behaviour to change.
+    pub changed: Vec<String>,
+}
+
 impl Snapshot {
+    /// Remember the request, so a test pinning text it quotes may change.
+    pub fn set_request(&mut self, request: &str) {
+        self.request = normalize(request);
+    }
+
     /// Also lock every file under `dirs` against any change.
     pub fn lock_dirs(&mut self, dirs: &[PathBuf]) {
         for d in dirs {
@@ -386,14 +437,21 @@ fn count(text: &str, markers: &[&str]) -> usize {
 }
 
 impl Snapshot {
-    /// How existing tests were weakened since the snapshot.
+    /// Every way existing tests changed that needs answering for: weakened
+    /// ones, then changed expectations the request doesn't name.
     pub fn violations(&self) -> Vec<String> {
-        let mut out = Vec::new();
+        let c = self.changes();
+        c.weakened.into_iter().chain(c.changed).collect()
+    }
+
+    /// How existing tests changed since the snapshot, by kind.
+    pub fn changes(&self) -> TestChanges {
+        let mut out = TestChanges::default();
         let mut locked: Vec<&PathBuf> = self.locked.keys().collect();
         locked.sort();
         for p in locked {
             if std::fs::read_to_string(p).ok().as_ref() != Some(&self.locked[p]) {
-                out.push(format!("{}: approved acceptance criteria are locked, but this file was changed or deleted", p.display()));
+                out.weakened.push(format!("{}: approved acceptance criteria are locked, but this file was changed or deleted", p.display()));
             }
         }
         let mut paths: Vec<&PathBuf> = self.files.keys().collect();
@@ -402,7 +460,7 @@ impl Snapshot {
             let before = &self.files[p];
             let name = p.display();
             let Ok(after) = std::fs::read_to_string(p) else {
-                out.push(format!("{name}: test file deleted"));
+                out.weakened.push(format!("{name}: test file deleted"));
                 continue;
             };
             if &after == before {
@@ -410,11 +468,13 @@ impl Snapshot {
             }
             let (a0, a1) = (count(before, ASSERT_MARKERS), count(&after, ASSERT_MARKERS));
             if a1 < a0 {
-                out.push(format!("{name}: {} assertion(s) removed", a0 - a1));
+                out.weakened
+                    .push(format!("{name}: {} assertion(s) removed", a0 - a1));
             }
             let (s0, s1) = (count(before, SKIP_MARKERS), count(&after, SKIP_MARKERS));
             if s1 > s0 {
-                out.push(format!("{name}: {} skip marker(s) added", s1 - s0));
+                out.weakened
+                    .push(format!("{name}: {} skip marker(s) added", s1 - s0));
             }
             // Same number of assertions but different ones: expected values changed.
             if a1 == a0 && a0 > 0 {
@@ -432,9 +492,13 @@ impl Snapshot {
                     v
                 };
                 let (b, a) = (set(before), set(&after));
-                let changed = b.iter().filter(|l| !a.contains(l)).count();
+                let changed = b
+                    .iter()
+                    .filter(|l| !a.contains(l) && !named_in(&self.request, l))
+                    .count();
                 if changed > 0 {
-                    out.push(format!("{name}: {changed} existing assertion(s) changed"));
+                    out.changed
+                        .push(format!("{name}: {changed} existing assertion(s) changed"));
                 }
             }
             // A test whose body changed in any other way is the same move one
@@ -442,9 +506,22 @@ impl Snapshot {
             let (b, a) = (test_functions(before), test_functions(&after));
             for (func, body) in &b {
                 match a.get(func) {
-                    None => out.push(format!("{name}: {func} (existing test) removed")),
+                    None => out
+                        .weakened
+                        .push(format!("{name}: {func} (existing test) removed")),
                     Some(now) if now != body => {
-                        out.push(format!("{name}: {func} (existing test) changed"))
+                        // Every line it lost quotes the request: the change the
+                        // request asked for, not one fitted to the test.
+                        let kept: Vec<&str> = now.lines().map(str::trim).collect();
+                        let asked = body
+                            .lines()
+                            .map(str::trim)
+                            .filter(|l| !l.is_empty() && !kept.contains(l))
+                            .all(|l| named_in(&self.request, l));
+                        if !asked {
+                            out.changed
+                                .push(format!("{name}: {func} (existing test) changed"))
+                        }
                     }
                     _ => {}
                 }
@@ -1734,6 +1811,88 @@ mod tests {
         .unwrap();
         std::fs::write(d.join("test_new.py"), "def test_n():\n    assert True\n").unwrap();
         assert!(s.violations().is_empty(), "{:?}", s.violations());
+    }
+
+    #[test]
+    fn test_changes_are_sorted_into_weakened_and_changed() {
+        let d = std::env::temp_dir().join(format!(
+            "chanto-guard-kinds-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        let t = d.join("test_kinds.py");
+        std::fs::write(
+            &t,
+            "def test_a():\n    assert f(1) == 2\n    assert f(2) == 3\n",
+        )
+        .unwrap();
+        let s = snapshot(&d);
+        // A different expected value: changed, not weakened.
+        std::fs::write(
+            &t,
+            "def test_a():\n    assert f(1) == 5\n    assert f(2) == 3\n",
+        )
+        .unwrap();
+        let c = s.changes();
+        assert!(c.weakened.is_empty(), "{:?}", c.weakened);
+        assert!(
+            c.changed.iter().any(|v| v.contains("assertion(s) changed")),
+            "{:?}",
+            c.changed
+        );
+        // A dropped assertion: weakened.
+        std::fs::write(&t, "def test_a():\n    assert f(2) == 3\n").unwrap();
+        let c = s.changes();
+        assert!(
+            c.weakened
+                .iter()
+                .any(|v| v.contains("assertion(s) removed")),
+            "{:?}",
+            c.weakened
+        );
+        // violations() still lists both kinds, for --verify and goals.
+        assert!(!s.violations().is_empty());
+    }
+
+    #[test]
+    fn an_expectation_the_request_quotes_may_change() {
+        let d = std::env::temp_dir().join(format!(
+            "chanto-guard-quoted-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        let t = d.join("test_skipping.py");
+        let test = |m: &str| {
+            format!(
+                "def test_module_level(testdir):\n    result = testdir.runpytest()\n    result.stdout.fnmatch_lines([\"*{m}*\"])\n    assert result.ret == 2\n"
+            )
+        };
+        std::fs::write(
+            &t,
+            test("Using pytest.skip outside of a test is not allowed"),
+        )
+        .unwrap();
+        let mut s = snapshot(&d);
+        let new = test("Using pytest.skip outside of a test will skip the entire module");
+        std::fs::write(&t, &new).unwrap();
+        // Without the request, the change is flagged.
+        assert!(!s.changes().changed.is_empty());
+        // A request quoting the old text (wrapped and in another case) asks
+        // for it to change.
+        s.set_request("The message\n  \"using pytest.skip outside of a test is\n not allowed. To decorate...\" is misleading");
+        let c = s.changes();
+        assert!(c.changed.is_empty() && c.weakened.is_empty(), "{c:?}");
+        // A short quoted fragment doesn't count: it would match by accident.
+        s.set_request("fix the skip error, it mentions \"not allowed\"");
+        assert!(!s.changes().changed.is_empty());
+        // Nor does quoting the text excuse dropping the assertion.
+        s.set_request("\"Using pytest.skip outside of a test is not allowed\" is wrong");
+        std::fs::write(
+            &t,
+            "def test_module_level(testdir):\n    result = testdir.runpytest()\n",
+        )
+        .unwrap();
+        assert!(!s.changes().weakened.is_empty());
     }
 
     #[test]

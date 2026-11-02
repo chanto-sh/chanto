@@ -2295,9 +2295,7 @@ async fn changing_an_existing_test_is_flagged_as_soon_as_it_happens() {
         json!({"tool_calls": tc("Read", json!({"file_path": "test_a.py"}))}),
         // The model fits the test to its code instead of the other way round.
         json!({"tool_calls": tc("Write", json!({"file_path": "test_a.py", "content": edited}))}),
-        json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_a.py"}))}),
-        json!({"content": "Done."}),
-        // After the finish bounce: put the test back and answer.
+        // After the notice: put the test back and answer.
         json!({"tool_calls": tc("Write", json!({"file_path": "test_a.py", "content": original}))}),
         json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_a.py"}))}),
         json!({"content": "Restored the test."}),
@@ -2316,14 +2314,112 @@ async fn changing_an_existing_test_is_flagged_as_soon_as_it_happens() {
     let reqs = seen.lock().unwrap();
     let after_edit = reqs[2]["messages"].to_string();
     assert!(
-        after_edit.contains("changed an existing test")
-            && after_edit.contains("test_f (existing test) changed"),
+        after_edit.contains("changed what an existing test expects")
+            && after_edit.contains("test_f (existing test) changed")
+            && after_edit.contains("restore the test"),
         "{after_edit}"
     );
-    let bounced = reqs[4]["messages"].to_string();
+}
+
+#[tokio::test]
+async fn a_changed_expectation_is_not_sent_back_at_the_finish() {
+    // Changing what a test expects is right when the request asks for that
+    // behaviour to change, so the finish isn't bounced for it (deleting or
+    // skipping a test still is): the notice when it happened is enough.
+    let dir = tmpdir("expectfinish");
+    std::fs::write(dir.join("mod.py"), "def f():\n    return 1\n").unwrap();
+    let original = "import unittest\nfrom mod import f\nclass T(unittest.TestCase):\n    def test_f(self):\n        self.assertEqual(f(), 1)\n";
+    let edited = "import unittest\nfrom mod import f\nclass T(unittest.TestCase):\n    def test_f(self):\n        # f returns 2 now, as asked\n        self.assertEqual(f(), 2)\n";
+    std::fs::write(dir.join("test_a.py"), original).unwrap();
+    let (base, seen) = mock_server(vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "mod.py"}))}),
+        json!({"tool_calls": tc("Read", json!({"file_path": "test_a.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "mod.py", "content": "def f():\n    return 2\n"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "test_a.py", "content": edited}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_a.py"}))}),
+        json!({"content": "f returns 2; I updated test_f, which pinned the old value."}),
+        // The related-tests nudge (the run above used unittest), answered.
+        json!({"content": "f returns 2; I updated test_f, which pinned the old value. pytest isn't installed here."}),
+    ])
+    .await;
+    let env = make_env(&base, &dir, Mode::Bypass, 32768);
+    let mut agent = Agent::new(env);
+    let end = agent
+        .run_turn(
+            "make f return 2 instead of 1",
+            vec![],
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    let TurnEnd::Done(text) = end else {
+        panic!("interrupted")
+    };
+    assert!(text.starts_with("f returns 2"), "{text}");
+    let all = seen.lock().unwrap().last().unwrap()["messages"].to_string();
     assert!(
-        bounced.contains("changed or removed existing tests"),
-        "{bounced}"
+        all.contains("changed what an existing test expects"),
+        "{all}"
+    );
+    assert!(!all.contains("changed or removed existing tests"), "{all}");
+    assert_eq!(
+        std::fs::read_to_string(dir.join("test_a.py")).unwrap(),
+        edited
+    );
+}
+
+#[tokio::test]
+async fn a_test_pinning_text_the_request_quotes_may_change() {
+    // pytest-8906: the issue quotes an error message word for word and asks
+    // for a better one; the existing test pins the old text. Updating it is
+    // the fix, so no notice and no bounce: telling the agent to restore it
+    // made it undo the correct change.
+    let dir = tmpdir("quotedexpect");
+    let old = "Using pytest.skip outside of a test is not allowed";
+    let new = "Using pytest.skip outside of a test will skip the entire module";
+    std::fs::write(dir.join("mod.py"), format!("MSG = \"{old}\"\n")).unwrap();
+    let test = |m: &str| {
+        format!(
+            "import unittest\nfrom mod import MSG\nclass T(unittest.TestCase):\n    def test_msg(self):\n        self.assertIn(\"*{m}*\".strip(\"*\"), MSG)\n"
+        )
+    };
+    std::fs::write(dir.join("test_mod.py"), test(old)).unwrap();
+    let (base, seen) = mock_server(vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "mod.py"}))}),
+        json!({"tool_calls": tc("Read", json!({"file_path": "test_mod.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "mod.py", "content": format!("MSG = \"{new}\"\n")}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "test_mod.py", "content": test(new)}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_mod.py"}))}),
+        json!({"content": "Changed the message and the test that pinned it."}),
+        json!({"content": "Changed the message and the test that pinned it; pytest isn't installed here."}),
+    ])
+    .await;
+    let env = make_env(&base, &dir, Mode::Bypass, 32768);
+    let mut agent = Agent::new(env);
+    let request = format!(
+        "The error says \"{old}. To decorate a test function, use the @pytest.mark.skip\" which is \
+         misleading. Explain that pytest.skip outside a test skips the entire module."
+    );
+    let end = agent
+        .run_turn(&request, vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    let TurnEnd::Done(text) = end else {
+        panic!("interrupted")
+    };
+    assert!(text.starts_with("Changed the message"), "{text}");
+    let reqs = seen.lock().unwrap();
+    let all = reqs.last().unwrap()["messages"].to_string();
+    assert!(
+        !all.contains("changed what an existing test expects"),
+        "{all}"
+    );
+    assert!(!all.contains("weakened an existing test"), "{all}");
+    assert!(!all.contains("changed or removed existing tests"), "{all}");
+    assert!(
+        std::fs::read_to_string(dir.join("test_mod.py"))
+            .unwrap()
+            .contains(new)
     );
 }
 
