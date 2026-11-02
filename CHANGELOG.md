@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## v0.1.15 (November 2, 2026)
+
+- **Security: approving an `.mcp.json` server now covers that server as it was.** A project server that's added or changed later, including by a pull, no longer starts until you approve it with `/mcp enable`, even in a trusted folder. Upgrade recommended.
+- **Security: on Linux, sandboxed commands can no longer leave changes to files that run code later.** Changes to `.git/hooks`, `.git/config`, `.chanto`, `.mcp.json` and similar files are put back when the command ends, and reported. A command that really needs this, such as installing git hooks, asks for approval to run outside the sandbox. Upgrade recommended.
+- **Upgrade notices name one command.** A newer release now reads `chanto v0.1.13 → v0.1.14 · run chanto upgrade`. Homebrew, npm and Scoop installs are all told to run `chanto upgrade`, instead of a package manager line to paste. The backticks that showed up literally are gone, as is the parenthetical repeating the version already on the banner.
+- **`chanto upgrade` upgrades npm and Scoop installs too.** It runs `npm install -g @chanto/cli@latest` or `scoop update chanto` itself and checks the new version arrived, as it already did for Homebrew; it used to only print those commands. cargo builds, source checkouts and installs it can't identify are still told what to run.
+- **Tidier hover in the transcript.** Clicking a tool line with nothing more to show no longer leaves it highlighted, and hovering lights only the line a click acts on, leaving the time taken alone.
+- **Security: sandboxed commands on macOS can no longer read logins from the keychain.** `gh`, `git push` over HTTPS and other commands that use a saved login now need your approval to run outside the sandbox. Upgrade recommended.
+- **Security: text a person can't see no longer reaches the model.** Hidden Unicode tag characters and direction overrides are removed from project instructions, MCP tool descriptions and tool results.
+- **A model endpoint reporting absurd token counts can't crash a run.**
+- **Background commands read better in the transcript.** Polling or stopping one shows its description, not an internal id like `bash_20`.
+- **Security: git commands ask first in a repository whose own config runs programs.** Diff and filter drivers, an fsmonitor or a pager set in `.git/config` no longer run through a read-only `git diff` without approval. Git LFS and ordinary repositories don't change.
+- **Security: a prefix allow rule no longer covers flags that run a program or write a file.** `Bash(git log:*)` doesn't allow `git log --output=...`, and `Bash(git grep:*)` doesn't allow `git grep -O...`; those ask.
+- **Security: MCP sign-in only opens https addresses in the browser,** or http on your own machine.
+- **Security: auto mode asks before sending data out once a session has read from the web or an MCP server.** Uploads such as `curl -d`, `scp` and `nc` need a person from then on; downloads, installs and requests to your own machine don't change. An allow rule of your own still applies.
+- **Security: commands that hand out a saved login, such as `gh auth token`, always ask, except in bypass mode.**
+- **Easier to limit the network.** `/sandbox network allowlist` lets shell commands reach package registries, language toolchains and GitHub, and asks about anything else. The default is still open network.
+- **Security: fixes to the web tools.** Search domain filters match whole domains, so allowing `rust-lang.org` no longer admits `evilrust-lang.org`. A fetched page can't close the marker that labels it as untrusted. Fetches upgrade to HTTPS unless the host really is this machine, not whenever the URL mentions `localhost`.
+- **A `!` shell command shows its `!` once.** The prompt drew its own marker in front of the one you typed.
+- **Windows: listing a project's sessions through the server works.** `/sessions?cwd=` compared two forms of the same path and found nothing.
+- **External agents get no more than you approved.** Allowing an action once no longer becomes "always" when an ACP agent offers only that, and approving an edited version is refused, because the agent would run its own unedited one.
+
 ## v0.1.14 (November 1, 2026)
 
 - **SDK:** the TypeScript package can be imported. `@chanto/sdk` 0.1.13 failed on import with `exports is not defined`.
