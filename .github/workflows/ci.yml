@@ -207,7 +207,7 @@ jobs:
         run: |
           cargo llvm-cov report --summary-only -p chanto -p chanto-core \
             --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' \
-            --fail-under-lines 80 > /dev/null
+            --fail-under-lines 83 > /dev/null
   # The lines only Windows compiles count toward Codecov's patch check too;
   # Codecov merges this report with the Linux one (codecov.yml waits for both).
   coverage-windows:

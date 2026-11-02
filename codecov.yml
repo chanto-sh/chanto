@@ -2,7 +2,7 @@
 # coverage of the changed lines. The patch status is a required check: at
 # least 80% of the lines a pull request changes must be covered by tests.
 # Whole-repository coverage stays informational here; CI's coverage floor
-# (ci.yml) already holds it at 80%, and gating it again would block a pull
+# (ci.yml) already holds it at 83%, and gating it again would block a pull
 # request for coverage it did not change.
 codecov:
   notify:
