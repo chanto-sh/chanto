@@ -266,11 +266,6 @@ async fn permission_replies_pick_the_matching_option() {
             json!("no"),
         ),
         (
-            PermissionReply::Allow,
-            json!([{"optionId": "always", "kind": "allow_always"}]),
-            json!("always"),
-        ),
-        (
             PermissionReply::AllowAlways,
             json!([{"optionId": "once", "kind": "allow_once"}]),
             json!("once"),
@@ -304,18 +299,29 @@ async fn permission_replies_pick_the_matching_option() {
         );
     }
 
-    // Denied with no reject option offered: cancelled, never allowed.
-    let (mut a, _tx, sent) = agent();
-    let f = Scripted::default();
-    let r = handled(
-        &mut a,
-        &sent,
-        &f,
-        Mode::Default,
-        permission_request(json!([{"optionId": "once", "kind": "allow_once"}])),
-    )
-    .await;
-    assert_eq!(r["result"]["outcome"]["outcome"], "cancelled", "{r}");
+    // Denied with no reject option offered: cancelled, never allowed. And
+    // allowed once when the agent offers only "always": cancelled too, not a
+    // standing grant.
+    for (reply, options) in [
+        (None, json!([{"optionId": "once", "kind": "allow_once"}])),
+        (
+            Some(PermissionReply::Allow),
+            json!([{"optionId": "always", "kind": "allow_always"}]),
+        ),
+    ] {
+        let (mut a, _tx, sent) = agent();
+        let f = Scripted::default();
+        f.replies.lock().unwrap().extend(reply);
+        let r = handled(
+            &mut a,
+            &sent,
+            &f,
+            Mode::Default,
+            permission_request(options),
+        )
+        .await;
+        assert_eq!(r["result"]["outcome"]["outcome"], "cancelled", "{r}");
+    }
 
     // Bypass answers without asking; edited content can't be passed on.
     let (mut a, _tx, sent) = agent();
@@ -337,8 +343,11 @@ async fn permission_replies_pick_the_matching_option() {
         .unwrap()
         .push_back(PermissionReply::AllowEdited(String::new()));
     let r = handled(&mut a, &sent, &f, Mode::Default, permission_request(all)).await;
-    assert_eq!(r["result"]["outcome"]["optionId"], "once");
-    assert!(f.saw("Edited content cannot be passed"));
+    assert_eq!(
+        r["result"]["outcome"]["optionId"], "no",
+        "an edit is refused, not swapped"
+    );
+    assert!(f.saw("can't take an edited version"));
 }
 
 #[tokio::test]
