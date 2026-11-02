@@ -365,7 +365,17 @@ fn authorize_url(
     if let Some(s) = scope {
         params.push(("scope", s));
     }
-    Ok(reqwest::Url::parse_with_params(&meta.authorization_endpoint, &params)?.to_string())
+    let url = reqwest::Url::parse_with_params(&meta.authorization_endpoint, &params)?;
+    // It goes to the system's URL opener, and a server chooses it: `file:` or an
+    // app's own scheme would open something else entirely.
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    if !(url.scheme() == "https" || (url.scheme() == "http" && loopback)) {
+        bail!(
+            "the server's authorization address isn't https: {}",
+            meta.authorization_endpoint
+        );
+    }
+    Ok(url.to_string())
 }
 
 const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>chanto</title><body style=\"font-family:system-ui;padding:3em\"><h2>Logged in</h2><p>You can close this tab and return to the terminal.</p>";
@@ -638,6 +648,34 @@ pub(crate) fn try_open_browser(url: &str) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_web_addresses_go_to_the_browser() {
+        let meta = |endpoint: &str| AuthMeta {
+            authorization_endpoint: endpoint.to_string(),
+            token_endpoint: String::new(),
+            registration_endpoint: None,
+            resource: String::new(),
+            scopes: None,
+        };
+        let url = |e: &str| authorize_url(&meta(e), "c", "http://localhost/cb", "x", "s", None);
+        for good in [
+            "https://auth.example/a",
+            "http://localhost:8080/a",
+            "http://127.0.0.1/a",
+        ] {
+            assert!(url(good).is_ok(), "{good}");
+        }
+        for bad in [
+            "file:///etc/passwd",
+            "vscode://x/y",
+            "smb://evil/share",
+            "http://evil.example/a",
+            "javascript:alert(1)",
+        ] {
+            assert!(url(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn www_authenticate_params() {
