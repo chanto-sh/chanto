@@ -155,7 +155,16 @@ impl Agent {
             },
         };
         // Why a prompt is being shown, when it wasn't a static rule that asked.
-        let mut ask_because: Option<String> = None;
+        let mut ask_because: Option<String> = (mode == Mode::Auto
+            && matches!(decision, Decision::Ask)
+            && kind == ToolKind::Execute
+            && env
+                .read_outside
+                .load(std::sync::atomic::Ordering::Relaxed)
+            && permissions::sends_data_out(args["command"].as_str().unwrap_or("")))
+        .then(|| {
+            "This command sends data out, and this session has read from the web or an MCP server, which could be steering it. Allow it if you expected it.".to_string()
+        });
         if mode == Mode::Auto {
             if let Decision::Deny(r) = &decision {
                 self.consecutive_blocks += 1;
