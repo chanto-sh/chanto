@@ -114,8 +114,11 @@ impl Pty {
     }
 
     async fn wait_for(&self, what: &str) {
+        // Redraws move the cursor over blank cells instead of printing spaces.
+        let squeeze = |t: &str| t.split_whitespace().collect::<String>();
+        let what_squeezed = squeeze(what);
         for _ in 0..3000 {
-            if self.text().contains(what) {
+            if squeeze(&self.text()).contains(&what_squeezed) {
                 return;
             }
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -274,4 +277,24 @@ async fn a_termination_signal_restores_the_terminal() {
     let (_, bytes) = pty.finish().await;
     let raw = String::from_utf8_lossy(&bytes);
     assert!(raw.contains("\x1b[?1049l"), "left the alternate screen");
+}
+
+#[tokio::test]
+async fn remote_control_starts_reports_and_stops_from_the_session() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        return;
+    }
+    let (model, _) = mock_server(vec![]).await;
+    let dir = tmpdir("pty-remote");
+    let mut pty = Pty::start("tui::pty_tests::fullscreen_child", &model, &dir);
+    pty.wait_for("mock").await;
+    pty.keys("/remote status\r");
+    pty.wait_for("Remote control is off.").await;
+    pty.keys("/remote local\r");
+    pty.wait_for("127.0.0.1:").await;
+    pty.keys("/remote off\r");
+    pty.wait_for("no longer works").await;
+    pty.keys("/exit\r");
+    let (code, bytes) = pty.finish().await;
+    assert_eq!(code, "0", "{}", plain(&bytes));
 }
