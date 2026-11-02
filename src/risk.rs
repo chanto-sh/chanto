@@ -1780,3 +1780,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod train_tests;

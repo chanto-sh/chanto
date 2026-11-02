@@ -1626,3 +1626,6 @@ while True:
         c.kill();
     }
 }
+
+#[cfg(all(test, unix))]
+mod query_tests;

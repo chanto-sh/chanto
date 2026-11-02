@@ -1958,3 +1958,6 @@ mod tests {
         .expect("the local page stops");
     }
 }
+
+#[cfg(test)]
+mod push_tests;

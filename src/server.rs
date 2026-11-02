@@ -526,7 +526,7 @@ async fn fork_session(
 fn project_dir(st: &AppState, q: &HashMap<String, String>) -> std::path::PathBuf {
     q.get("cwd")
         .filter(|c| !c.is_empty())
-        .and_then(|c| std::fs::canonicalize(c).ok())
+        .and_then(|c| crate::util::canonical(c).ok())
         .or_else(|| st.cli.cwd.clone())
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
 }
@@ -2626,3 +2626,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&cwd);
     }
 }
+
+#[cfg(test)]
+mod api_tests;

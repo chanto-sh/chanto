@@ -479,6 +479,10 @@ pub enum Recorder {
 }
 
 pub fn find_recorder() -> Result<Recorder> {
+    pick_recorder(find_tool)
+}
+
+fn pick_recorder(find_tool: impl Fn(&str) -> Option<PathBuf>) -> Result<Recorder> {
     if let Some(p) = find_tool("ffmpeg") {
         return Ok(Recorder::Ffmpeg(p));
     }
@@ -1323,3 +1327,6 @@ mod tests {
         assert!(!path.exists());
     }
 }
+
+#[cfg(test)]
+mod recording_tests;

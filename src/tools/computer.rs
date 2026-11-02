@@ -737,6 +737,10 @@ pub fn mac_key_request(c: &Combo) -> Value {
 }
 
 async fn output(prog: &str, args: &[String]) -> Result<std::process::Output> {
+    #[cfg(test)]
+    let fake = fake_program(prog);
+    #[cfg(test)]
+    let prog = fake.as_deref().unwrap_or(prog);
     let fut = tokio::process::Command::new(prog)
         .args(args)
         .stdin(std::process::Stdio::null())
@@ -746,6 +750,22 @@ async fn output(prog: &str, args: &[String]) -> Result<std::process::Output> {
         Ok(r) => Ok(r?),
         Err(_) => anyhow::bail!("{prog} didn't finish within 30s"),
     }
+}
+
+/// Tests that drive a fake desktop name a directory of shims, so every desktop
+/// program resolves there, including the absolute macOS paths. A missing shim
+/// fails to start rather than falling back to the real program.
+#[cfg(test)]
+fn fake_program(prog: &str) -> Option<String> {
+    // The one test meant for a real desktop says so, and only CI's headless
+    // session runs it.
+    if std::env::var_os("CHANTO_TEST_REAL_DESKTOP").is_some() {
+        return None;
+    }
+    // Otherwise a test still can't reach the real desktop: this doesn't exist.
+    let dir = std::env::var_os("CHANTO_TEST_FAKE_DESKTOP").unwrap_or("/nonexistent".into());
+    let name = std::path::Path::new(prog).file_name()?;
+    Some(std::path::Path::new(&dir).join(name).display().to_string())
 }
 
 /// Run the macOS helper script; a missing permission becomes a clear error.
@@ -1933,6 +1953,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs a Wayland session with grim and ydotoold"]
     async fn wayland_end_to_end() {
+        // SAFETY: it runs alone, on request, in CI's headless session.
+        unsafe { std::env::set_var("CHANTO_TEST_REAL_DESKTOP", "1") };
         support().unwrap();
         let (size, _) = screen_size(true).await.unwrap();
         assert!(size.0 >= 320.0 && size.1 >= 200.0, "{size:?}");
@@ -2136,3 +2158,6 @@ mod tests {
         assert!(cursor.content.contains("screenshot coordinates"));
     }
 }
+
+#[cfg(all(test, unix))]
+mod desktop_tests;

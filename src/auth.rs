@@ -951,3 +951,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
     }
 }
+
+#[cfg(test)]
+mod cli_tests;

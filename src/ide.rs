@@ -807,3 +807,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod fake_tests;
