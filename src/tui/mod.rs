@@ -2789,3 +2789,6 @@ mod quota_tests;
 mod view_time;
 #[cfg(test)]
 mod visual_tests;
+
+#[cfg(all(test, unix))]
+mod pty_tests;
