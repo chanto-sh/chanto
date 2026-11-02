@@ -8,9 +8,9 @@ use chanto_proto::remote::{
     AppendRemoteEvents, CreateRemoteSession, RemoteCommand, RemoteCommandItem, Sealed,
 };
 
-#[derive(Default)]
 struct FakeHost {
     inputs: Mutex<Vec<Input>>,
+    messages: Mutex<Vec<Value>>,
 }
 
 impl Host for FakeHost {
@@ -19,7 +19,7 @@ impl Host for FakeHost {
         true
     }
     fn snapshot(&self) -> Option<Vec<Value>> {
-        Some(vec![json!({"role": "user", "content": "hi"})])
+        Some(self.messages.lock().unwrap().clone())
     }
     fn info(&self) -> Value {
         json!({"model": "mock", "mode": "default", "todos": []})
@@ -45,8 +45,11 @@ fn bearer(h: &axum::http::HeaderMap) -> Option<String> {
         .map(str::to_string)
 }
 
-async fn fake_cloud() -> (String, Shared) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+/// Serves the relay on `listener` (bound before the runtime starts, so the
+/// test can name its URL in the environment first).
+async fn fake_cloud(listener: std::net::TcpListener) -> (String, Shared) {
+    listener.set_nonblocking(true).unwrap();
+    let listener = tokio::net::TcpListener::from_std(listener).unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let relay: Shared = Default::default();
     let page = format!("{base}/remote/rs1");
@@ -153,7 +156,6 @@ fn queue(relay: &Shared, seq: u64, command: Sealed) {
         .push(RemoteCommandItem { seq, command });
 }
 
-#[cfg(unix)]
 #[test]
 fn a_reader_joins_through_the_cloud_and_drives_the_session() {
     if isolated("remote::cloud_tests::a_reader_joins_through_the_cloud_and_drives_the_session") {
@@ -171,14 +173,18 @@ fn a_reader_joins_through_the_cloud_and_drives_the_session() {
         bin.display(),
         std::env::var("PATH").unwrap_or_default()
     );
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let cloud_url = format!("http://{}", listener.local_addr().unwrap());
+    // Before the runtime starts any threads.
+    unsafe {
+        std::env::set_var("PATH", &path);
+        std::env::set_var("CHANTO_CLOUD_TOKEN", "account-token");
+        std::env::set_var("CHANTO_CLOUD_URL", &cloud_url);
+    }
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        let (base, relay) = fake_cloud().await;
-        unsafe {
-            std::env::set_var("PATH", &path);
-            std::env::set_var("CHANTO_CLOUD_TOKEN", "account-token");
-            std::env::set_var("CHANTO_CLOUD_URL", &base);
-        }
+        let (base, relay) = fake_cloud(listener).await;
+        assert_eq!(base, cloud_url);
         let env = crate::agent::tests::make_env(
             "http://127.0.0.1:1",
             &bin,
@@ -189,7 +195,10 @@ fn a_reader_joins_through_the_cloud_and_drives_the_session() {
         assert_eq!(command(&env, "cloud").await, NOT_HERE);
         assert_eq!(command(&env, "local").await, NOT_HERE);
 
-        let host = Arc::new(FakeHost::default());
+        let host = Arc::new(FakeHost {
+            inputs: Mutex::new(Vec::new()),
+            messages: Mutex::new(vec![json!({"role": "user", "content": "hi"})]),
+        });
         assert!(HOST.set(host.clone()).is_ok());
         SLOT.get_or_init(Default::default);
 
@@ -200,7 +209,10 @@ fn a_reader_joins_through_the_cloud_and_drives_the_session() {
             "{out}"
         );
         let link = std::fs::read_to_string(&clip).expect("the full link went to the clipboard");
-        assert!(link.starts_with(&format!("{base}/remote/rs1#k=")), "{link}");
+        assert!(
+            link.starts_with(&format!("{base}/remote/rs1#k=")),
+            "the clipboard holds the session's link"
+        );
         let key = crate::remote_crypto::SessionKey::from_link(&link).expect("a key in the link");
         let cli_public = fragment_value(&link, "p");
         assert!(
@@ -278,7 +290,9 @@ fn a_reader_joins_through_the_cloud_and_drives_the_session() {
         let joined_snap: Value = view.open(Purpose::Snapshot, &joined_snap).unwrap();
         assert_eq!(joined_snap["messages"][0]["content"], "hi");
 
-        // A second join, even with the link's key, is refused.
+        // A second join, even with the link's key, is refused: no snapshot
+        // or events are sealed for it.
+        let snapshots_before_late = relay.lock().unwrap().snapshots.len();
         let late = crate::remote_crypto::Handshake::generate().unwrap();
         let late_join = RemoteCommand::Join {
             viewer: "reader-2".into(),
@@ -322,6 +336,36 @@ fn a_reader_joins_through_the_cloud_and_drives_the_session() {
             vec![Input::Prompt("from phone".into()), Input::Interrupt],
             "the replay, the tampered command and the stranger's were dropped"
         );
+        // Commands are handled in order, so the late join (seq 3) was seen.
+        assert_eq!(
+            relay.lock().unwrap().snapshots.len(),
+            snapshots_before_late,
+            "the late join got no snapshot"
+        );
+        assert_eq!(
+            opened_events(&relay)
+                .iter()
+                .filter(|e| e["type"] == "ready")
+                .count(),
+            1,
+            "only the first reader was told it's ready"
+        );
+        let late_view = late.complete("reader-2", &cli_public, "rs1").unwrap();
+        {
+            let r = relay.lock().unwrap();
+            assert!(
+                r.snapshots
+                    .iter()
+                    .all(|(_, s)| late_view.open::<Value>(Purpose::Snapshot, s).is_err()),
+                "the late reader can't open any snapshot"
+            );
+            assert!(
+                r.events
+                    .iter()
+                    .all(|(_, e)| late_view.open::<Value>(Purpose::Events, e).is_err()),
+                "the late reader can't open any event"
+            );
+        }
 
         // An answer to an open prompt settles it.
         let hub = active().expect("the hub is live");
@@ -349,24 +393,38 @@ fn a_reader_joins_through_the_cloud_and_drives_the_session() {
 
         // What happens in the terminal goes up sealed for the reader, and
         // the end of a turn refreshes the snapshot.
-        let snapshots_before = relay.lock().unwrap().snapshots.len();
         user("typed at the terminal");
         show("slash command output");
+        // The conversation the turn leaves behind.
+        *host.messages.lock().unwrap() = vec![json!({"role": "user", "content": "after the turn"})];
         turn_done(Some("boom"));
-        wait_for("the turn's events", || {
+        let evs = wait_for("the turn's events", || {
             let evs = opened_events(&relay);
             let done = evs
                 .iter()
                 .any(|e| e["type"] == "turn_done" && e["error"] == "boom");
             done.then_some(evs)
         })
-        .await
-        .iter()
-        .find(|e| e["type"] == "user")
-        .map(|e| assert_eq!(e["text"], "typed at the terminal"))
-        .expect("the prompt went up");
+        .await;
+        assert!(
+            evs.iter()
+                .any(|e| e["type"] == "user" && e["text"] == "typed at the terminal"),
+            "the prompt went up: {evs:?}"
+        );
+        assert!(
+            evs.iter()
+                .any(|e| e["type"] == "info" && e["message"] == "slash command output"),
+            "the command output went up: {evs:?}"
+        );
         wait_for("the snapshot after the turn", || {
-            (relay.lock().unwrap().snapshots.len() > snapshots_before).then_some(())
+            relay
+                .lock()
+                .unwrap()
+                .snapshots
+                .iter()
+                .filter_map(|(_, s)| view.open::<Value>(Purpose::Snapshot, s).ok())
+                .any(|s| s["messages"][0]["content"] == "after the turn")
+                .then_some(())
         })
         .await;
         assert!(
