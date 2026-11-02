@@ -53,21 +53,21 @@ fn servers_can_be_added_as_json_read_back_and_removed() {
 }
 
 #[test]
-fn claude_desktop_servers_are_read_from_its_config() {
-    if isolated("mcp_cli::run_tests::claude_desktop_servers_are_read_from_its_config") {
+fn importing_from_claude_desktop_with_no_config_imports_nothing() {
+    if isolated("mcp_cli::run_tests::importing_from_claude_desktop_with_no_config_imports_nothing")
+    {
         return;
     }
     std::env::set_current_dir(tmpdir("mcp-desktop")).unwrap();
     let e = run(&args(&["add-from-claude-desktop", "--scope", "user"]));
     assert!(
-        e.is_err() || e.unwrap().to_lowercase().contains("no "),
-        "nothing to import"
+        e.unwrap_err()
+            .to_string()
+            .starts_with("no Claude Desktop configuration found")
     );
+    // Only ever looks under the home it was given, never the real one.
+    let home = std::env::var_os("CHANTO_COMPAT_HOME").unwrap();
     for p in claude_desktop_paths() {
-        assert!(
-            p.starts_with(dirs::home_dir().unwrap()) || !p.exists(),
-            "{}",
-            p.display()
-        );
+        assert!(p.starts_with(&home), "{}", p.display());
     }
 }

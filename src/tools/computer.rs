@@ -757,7 +757,8 @@ async fn output(prog: &str, args: &[String]) -> Result<std::process::Output> {
 /// fails to start rather than falling back to the real program.
 #[cfg(test)]
 fn fake_program(prog: &str) -> Option<String> {
-    let dir = std::env::var_os("CHANTO_TEST_FAKE_DESKTOP")?;
+    // Unset, a test still can't reach the real desktop: this doesn't exist.
+    let dir = std::env::var_os("CHANTO_TEST_FAKE_DESKTOP").unwrap_or("/nonexistent".into());
     let name = std::path::Path::new(prog).file_name()?;
     Some(std::path::Path::new(&dir).join(name).display().to_string())
 }

@@ -167,6 +167,7 @@ async fn the_fetch_tool_marks_content_untrusted_and_limits_it() {
         .await
         .unwrap();
     assert!(!out.is_error);
+    assert!(out.content.contains("body"), "{}", out.content);
 
     let out = tool
         .run(json!({"url": format!("{base}/gone")}), &ctx(|_| {}))
@@ -370,7 +371,7 @@ async fn engines_parse_their_answers_and_auto_falls_back() {
     let e = search(&web(&|c| c.search_backend = Some("ddg".into())), "q")
         .await
         .unwrap_err();
-    assert!(!e.to_string().is_empty());
+    assert!(e.to_string().contains("blocked a recent search"), "{e}");
 
     let log = seen.lock().unwrap().join("\n");
     assert!(

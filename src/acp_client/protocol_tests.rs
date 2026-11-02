@@ -216,10 +216,20 @@ async fn cancelling_a_turn_tells_the_agent_and_waits_for_it() {
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     });
+    let started = std::time::Instant::now();
     assert!(matches!(
         turn(&mut a, &f, cancel).await.unwrap(),
         TurnEnd::Interrupted
     ));
+    // Giving up after the grace period ends the same way, so check it didn't.
+    assert!(started.elapsed() < CANCEL_GRACE, "the agent was never told");
+    assert!(
+        sent.lock()
+            .unwrap()
+            .iter()
+            .any(|m| m["method"] == "session/cancel"),
+        "the agent was never told"
+    );
 }
 
 /// Answers a request through `handle` and returns what the agent would read.

@@ -370,11 +370,7 @@ async fn interrupting_a_pending_tool_call_ends_the_turn_and_clears_it() {
     // An immediate command answers now; a prompt goes in the queue.
     let (status, reply) = api.post(&path, json!({"text": "/help"})).await;
     assert_eq!(status, StatusCode::ACCEPTED);
-    assert_eq!(
-        reply["output"].is_string(),
-        commands::is_immediate("/help"),
-        "{reply}"
-    );
+    assert!(reply["output"].is_string(), "{reply}");
     let (_, queued) = api.post(&path, json!({"text": "later"})).await;
     assert_eq!(queued["queued"], true);
     assert_eq!(queued["message"]["text"], "later");

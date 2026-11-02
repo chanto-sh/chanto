@@ -398,12 +398,12 @@ async fn session_commands_open_their_panels() {
     pty.keys("first prompt\r");
     pty.wait_for(ANSWER).await;
     for (command, expected) in [
-        ("/hooks\r", "hooks"),
-        ("/agents\r", "agent"),
+        ("/hooks\r", "no hooks configured"),
+        ("/agents\r", "subagents"),
         ("/remote status\r", "off"),
         ("/goal list\r", "goals"),
-        ("/team\r", "team"),
-        ("/mcp\r", "MCP"),
+        ("/team\r", "no team yet"),
+        ("/mcp\r", "no mcp servers configured"),
     ] {
         pty.keys(command);
         pty.wait_for_any_case(expected).await;

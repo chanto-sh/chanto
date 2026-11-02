@@ -334,24 +334,22 @@ mod shims {
 
     #[test]
     fn sox_needs_both_of_its_programs() {
-        if isolated("voice::recording_tests::shims::sox_needs_both_of_its_programs") {
-            return;
-        }
-        let dir = tmpdir("voice-sox-pair");
-        shim(&dir.join("rec"), "exit 0");
-        // SAFETY: the test runs alone in its own child process.
-        unsafe { std::env::set_var("PATH", dir.display().to_string()) };
-        if find_tool("ffmpeg").is_some() || find_tool("sox").is_some() {
-            // Installed in a prefix searched beyond PATH: the choice isn't this test's.
-            return;
-        }
+        let find = |have: &'static [&'static str]| {
+            move |tool: &str| have.contains(&tool).then(|| PathBuf::from(tool))
+        };
         assert!(
-            find_recorder()
+            pick_recorder(find(&["rec"]))
                 .unwrap_err()
                 .to_string()
                 .contains("needs ffmpeg")
         );
-        shim(&dir.join("sox"), "exit 0");
-        assert_eq!(find_recorder().unwrap(), Recorder::Sox(dir.join("rec")));
+        assert_eq!(
+            pick_recorder(find(&["rec", "sox"])).unwrap(),
+            Recorder::Sox(PathBuf::from("rec"))
+        );
+        assert_eq!(
+            pick_recorder(find(&["ffmpeg", "rec", "sox"])).unwrap(),
+            Recorder::Ffmpeg(PathBuf::from("ffmpeg"))
+        );
     }
 }

@@ -23,7 +23,13 @@ fn market(name: &str, plugin_source: serde_json::Value) -> PathBuf {
 }
 
 #[test]
-fn a_local_marketplace_installs_lists_and_removes_a_plugin() {
+fn a_local_marketplace_installs_and_lists_a_plugin() {
+    // Listing also reads Claude Code's plugin files: never the real ones.
+    if crate::test_support::isolated(
+        "plugin::registry_tests::a_local_marketplace_installs_and_lists_a_plugin",
+    ) {
+        return;
+    }
     let base = tmpdir("plugin-base");
     let yes = &mut |_: &str| true;
     let source = market("shop", json!("./tool"));

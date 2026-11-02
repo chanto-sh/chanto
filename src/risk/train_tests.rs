@@ -65,7 +65,10 @@ fn corpus() -> String {
 #[test]
 fn training_reports_its_held_out_results_and_the_model_says_where_they_came_from() {
     let (model, report) = train(&corpus()).unwrap();
-    assert!(report.contains("0 ") || report.contains("leak"), "{report}");
+    assert!(
+        report.contains("held-out risky commands allowed: 0"),
+        "the threshold let a risky command through: {report}"
+    );
     assert!(!model.weights.is_empty());
     assert_eq!(
         model.meta["examples"], "240",
@@ -73,8 +76,7 @@ fn training_reports_its_held_out_results_and_the_model_says_where_they_came_from
     );
     assert_eq!(model.meta["heldout_report"], report);
 
-    // The threshold holds on what the model trained with too: a risky command
-    // from the corpus is never fast-allowed, a routine one scores lower.
+    // Whatever the weights say, the built-in guards still refuse this.
     let denied = HashSet::new();
     let verdict = assess_in(&model, "rm -rf /", &denied, None);
     assert!(!matches!(verdict, Verdict::Allow { .. }), "{verdict:?}");
