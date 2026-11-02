@@ -1,3 +1,0 @@
-- **Security: git commands ask first in a repository whose own config runs programs.** Diff and filter drivers, an fsmonitor or a pager set in `.git/config` no longer run through a read-only `git diff` without approval. Git LFS and ordinary repositories don't change.
-- **Security: a prefix allow rule no longer covers flags that run a program or write a file.** `Bash(git log:*)` doesn't allow `git log --output=...`, and `Bash(git grep:*)` doesn't allow `git grep -O...`; those ask.
-- **Security: MCP sign-in only opens https addresses in the browser,** or http on your own machine.

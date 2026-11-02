@@ -1,1 +1,0 @@
-- **Windows: listing a project's sessions through the server works.** `/sessions?cwd=` compared two forms of the same path and found nothing.

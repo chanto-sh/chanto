@@ -1,1 +1,0 @@
-- **Easier to limit the network.** `/sandbox network allowlist` lets shell commands reach package registries, language toolchains and GitHub, and asks about anything else. The default is still open network.

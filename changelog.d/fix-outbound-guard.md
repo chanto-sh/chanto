@@ -1,2 +1,0 @@
-- **Security: auto mode asks before sending data out once a session has read from the web or an MCP server.** Uploads such as `curl -d`, `scp` and `nc` need a person from then on; downloads, installs and requests to your own machine don't change. An allow rule of your own still applies.
-- **Security: commands that hand out a saved login, such as `gh auth token`, always ask, except in bypass mode.**
