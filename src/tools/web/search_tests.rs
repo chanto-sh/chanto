@@ -335,7 +335,7 @@ async fn engines_parse_their_answers_and_auto_falls_back() {
     let r = search(&web(&|c| c.search_backend = Some("ddg".into())), "q")
         .await
         .unwrap();
-    assert_eq!(r.len(), 2, "{r:?}");
+    assert_eq!(r.len(), 2);
     assert_eq!(r[0].url, "https://one.test/");
     assert_eq!(r[0].title, "One Title");
     assert_eq!(r[0].snippet, "First snippet");
