@@ -512,13 +512,28 @@ pub async fn search(cfg: &crate::config::WebConfig, q: &str) -> Result<Vec<Searc
     }
 }
 
+/// A search engine's address. Tests that exercise the engines set a loopback
+/// server in place of the public host, so none of them leaves the machine.
+#[cfg(not(test))]
+fn endpoint(url: &str) -> String {
+    url.to_string()
+}
+
+#[cfg(test)]
+fn endpoint(url: &str) -> String {
+    let path = url.splitn(4, '/').nth(3).unwrap_or("");
+    let base =
+        std::env::var("CHANTO_TEST_WEB_BASE").unwrap_or_else(|_| "http://127.0.0.1:9".into());
+    format!("{base}/{path}")
+}
+
 async fn brave(cfg: &crate::config::WebConfig, q: &str) -> Result<Vec<SearchResult>> {
     let key = cfg
         .brave_api_key
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("no brave_api_key"))?;
     let v: Value = client()
-        .get("https://api.search.brave.com/res/v1/web/search")
+        .get(endpoint("https://api.search.brave.com/res/v1/web/search"))
         .query(&[("q", q), ("count", "10")])
         .header("X-Subscription-Token", key)
         .send()
@@ -543,7 +558,7 @@ async fn tavily(cfg: &crate::config::WebConfig, q: &str) -> Result<Vec<SearchRes
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("no tavily_api_key"))?;
     let v: Value = client()
-        .post("https://api.tavily.com/search")
+        .post(endpoint("https://api.tavily.com/search"))
         .json(&json!({"api_key": key, "query": q, "max_results": 10}))
         .send()
         .await?
@@ -613,7 +628,7 @@ fn text_of(el: &scraper::ElementRef) -> String {
 async fn ddg(q: &str) -> Result<Vec<SearchResult>> {
     polite_pause("DuckDuckGo").await?;
     let html = client()
-        .post("https://html.duckduckgo.com/html/")
+        .post(endpoint("https://html.duckduckgo.com/html/"))
         .form(&[("q", q), ("kl", "us-en")])
         .header("Referer", "https://html.duckduckgo.com/")
         .send()
@@ -672,7 +687,7 @@ fn decode_ddg_href(href: &str) -> String {
 async fn bing(q: &str) -> Result<Vec<SearchResult>> {
     polite_pause("Bing").await?;
     let html = client()
-        .get("https://www.bing.com/search")
+        .get(endpoint("https://www.bing.com/search"))
         .query(&[("q", q), ("setlang", "en")])
         .send()
         .await?
@@ -808,3 +823,6 @@ mod tests {
         assert!(!md.contains("x()"));
     }
 }
+
+#[cfg(test)]
+mod search_tests;
