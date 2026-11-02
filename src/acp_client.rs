@@ -2860,3 +2860,6 @@ done
         assert!(!agent.has_command("review"));
     }
 }
+
+#[cfg(test)]
+mod protocol_tests;
