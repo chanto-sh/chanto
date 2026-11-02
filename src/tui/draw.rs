@@ -966,8 +966,10 @@ impl App {
                 ])),
             }
         } else {
+            // A `!shell` line's own `!` is its marker, in the marker's colour.
+            let shell_mark = Style::default().fg(pal().code_block);
             let marker = if shell {
-                ("! ".to_string(), Style::default().fg(pal().code_block))
+                ("  ".to_string(), Style::default())
             } else {
                 ("> ".to_string(), Style::default().fg(pal().dim))
             };
@@ -981,7 +983,14 @@ impl App {
                 // all one colour already, so it isn't re-styled.
                 let mut spans = vec![Span::styled(p.0, p.1)];
                 if shell {
-                    spans.push(Span::raw(r.clone()));
+                    match r.split_once('!').filter(|_| i == 0) {
+                        Some((before, after)) => {
+                            spans.push(Span::raw(before.to_string()));
+                            spans.push(Span::styled("!", shell_mark));
+                            spans.push(Span::raw(after.to_string()));
+                        }
+                        None => spans.push(Span::raw(r.clone())),
+                    }
                 } else {
                     spans.extend(input_row_spans(r, i == 0));
                 }

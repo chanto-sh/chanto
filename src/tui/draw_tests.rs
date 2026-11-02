@@ -339,7 +339,8 @@ async fn the_prompt_shows_typed_text_and_the_shell_marker() {
     let s = t.screen(80, 20);
     assert!(s.contains("> /model fast"), "{s}");
     t.input.set("!ls -la");
-    assert!(t.screen(80, 20).contains("! !ls -la"));
+    let s = t.screen(80, 20);
+    assert!(s.contains("  !ls -la") && !s.contains("! !"), "{s}");
     // Many lines: the box grows to ten and follows the cursor.
     t.input.set(
         &(0..15)
