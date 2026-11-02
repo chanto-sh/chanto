@@ -1,0 +1,1 @@
+- **Security: fixes to the web tools.** Search domain filters match whole domains, so allowing `rust-lang.org` no longer admits `evilrust-lang.org`. A fetched page can't close the marker that labels it as untrusted. Fetches upgrade to HTTPS unless the host really is this machine, not whenever the URL mentions `localhost`.
