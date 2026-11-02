@@ -1408,13 +1408,16 @@ impl AcpAgent {
             return json!({"outcome": {"outcome": "cancelled"}});
         };
         let pick = match &reply {
-            PermissionReply::Allow => allow_once.as_ref().or(allow_always.as_ref()),
+            // "Once" never becomes a standing grant just because the agent
+            // offered nothing narrower: it's refused instead.
+            PermissionReply::Allow => allow_once.as_ref(),
+            // The agent would run its own version, not the one you edited.
             PermissionReply::AllowEdited(_) => {
                 frontend.emit(Event::Warn(
-                    "Edited content cannot be passed to an external agent; allowing its own edit."
+                    "This agent can't take an edited version, so it wasn't allowed. Approve it as it is, or tell the agent what to change."
                         .into(),
                 ));
-                allow_once.as_ref().or(allow_always.as_ref())
+                reject.as_ref()
             }
             PermissionReply::AllowAlways => allow_always.as_ref().or(allow_once.as_ref()),
             PermissionReply::Deny(_) | PermissionReply::AutoDenied(_) => reject.as_ref(),

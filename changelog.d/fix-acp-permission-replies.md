@@ -1,0 +1,1 @@
+- **External agents get no more than you approved.** Allowing an action once no longer becomes "always" when an ACP agent offers only that, and approving an edited version is refused, because the agent would run its own unedited one.
