@@ -753,19 +753,22 @@ fn capabilities_choose_how_to_restore_a_session() {
 
 #[test]
 fn small_formatters() {
-    assert_eq!(signal_name(9), "SIGKILL");
-    assert_eq!(signal_name(15), "SIGTERM");
-    assert_eq!(signal_name(64), "SIG64");
-    for (s, n) in [
-        (1, "SIGHUP"),
-        (2, "SIGINT"),
-        (3, "SIGQUIT"),
-        (6, "SIGABRT"),
-        (11, "SIGSEGV"),
-        (13, "SIGPIPE"),
-        (14, "SIGALRM"),
-    ] {
-        assert_eq!(signal_name(s), n);
+    #[cfg(unix)]
+    {
+        assert_eq!(signal_name(9), "SIGKILL");
+        assert_eq!(signal_name(15), "SIGTERM");
+        assert_eq!(signal_name(64), "SIG64");
+        for (s, n) in [
+            (1, "SIGHUP"),
+            (2, "SIGINT"),
+            (3, "SIGQUIT"),
+            (6, "SIGABRT"),
+            (11, "SIGSEGV"),
+            (13, "SIGPIPE"),
+            (14, "SIGALRM"),
+        ] {
+            assert_eq!(signal_name(s), n);
+        }
     }
     use base64::Engine;
     let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
