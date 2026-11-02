@@ -884,12 +884,22 @@ async fn slash_bg_reports_a_failed_start() {
 #[tokio::test]
 async fn daemon_stop_signals_a_live_daemon_and_waits_for_it() {
     let _home = TestHome::new("cli-daemon-stop");
+    /// Kills the stand-in daemon if the test fails before stopping it.
+    struct KillOnDrop(Arc<std::sync::Mutex<std::process::Child>>);
+    impl Drop for KillOnDrop {
+        fn drop(&mut self) {
+            let mut c = self.0.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = c.kill();
+            let _ = c.wait();
+        }
+    }
     let child = std::process::Command::new("sleep")
         .arg("60")
         .spawn()
         .unwrap();
     let pid = child.id();
     let child = Arc::new(std::sync::Mutex::new(child));
+    let _guard = KillOnDrop(child.clone());
     let alive = child.clone();
     let app = axum::Router::new().route(
         "/health",

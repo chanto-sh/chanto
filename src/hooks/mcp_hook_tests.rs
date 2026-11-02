@@ -20,7 +20,8 @@ impl Frontend for Quiet {
     }
 }
 
-/// A server with a `context` tool that answers with text and a `fails` tool
+/// A server with a `context` tool that answers with text naming the `prompt`
+/// argument it was called with, and a `fails` tool
 /// that answers with an error result.
 fn hook_server() -> McpServerConfig {
     let script = r#"while IFS= read -r line; do
@@ -29,7 +30,9 @@ fn hook_server() -> McpServerConfig {
 *'"method":"initialize"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"sh"}}}\n' "$id" ;;
 *'"method":"tools/list"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"context","inputSchema":{"type":"object"}},{"name":"fails","inputSchema":{"type":"object"}}]}}\n' "$id" ;;
 *'"name":"fails"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"the check broke"}],"isError":true}}\n' "$id" ;;
-*'"method":"tools/call"'*) printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"  context from the server  "}]}}\n' "$id" ;;
+*'"method":"tools/call"'*)
+  prompt=$(printf '%s' "$line" | sed -n 's/.*"arguments":{"prompt":"\([^"]*\)".*/\1/p')
+  printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"  context for: %s  "}]}}\n' "$id" "$prompt" ;;
 *'"id":'*) printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id" ;;
   esac
 done"#;
@@ -96,8 +99,9 @@ async fn mcp_tool_hooks_add_context_and_report_failures() {
     );
     // The working tool's text is read like a command's stdout: trimmed, and
     // plain text on UserPromptSubmit becomes context.
-    assert_eq!(res.context, vec!["context from the server".to_string()]);
-    assert_eq!(res.stdout, vec!["context from the server".to_string()]);
+    // `${prompt}` in the hook's input was filled from the hook input.
+    assert_eq!(res.context, vec!["context for: fix the bug".to_string()]);
+    assert_eq!(res.stdout, vec!["context for: fix the bug".to_string()]);
     live.shutdown(Status::Off("test over".into()));
     let _ = std::fs::remove_dir_all(&dir);
 }

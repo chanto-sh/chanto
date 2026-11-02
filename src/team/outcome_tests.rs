@@ -33,6 +33,9 @@ fn opts(base: &str) -> TeamOpts {
 async fn a_rejected_subtask_is_retried_once_then_reported_with_failing_checks() {
     let home = TestHome::new("team-reject");
     let repo = make_repo(&home);
+    // A request goes to the first route whose key its first user message
+    // contains. The review prompt quotes the sub-task, so "Team review" must
+    // come before the sub-task routes.
     let (base, _) = mock_server_routed(vec![
         (
             "Team mode, step 1",
@@ -61,7 +64,7 @@ async fn a_rejected_subtask_is_retried_once_then_reported_with_failing_checks() 
     .await;
     let m = home.manager();
     let env = make_env_with(&base, &repo, Mode::AcceptEdits, 32768, |c| {
-        c.guardrails.checks = vec!["echo checks-ran && false".into()]
+        c.guardrails.checks = vec!["printf 'out-%s\\n' ran && false".into()]
     });
     let mut lead = Agent::new(env.clone());
     let report_text = start(
@@ -97,9 +100,9 @@ async fn a_rejected_subtask_is_retried_once_then_reported_with_failing_checks() 
         second.task
     );
     assert!(report_text.contains("- ✗ **t1** Gamma · rejected · runs "));
-    assert!(report_text.contains("\n- ❌ `echo checks-ran && false`"));
+    assert!(report_text.contains("\n- ❌ `printf 'out-%s\\n' ran && false`"));
     assert!(
-        report_text.contains("checks-ran"),
+        report_text.contains("out-ran"),
         "the failing output is shown"
     );
     assert!(
@@ -141,6 +144,8 @@ async fn a_rejected_subtask_is_retried_once_then_reported_with_failing_checks() 
 async fn stopping_a_team_stops_its_running_subtasks() {
     let home = TestHome::new("team-stop");
     let repo = make_repo(&home);
+    // A request goes to the first route whose key its first user message
+    // contains; each sub-task's task text names only its own route.
     let (base, _) = mock_server_routed(vec![
         (
             "Team mode, step 1",

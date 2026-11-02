@@ -8,6 +8,7 @@ use crate::llm::{Provider, ProviderKind};
 use crate::mcp::{McpClient, Status};
 use crate::mcp_policy::Gate;
 use crate::test_support::isolated;
+use serde_json::{Value, json};
 use std::sync::Arc;
 
 struct Quiet;
@@ -28,6 +29,20 @@ async fn show(env: &Arc<Env>, line: &str) -> String {
         Some(Outcome::Show(s)) => s,
         _ => panic!("{line} didn't show anything"),
     }
+}
+
+/// This project's entry in `~/.chanto/mcp-projects.json` (null when it has none).
+fn saved_choice(project: &std::path::Path) -> Value {
+    let all: Value = serde_json::from_str(
+        &std::fs::read_to_string(crate::config::home_dir().join("mcp-projects.json"))
+            .expect("the choices file is written"),
+    )
+    .unwrap();
+    let key = crate::util::canonical(project)
+        .unwrap()
+        .display()
+        .to_string();
+    all[key.as_str()].clone()
 }
 
 fn missing() -> McpServerConfig {
@@ -133,9 +148,11 @@ fn servers_are_turned_off_and_on_for_the_project() {
             "Disabled `live` for this project."
         );
         assert!(matches!(live.status(), Status::Off(_)));
-        let saved = std::fs::read_to_string(crate::config::home_dir().join("mcp-projects.json"))
-            .expect("the choice is saved");
-        assert!(saved.contains("\"live\""), "{saved}");
+        assert_eq!(
+            saved_choice(&dir),
+            json!({"disabledMcpServers": ["live"]}),
+            "the choice is saved under this project"
+        );
         assert_eq!(
             show(&env, "/mcp reconnect live").await,
             "`live` is disabled; `/mcp enable live` turns it on."
@@ -145,9 +162,11 @@ fn servers_are_turned_off_and_on_for_the_project() {
             "Enabled `live`: 1 tool."
         );
         assert_eq!(live.status(), Status::Connected);
-        let saved =
-            std::fs::read_to_string(crate::config::home_dir().join("mcp-projects.json")).unwrap();
-        assert!(!saved.contains("\"live\""), "{saved}");
+        assert_eq!(
+            saved_choice(&dir),
+            Value::Null,
+            "turning it back on leaves this project nothing to remember"
+        );
         assert_eq!(
             show(&env, "/mcp reconnect live").await,
             "Reconnected `live`: 1 tool."
@@ -169,10 +188,11 @@ fn servers_are_turned_off_and_on_for_the_project() {
         );
 
         // `all` picks the servers each verb applies to.
-        assert_eq!(
-            show(&env, "/mcp reconnect all").await.lines().count(),
-            1,
-            "only the failed server is retried"
+        let retried = show(&env, "/mcp reconnect all").await;
+        assert_eq!(retried.lines().count(), 1, "{retried}");
+        assert!(
+            retried.starts_with("`broken` failed to connect: "),
+            "only the failed server is retried: {retried}"
         );
         assert_eq!(
             show(&env, "/mcp disable all").await,

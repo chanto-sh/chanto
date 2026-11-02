@@ -73,7 +73,28 @@ fn a_goal_runs_in_the_foreground_until_its_criteria_pass() {
         assert_eq!((g.state, g.passing.len()), (GoalState::Done, 1));
         assert_eq!(g.root, root);
 
-        // The subcommands find it.
+        // The subcommands find it. The CLI prints what `command` and
+        // `describe` say, so their text is checked here.
+        let listed = command(&root, "list");
+        let row = listed
+            .lines()
+            .find(|l| l.starts_with(&g.id))
+            .unwrap_or_else(|| panic!("the goal is listed: {listed}"));
+        assert!(
+            row.contains(" done ") && row.contains(" 1/1 ") && row.ends_with("create a.txt"),
+            "{row}"
+        );
+        let status = command(&root, "status");
+        assert!(
+            status.starts_with(&format!(
+                "Goal `{}` · **done** · 1/1 criteria passing · 1 iteration(s)",
+                g.id
+            )),
+            "{status}"
+        );
+        assert!(status.contains("\n- ✅ c1 a exists"), "{status}");
+        assert!(!status.contains("/goal resume"), "a finished goal isn't resumed");
+        assert_eq!(command(&root, &format!("status {}", g.id)), status);
         assert_eq!(cli(cli_with(&["goal", "list"], &root)).await.unwrap(), 0);
         assert_eq!(cli(cli_with(&["goal", "status"], &root)).await.unwrap(), 0);
         assert_eq!(
@@ -82,6 +103,8 @@ fn a_goal_runs_in_the_foreground_until_its_criteria_pass() {
                 .unwrap(),
             0
         );
+        // Pause and stop on a goal no session runs just leave the request in
+        // its control file, read when it next runs.
         assert_eq!(
             cli(cli_with(&["goal", "pause", &g.id], &root))
                 .await
@@ -107,7 +130,5 @@ fn a_goal_runs_in_the_foreground_until_its_criteria_pass() {
             std::fs::read_to_string(g.dir.join("control")).unwrap(),
             "stop"
         );
-        let listed = command(&root, "list");
-        assert!(listed.contains(&g.id), "{listed}");
     });
 }
