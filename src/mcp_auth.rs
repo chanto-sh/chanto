@@ -727,3 +727,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod callback_tests;
