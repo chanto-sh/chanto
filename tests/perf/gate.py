@@ -27,8 +27,8 @@ by more than `large_change` and the test at least leans that way (p below
 `large_change_p`). Requiring a tolerance keeps a lucky run of a few
 milliseconds from failing a pull request; the hard cap catches a real
 regression that noise spread over both groups. It only counts a difference
-larger than the clock's own step, so a single tick of a coarse timer is not a
-regression, and not a median that moved while the two sample sets still
+larger than a few of the clock's own steps, so a few ticks of a coarse timer are
+not a regression, and not a median that moved while the two sample sets still
 overlap evenly: a few milliseconds of runner jitter on a 30 ms startup.
 
 Runs of the two binaries are interleaved, and the binaries are measured
@@ -592,6 +592,13 @@ def mann_whitney_greater(base, head):
     return 0.5 * math.erfc(z / math.sqrt(2))
 
 
+# On a coarse clock the same code's median moves by this many of its steps from
+# one run to the next: Windows' per-request CPU swung -19% to +15% across 12 runs
+# on unrelated changes, in ticks of 0.39 ms. Only more than that is a large change.
+# A real shift smaller than this still fails on significance.
+LARGE_CHANGE_TICKS = 3
+
+
 def clock_step(samples):
     """The smallest positive gap between two measured values.
 
@@ -653,7 +660,7 @@ def judge(metric, base, head, budget, tolerance, alpha, large_change=None, large
         too_big = (
             large_change is not None
             and change > large_change
-            and head_value - base_value > clock_step(base + head)
+            and head_value - base_value > LARGE_CHANGE_TICKS * clock_step(base + head)
             and p_value is not None
             and p_value < large_change_p
         )

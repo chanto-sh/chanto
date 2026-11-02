@@ -59,6 +59,18 @@ class VerdictTest(unittest.TestCase):
         self.assertTrue(m["over_budget"])
         self.assertIsNone(m["base"])
 
+    def test_a_few_ticks_of_a_coarse_clock_are_not_a_large_change(self):
+        tick = 0.390625
+        # What Windows reported: the sets lean apart, by two ticks of a 5 ms median.
+        base = [tick * n for n in [12, 13, 13, 13, 13, 13, 13, 14, 14, 14]]
+        head = [tick * n for n in [13, 14, 14, 15, 15, 15, 15, 15, 15, 16]]
+        moved = gate.judge("turn_cpu_ms", base, head, 21.0, 0.04, 1e-9, 0.1, 0.1)
+        self.assertEqual(moved["verdict"], "pass", moved)
+        # Well past what a run moves by itself, it fails on the same weak test.
+        far = [tick * (n + 3) for n in [13, 14, 14, 15, 15, 15, 15, 15, 15, 16]]
+        jumped = gate.judge("turn_cpu_ms", base, far, 21.0, 0.04, 1e-9, 0.1, 0.1)
+        self.assertEqual(jumped["verdict"], "fail", jumped)
+
     def test_a_large_change_fails_without_significance(self):
         # Overlapping sample sets: the test cannot separate them, but a 30%
         # median jump is still a regression.
