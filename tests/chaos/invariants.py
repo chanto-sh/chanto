@@ -484,8 +484,10 @@ def tui_fuzz_case(index):
             def size(rows, cols):
                 fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
+            os.set_blocking(fd, False)
             size(40, 120)
             out = bytearray()
+            log = []
 
             def drain(seconds):
                 end = time.time() + seconds
@@ -500,34 +502,58 @@ def tui_fuzz_case(index):
                         out.extend(data)
                 return True
 
+            def send(data):
+                """Write while reading the terminal's output, so neither side waits
+                on the other's full buffer. Input not taken within 10 s is a hang."""
+                data = memoryview(data)
+                end = time.time() + 10
+                while data:
+                    if time.time() > end:
+                        os.kill(pid, signal.SIGKILL)
+                        os.waitpid(pid, 0)
+                        raise Failure(f"no hang: stopped reading input (seed {seed}, last actions {log[-8:]})")
+                    readable, writable, _ = select.select([fd], [fd], [], 0.05)
+                    if readable:
+                        chunk = os.read(fd, 65536)
+                        if not chunk:
+                            raise OSError("terminal closed")
+                        out.extend(chunk)
+                    if writable:
+                        try:
+                            data = data[os.write(fd, data[:1024]):]
+                        except BlockingIOError:
+                            pass
+
             drain(1.5)
-            os.write(fd, b"n\r")
+            send(b"n\r")
             drain(1.0)
             keys = [b"\x1b[A", b"\x1b[B", b"\x1b[C", b"\x1b[D", b"\x1b[5~", b"\x1b[6~", b"\t", b"\x7f", b"\x1b",
                     b"\x0f", b"\x12", b"\x15", b"\x0b", b"\x01", b"\x05", b"y", b"n", b"1", b"2"]
             words = [b"hello ", b"read a.txt ", "日本語 ".encode(), "🙂 ".encode(), b"@a", b"/", b"/help", b"/status",
                      b"/model", b"/context", b"/cost", b"/mode", b"/resume", b"/sandbox"]
             actions = ["key"] * 6 + ["word"] * 3 + ["enter"] * 2 + ["paste", "resize", "interrupt", "wait"]
-            log = []
             for _ in range(rng.randint(150, 250)):
                 action = rng.choice(actions)
                 log.append(action)
-                if action == "key":
-                    os.write(fd, rng.choice(keys))
-                elif action == "word":
-                    os.write(fd, rng.choice(words))
-                elif action == "enter":
-                    os.write(fd, b"\r")
-                elif action == "paste":
-                    size_bytes = rng.choice([50, 5000, 200000])
-                    os.write(fd, b"\x1b[200~" + (b"x" * (size_bytes // 2) + b"\n" + b"y" * (size_bytes // 2))[:60000] + b"\x1b[201~")
-                elif action == "resize":
-                    size(rng.randint(5, 60), rng.randint(10, 200))
-                elif action == "interrupt":
-                    os.write(fd, b"\x03")
-                    drain(0.05)
-                else:
-                    drain(rng.uniform(0.05, 0.5))
+                try:
+                    if action == "key":
+                        send(rng.choice(keys))
+                    elif action == "word":
+                        send(rng.choice(words))
+                    elif action == "enter":
+                        send(b"\r")
+                    elif action == "paste":
+                        size_bytes = rng.choice([50, 5000, 200000])
+                        send(b"\x1b[200~" + (b"x" * (size_bytes // 2) + b"\n" + b"y" * (size_bytes // 2))[:60000] + b"\x1b[201~")
+                    elif action == "resize":
+                        size(rng.randint(5, 60), rng.randint(10, 200))
+                    elif action == "interrupt":
+                        send(b"\x03")
+                        drain(0.05)
+                    else:
+                        drain(rng.uniform(0.05, 0.5))
+                except OSError:
+                    break
                 if not drain(rng.uniform(0.0, 0.03)):
                     break
                 if b"panicked at" in out:
@@ -536,7 +562,7 @@ def tui_fuzz_case(index):
             size(40, 120)
             for _ in range(6):
                 try:
-                    os.write(fd, b"\x1b\x1b\x15/exit\r")
+                    send(b"\x1b\x1b\x15/exit\r")
                 except OSError:
                     exited = True
                     break
@@ -546,7 +572,7 @@ def tui_fuzz_case(index):
                     exited = True
                     break
                 try:
-                    os.write(fd, b"\x03\x03")
+                    send(b"\x03\x03")
                 except OSError:
                     pass
                 drain(1.0)
