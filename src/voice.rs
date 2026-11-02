@@ -1323,3 +1323,6 @@ mod tests {
         assert!(!path.exists());
     }
 }
+
+#[cfg(test)]
+mod recording_tests;
