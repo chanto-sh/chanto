@@ -175,6 +175,32 @@ impl Drop for Home {
 // ------------------------------------------------------------ handle_env
 
 #[tokio::test]
+async fn sandbox_network_saves_a_policy_for_later_sessions() {
+    let home = Home::new("cmd-sandbox-network");
+    let fx = fixture("cmd-sandbox-network");
+    let mut agent = Agent::new(fx.env.clone());
+    let config = home.dir.join("config.toml");
+    for bad in ["/sandbox network", "/sandbox network open"] {
+        assert!(
+            run(&mut agent, bad)
+                .await
+                .starts_with("Usage: /sandbox network allow|allowlist|deny"),
+            "{bad}"
+        );
+    }
+    assert!(!config.exists(), "a bad policy saves nothing");
+    let said = run(&mut agent, "/sandbox network allowlist").await;
+    if cfg!(windows) {
+        assert!(said.contains("can't limit the network"), "{said}");
+        assert!(!config.exists(), "nothing to enforce it on Windows");
+    } else {
+        assert!(said.contains("**allowlist**"), "{said}");
+        let saved = std::fs::read_to_string(&config).unwrap();
+        assert!(saved.contains("network = \"allowlist\""), "{saved}");
+    }
+}
+
+#[tokio::test]
 async fn quiet_switches_on_off_and_toggles() {
     let fx = fixture("cmd-quiet");
     let env = &fx.env;
