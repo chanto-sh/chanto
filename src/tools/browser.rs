@@ -1100,3 +1100,6 @@ mod tests {
         assert_eq!(normal_user_agent(""), None);
     }
 }
+
+#[cfg(test)]
+mod cdp_tests;

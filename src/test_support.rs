@@ -53,3 +53,22 @@ fn temp_home() -> PathBuf {
     std::fs::create_dir_all(&home).unwrap();
     home
 }
+
+/// Write an executable script a test runs in place of a real program.
+#[cfg(unix)]
+pub(crate) fn shim(path: &std::path::Path, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::write(path, format!("#!/bin/sh\n{script}\n")).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // A file just written can briefly be "busy" for exec while another test's
+    // fork still holds it open (ETXTBSY on Linux). No arguments is each shim's
+    // no-op, so running it here only waits that out.
+    for _ in 0..50 {
+        match std::process::Command::new(path).output() {
+            Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => {
+                std::thread::sleep(std::time::Duration::from_millis(20))
+            }
+            _ => break,
+        }
+    }
+}
