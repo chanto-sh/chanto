@@ -16,5 +16,11 @@ coverage:
     patch:
       default:
         target: 80%
+# Product code only, as CI's coverage floor (ci.yml) measures it. Test files are
+# nearly all "covered" by running, which would flatter the number.
+ignore:
+  - "**/tests.rs"
+  - "**/*_tests.rs"
+  - "tests/**"
 comment:
   layout: "condensed_header, diff, files"
