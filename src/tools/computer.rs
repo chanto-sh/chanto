@@ -757,7 +757,12 @@ async fn output(prog: &str, args: &[String]) -> Result<std::process::Output> {
 /// fails to start rather than falling back to the real program.
 #[cfg(test)]
 fn fake_program(prog: &str) -> Option<String> {
-    // Unset, a test still can't reach the real desktop: this doesn't exist.
+    // The one test meant for a real desktop says so, and only CI's headless
+    // session runs it.
+    if std::env::var_os("CHANTO_TEST_REAL_DESKTOP").is_some() {
+        return None;
+    }
+    // Otherwise a test still can't reach the real desktop: this doesn't exist.
     let dir = std::env::var_os("CHANTO_TEST_FAKE_DESKTOP").unwrap_or("/nonexistent".into());
     let name = std::path::Path::new(prog).file_name()?;
     Some(std::path::Path::new(&dir).join(name).display().to_string())
@@ -1948,6 +1953,8 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs a Wayland session with grim and ydotoold"]
     async fn wayland_end_to_end() {
+        // SAFETY: it runs alone, on request, in CI's headless session.
+        unsafe { std::env::set_var("CHANTO_TEST_REAL_DESKTOP", "1") };
         support().unwrap();
         let (size, _) = screen_size(true).await.unwrap();
         assert!(size.0 >= 320.0 && size.1 >= 200.0, "{size:?}");
