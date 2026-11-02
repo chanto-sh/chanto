@@ -107,6 +107,26 @@ mod shims {
         assert!(e.contains("no audio was captured"), "{e}");
     }
 
+    /// The recorder exits before its last stderr line has been read (here a
+    /// child it left behind writes it): `stop` must still give that reason.
+    #[tokio::test]
+    async fn a_reason_written_after_the_recorder_exits_is_still_reported() {
+        let dir = tmpdir("voice-fail-late");
+        let bin = dir.join("ffmpeg");
+        shim(
+            &bin,
+            "[ $# -eq 0 ] && exit 0\n(sleep 0.3; echo 'Input/output error' >&2) &\nexit 5",
+        );
+        let rec = Recording::start_with(Recorder::Ffmpeg(bin), Os::Linux { pulse: false }, &cfg())
+            .await
+            .unwrap();
+        let e = rec.stop().await.err().unwrap().to_string();
+        assert!(
+            e.starts_with("recording failed (exit 5): Input/output error"),
+            "{e}"
+        );
+    }
+
     #[tokio::test]
     async fn silence_reported_by_the_recorder_asks_to_stop() {
         let dir = tmpdir("voice-silence");
