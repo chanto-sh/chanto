@@ -15,6 +15,8 @@ pub(crate) mod limits;
 #[cfg(test)]
 pub(crate) mod mock;
 #[cfg(test)]
+mod ollama_tests;
+#[cfg(test)]
 mod overhead_tests;
 mod responses;
 mod safety;
