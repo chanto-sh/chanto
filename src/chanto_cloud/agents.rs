@@ -740,3 +740,6 @@ pub(super) fn exit_code(run: Option<&Run>) -> i32 {
         None => 130,
     }
 }
+
+#[cfg(test)]
+mod cli_tests;
