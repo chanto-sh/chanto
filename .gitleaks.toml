@@ -11,6 +11,9 @@ paths = [
     '''^src/feedback\.rs$''',
     '''^src/agent/tests\.rs$''',
     '''^src/cloud/tests\.rs$''',
+    # Where the two inline test modules above moved; history keeps the old paths.
+    '''^src/secrets/tests\.rs$''',
+    '''^src/feedback/tests\.rs$''',
 ]
 
 [[allowlists]]
