@@ -174,7 +174,7 @@ jobs:
           node-version: 22
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-llvm-cov@0.6.21
       # chanto-core's own tests too: code that moved there is tested there.
@@ -227,7 +227,7 @@ jobs:
           key: coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-llvm-cov@0.6.21
       # chanto's tests only: chanto-core's own expect the `/` paths of their

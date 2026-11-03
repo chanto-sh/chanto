@@ -34,7 +34,7 @@ jobs:
           save-if: false
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-mutants@27.1.0
       - name: Mutate the changed lines
