@@ -1,0 +1,80 @@
+name: app check
+# Checks by hand that release.yml's dispatch job can use the chanto-automation
+# GitHub App: mints a read-only token from AUTOMATION_APP_ID and
+# AUTOMATION_APP_KEY and looks up the workflow that job sets off in each
+# repository (benchmarks' auto-overhead.yml, through its chanto-release
+# repository_dispatch, and the website's docs-release.yml). Nothing is sent,
+# started or written.
+#
+# The secrets live in the `publish` environment, which only v* tags can use,
+# so run this on a release tag that contains it:
+#
+#   gh workflow run app-check.yml --repo chanto-sh/chanto --ref vX.Y.Z
+#
+# On a branch it stops with a notice instead of failing on the environment.
+# The website's repository is private: its name comes from the
+# SITE_REPOSITORY variable and is masked in the log.
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  not-a-tag:
+    name: needs a release tag
+    if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - run: echo "::notice title=App check::The app's secrets are in the publish environment, which only v* tags can use; run this with --ref vX.Y.Z."
+
+  check:
+    name: check the automation app
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # AUTOMATION_APP_ID and AUTOMATION_APP_KEY, as release.yml's dispatch job.
+    environment: publish
+    # Only the app's token is used.
+    permissions: {}
+    steps:
+      - name: Choose the repositories
+        id: repos
+        env:
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: |
+          repos=benchmarks
+          if [ -z "$SITE_REPOSITORY" ]; then
+            echo "::notice title=No website repository::SITE_REPOSITORY isn't set; checking benchmarks only."
+          elif ! [[ $SITE_REPOSITORY =~ ^chanto-sh/[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::SITE_REPOSITORY must be chanto-sh/<name>"
+            exit 1
+          else
+            echo "::add-mask::$SITE_REPOSITORY"
+            echo "::add-mask::${SITE_REPOSITORY#*/}"
+            repos="$repos,${SITE_REPOSITORY#*/}"
+          fi
+          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        with:
+          # The app ID works here too: GitHub takes either as the JWT issuer.
+          client-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_KEY }}
+          owner: chanto-sh
+          repositories: ${{ steps.repos.outputs.repos }}
+          permission-actions: read
+      - name: Look up each workflow
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          targets="chanto-sh/benchmarks:auto-overhead.yml"
+          [ -n "$SITE_REPOSITORY" ] && targets="$targets $SITE_REPOSITORY:docs-release.yml"
+          for target in $targets; do
+            repo=${target%%:*}
+            file=${target#*:}
+            state=$(gh api "repos/$repo/actions/workflows/$file" --jq .state)
+            echo "$repo $file: $state" | tee -a "$GITHUB_STEP_SUMMARY"
+          done
