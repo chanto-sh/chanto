@@ -465,7 +465,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/npm.yml
+    uses: ./.github/workflows/npm.yml # zizmor: ignore[self-repository] the documented form
     with:
       tag: ${{ github.ref_name }}
 
@@ -540,3 +540,82 @@ jobs:
           gh attestation verify "oci://$image" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
             --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA"
+
+  # Once the release checks out, start what picks it up elsewhere: the
+  # benchmarks repository's overhead measurement and the website's docs
+  # release (which deploys only when the live site is behind). Both go
+  # through the chanto-automation GitHub App, whose token is limited to those
+  # two repositories and to starting workflows. The website's repository is
+  # private, so its name comes from the SITE_REPOSITORY variable and is masked
+  # in this public log; unset, that dispatch is skipped with a notice. A
+  # failed dispatch only warns: the release is already out, and both
+  # repositories also check for new releases on a schedule.
+  dispatch:
+    name: start dependent workflows
+    needs: verify
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # AUTOMATION_APP_ID and AUTOMATION_APP_KEY live in the `publish`
+    # environment (v* tags only).
+    environment: publish
+    # Only the app's token is used.
+    permissions: {}
+    steps:
+      - name: Choose the repositories
+        id: repos
+        env:
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: |
+          repos=benchmarks
+          if [ -z "$SITE_REPOSITORY" ]; then
+            echo "::notice title=No website repository::SITE_REPOSITORY isn't set, so the website's docs release isn't started."
+          elif ! [[ $SITE_REPOSITORY =~ ^chanto-sh/[A-Za-z0-9._-]+$ ]]; then
+            echo "::warning title=Website repository::SITE_REPOSITORY must be chanto-sh/<name>; the website's docs release isn't started."
+          else
+            echo "::add-mask::$SITE_REPOSITORY"
+            echo "::add-mask::${SITE_REPOSITORY#*/}"
+            repos="$repos,${SITE_REPOSITORY#*/}"
+            echo "site=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: app-token
+        continue-on-error: true
+        with:
+          # The app ID works here too: GitHub takes either as the JWT issuer.
+          client-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_KEY }}
+          owner: chanto-sh
+          repositories: ${{ steps.repos.outputs.repos }}
+          permission-actions: write
+      - name: Report a missing token
+        if: steps.app-token.outcome != 'success'
+        run: echo "::warning title=Automation app::Couldn't get a token from the automation app (are AUTOMATION_APP_ID and AUTOMATION_APP_KEY set in the publish environment?); benchmarks and the website will pick up this release on their own schedules."
+      # auto-overhead measures releases only (X.Y.Z), not pre-releases.
+      - name: Start the benchmarks' overhead run
+        if: steps.app-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          case "$version" in
+            *-*) echo "::notice::$TAG is a pre-release; the benchmarks measure releases only."; exit 0 ;;
+          esac
+          if ! gh workflow run auto-overhead.yml --repo chanto-sh/benchmarks -f "version=$version"; then
+            echo "::warning title=Benchmarks::Couldn't start auto-overhead.yml in chanto-sh/benchmarks; its hourly check will pick up $TAG."
+            exit 1
+          fi
+      - name: Start the website's docs release
+        if: steps.app-token.outcome == 'success' && steps.repos.outputs.site == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: |
+          if ! gh workflow run docs-release.yml --repo "$SITE_REPOSITORY" > /dev/null; then
+            echo "::warning title=Website::Couldn't start the website's docs-release workflow; its daily check will pick up this release."
+            exit 1
+          fi
