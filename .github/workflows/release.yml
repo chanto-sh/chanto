@@ -541,15 +541,17 @@ jobs:
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
             --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA"
 
-  # Once the release checks out, start what picks it up elsewhere: the
-  # benchmarks repository's overhead measurement and the website's docs
-  # release (which deploys only when the live site is behind). Both go
-  # through the chanto-automation GitHub App, whose token is limited to those
-  # two repositories and to starting workflows. The website's repository is
-  # private, so its name comes from the SITE_REPOSITORY variable and is masked
-  # in this public log; unset, that dispatch is skipped with a notice. A
-  # failed dispatch only warns: the release is already out, and both
-  # repositories also check for new releases on a schedule.
+  # Once the release checks out, tell what picks it up elsewhere: the
+  # benchmarks repository's overhead measurement (a `chanto-release`
+  # repository_dispatch, which leaves a release alone once its hourly check
+  # has picked it up) and the website's docs release (which deploys only when
+  # the live site is behind). Both go through the chanto-automation GitHub
+  # App, with one token per repository holding only the permission its
+  # dispatch needs. The website's repository is private, so its name comes
+  # from the SITE_REPOSITORY variable and is masked in this public log; unset,
+  # that dispatch is skipped with a notice. A failed dispatch only warns: the
+  # release is already out, and both repositories also check for new releases
+  # on a schedule.
   dispatch:
     name: start dependent workflows
     needs: verify
@@ -559,15 +561,14 @@ jobs:
     # AUTOMATION_APP_ID and AUTOMATION_APP_KEY live in the `publish`
     # environment (v* tags only).
     environment: publish
-    # Only the app's token is used.
+    # Only the app's tokens are used.
     permissions: {}
     steps:
-      - name: Choose the repositories
-        id: repos
+      - name: Find the website's repository
+        id: site
         env:
           SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
         run: |
-          repos=benchmarks
           if [ -z "$SITE_REPOSITORY" ]; then
             echo "::notice title=No website repository::SITE_REPOSITORY isn't set, so the website's docs release isn't started."
           elif ! [[ $SITE_REPOSITORY =~ ^chanto-sh/[A-Za-z0-9._-]+$ ]]; then
@@ -575,46 +576,64 @@ jobs:
           else
             echo "::add-mask::$SITE_REPOSITORY"
             echo "::add-mask::${SITE_REPOSITORY#*/}"
-            repos="$repos,${SITE_REPOSITORY#*/}"
-            echo "site=true" >> "$GITHUB_OUTPUT"
+            echo "name=${SITE_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
           fi
-          echo "repos=$repos" >> "$GITHUB_OUTPUT"
+      # repository_dispatch needs contents: write on the benchmarks repository.
       - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        id: app-token
+        id: bench-token
         continue-on-error: true
         with:
           # The app ID works here too: GitHub takes either as the JWT issuer.
           client-id: ${{ secrets.AUTOMATION_APP_ID }}
           private-key: ${{ secrets.AUTOMATION_APP_KEY }}
           owner: chanto-sh
-          repositories: ${{ steps.repos.outputs.repos }}
-          permission-actions: write
-      - name: Report a missing token
-        if: steps.app-token.outcome != 'success'
-        run: echo "::warning title=Automation app::Couldn't get a token from the automation app (are AUTOMATION_APP_ID and AUTOMATION_APP_KEY set in the publish environment?); benchmarks and the website will pick up this release on their own schedules."
+          repositories: benchmarks
+          permission-contents: write
       # auto-overhead measures releases only (X.Y.Z), not pre-releases.
       - name: Start the benchmarks' overhead run
-        if: steps.app-token.outcome == 'success'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.bench-token.outputs.token }}
+          OUTCOME: ${{ steps.bench-token.outcome }}
           TAG: ${{ github.ref_name }}
         run: |
           version=${TAG#v}
           case "$version" in
             *-*) echo "::notice::$TAG is a pre-release; the benchmarks measure releases only."; exit 0 ;;
           esac
-          if ! gh workflow run auto-overhead.yml --repo chanto-sh/benchmarks -f "version=$version"; then
-            echo "::warning title=Benchmarks::Couldn't start auto-overhead.yml in chanto-sh/benchmarks; its hourly check will pick up $TAG."
+          if [ "$OUTCOME" != success ]; then
+            echo "::warning title=Benchmarks::Couldn't get the automation app's token for chanto-sh/benchmarks (are AUTOMATION_APP_ID and AUTOMATION_APP_KEY set in the publish environment?); its hourly check will pick up $TAG."
             exit 1
           fi
+          if ! jq -n --arg version "$version" '{event_type: "chanto-release", client_payload: {version: $version}}' \
+            | gh api repos/chanto-sh/benchmarks/dispatches --input - --silent; then
+            echo "::warning title=Benchmarks::Couldn't send chanto-sh/benchmarks the chanto-release dispatch; its hourly check will pick up $TAG."
+            exit 1
+          fi
+      # workflow_dispatch needs actions: write on the website's repository.
+      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        id: site-token
+        if: steps.site.outputs.name != ''
+        continue-on-error: true
+        with:
+          # The app ID works here too: GitHub takes either as the JWT issuer.
+          client-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_KEY }}
+          owner: chanto-sh
+          repositories: ${{ steps.site.outputs.name }}
+          permission-actions: write
       - name: Start the website's docs release
-        if: steps.app-token.outcome == 'success' && steps.repos.outputs.site == 'true'
+        if: steps.site.outputs.name != ''
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.site-token.outputs.token }}
+          OUTCOME: ${{ steps.site-token.outcome }}
           SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
         run: |
+          if [ "$OUTCOME" != success ]; then
+            echo "::warning title=Website::Couldn't get the automation app's token for the website's repository; its daily check will pick up this release."
+            exit 1
+          fi
           if ! gh workflow run docs-release.yml --repo "$SITE_REPOSITORY" > /dev/null; then
             echo "::warning title=Website::Couldn't start the website's docs-release workflow; its daily check will pick up this release."
             exit 1

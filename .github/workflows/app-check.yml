@@ -1,8 +1,9 @@
 name: app check
 # Checks by hand that release.yml's dispatch job can use the chanto-automation
-# GitHub App: mints its token from AUTOMATION_APP_ID and AUTOMATION_APP_KEY
-# and looks up, read-only, the workflow that job starts in each repository
-# (benchmarks' auto-overhead.yml, the website's docs-release.yml). Nothing is
+# GitHub App: mints a read-only token from AUTOMATION_APP_ID and
+# AUTOMATION_APP_KEY and looks up the workflow that job sets off in each
+# repository (benchmarks' auto-overhead.yml, through its chanto-release
+# repository_dispatch, and the website's docs-release.yml). Nothing is sent,
 # started or written.
 #
 # The secrets live in the `publish` environment, which only v* tags can use,
