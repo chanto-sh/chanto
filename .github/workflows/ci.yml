@@ -174,7 +174,7 @@ jobs:
           node-version: 22
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cargo-llvm-cov@0.6.21
       # chanto-core's own tests too: code that moved there is tested there.
@@ -227,7 +227,7 @@ jobs:
           key: coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
-      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
           tool: cargo-llvm-cov@0.6.21
       # chanto's tests only: chanto-core's own expect the `/` paths of their
@@ -385,7 +385,7 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.1
       - run: gradle --no-daemon buildPlugin
