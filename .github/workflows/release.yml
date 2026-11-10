@@ -634,7 +634,9 @@ jobs:
             echo "::warning title=Website::Couldn't get the automation app's token for the website's repository; its daily check will pick up this release."
             exit 1
           fi
-          if ! gh workflow run docs-release.yml --repo "$SITE_REPOSITORY" > /dev/null; then
+          # --ref: without it gh looks up the default branch, which a token
+          # limited to actions: write can't read.
+          if ! gh workflow run docs-release.yml --repo "$SITE_REPOSITORY" --ref main > /dev/null; then
             echo "::warning title=Website::Couldn't start the website's docs-release workflow; its daily check will pick up this release."
             exit 1
           fi
