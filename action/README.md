@@ -46,6 +46,8 @@ A check covers the profile's regex rules, the secrets scan and, unless `quality_
 
 Because nothing secret is involved, this also checks pull requests from forks. It refuses `pull_request_target` and comment events, which would run a pull request's checks with your secrets.
 
+Outputs, for later steps: `passed` (`"true"` or `"false"`) and `findings` (how many rule and secrets findings were annotated). To report without failing the job, add `continue-on-error: true` to the step and read `steps.<id>.outputs.passed`.
+
 ## Pull request review and `@chanto` commands
 
 These run a model, so they need a key: add `ANTHROPIC_API_KEY` (or `OPENAI_API_KEY`, or `[providers.*]` TOML as `CHANTO_PROVIDERS`) as a repository secret. `chanto github install` writes both workflows and a review policy, `.chanto/review.toml` (strictness, inline comment cap, ignored paths, checks).
@@ -69,6 +71,8 @@ These run a model, so they need a key: add `ANTHROPIC_API_KEY` (or `OPENAI_API_K
 | --- | --- | --- |
 | `quality` | `false` | Run `chanto quality check` instead of the agent |
 | `quality_checks` | `true` | In quality mode, also run the profile's checks |
+| `quality_scope` | `changes` | In quality mode, `changes` (what the event changes) or `all` (every file, e.g. nightly) |
+| `working_directory` | `.` | In quality mode, the project to check, relative to the repository root (monorepos) |
 | `prompt` | | Task for `workflow_dispatch`/`schedule`, or extra review instructions |
 | `trigger_phrase` | `@chanto` | Phrase that triggers commands in comments |
 | `model` | `anthropic/claude-sonnet-5-5` | `provider/model`, or a model served at `base_url` |
