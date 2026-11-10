@@ -1,0 +1,34 @@
+# Copy to .github/workflows/chanto-quality.yml to check every pull request
+# against .chanto/quality.toml (written by `chanto prime`): its rules, the
+# secrets scan and its checks, on the lines the pull request adds. Findings
+# show up as annotations on the changed lines. No model or API key is used,
+# so pull requests from forks are checked too.
+name: Chanto quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  merge_group:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chanto-quality-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Pin to a reviewed commit of chanto-sh/chanto.
+      - uses: chanto-sh/chanto/action@main
+        with:
+          quality: "true"
+          # quality_checks: "false"   # only the rules and the secrets scan, not the profile's checks

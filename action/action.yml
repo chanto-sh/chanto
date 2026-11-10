@@ -1,5 +1,5 @@
 name: Chanto
-description: Run the Chanto coding agent from issue and PR comments, review pull requests, or run a prompt.
+description: Check pull requests against your repository's quality profile, review them, or run the Chanto coding agent from comments.
 author: dphang
 branding:
   icon: terminal
@@ -70,6 +70,14 @@ inputs:
     description: Token used to comment, push and open pull requests
     required: false
     default: ${{ github.token }}
+  quality:
+    description: "Run `chanto quality check` against the repository's .chanto/quality.toml (from `chanto prime`) instead of the agent: rules, the secrets scan and, with quality_checks, the profile's checks. Needs no model or API key."
+    required: false
+    default: "false"
+  quality_checks:
+    description: In quality mode, also run the profile's `when = "turn"` checks (tests, linters)
+    required: false
+    default: "true"
   cloud_agent:
     description: "Run this Chanto cloud agent instead of Chanto on this machine: the work happens on a cloud runner, and this step waits for the result (see cloud_token)"
     required: false
@@ -107,8 +115,18 @@ runs:
         echo "$dest/bin" >> "$GITHUB_PATH"
         "$dest/bin/chanto" --version
 
+    - name: Check the quality profile
+      if: ${{ inputs.quality == 'true' }}
+      shell: bash
+      env:
+        INPUT_QUALITY_CHECKS: ${{ inputs.quality_checks }}
+      run: |
+        set -euo pipefail
+        export CHANTO_HOME="$RUNNER_TEMP/chanto-home"
+        python3 "$GITHUB_ACTION_PATH/quality.py"
+
     - name: Run the agent in Chanto cloud
-      if: ${{ inputs.cloud_agent != '' }}
+      if: ${{ inputs.quality != 'true' && inputs.cloud_agent != '' }}
       shell: bash
       env:
         CHANTO_CLOUD_TOKEN: ${{ inputs.cloud_token }}
@@ -126,7 +144,7 @@ runs:
         chanto cloud run "${args[@]}"
 
     - name: Run Chanto
-      if: ${{ inputs.cloud_agent == '' }}
+      if: ${{ inputs.quality != 'true' && inputs.cloud_agent == '' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}
