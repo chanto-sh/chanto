@@ -192,8 +192,10 @@ fn render_shows_every_part_of_a_full_report() {
     let text = render(&r);
     for want in [
         "chanto 1.2.3",
-        "Binary: /bin/chanto",
-        "  /h/.chanto/config.toml",
+        // Paths under the home folder show as `~/…`, and where home is
+        // differs by platform (the Windows runner shortens these too).
+        "bin/chanto",
+        "h/.chanto/config.toml",
         "mcp_servers  fs",
         "sandbox      yes",
         "reachable          no",
