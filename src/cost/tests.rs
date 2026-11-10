@@ -334,3 +334,240 @@ async fn otlp_mock_collector() {
     task.abort();
     std::fs::remove_dir_all(&a.root).unwrap();
 }
+
+#[test]
+fn every_bundled_model_has_a_sane_price() {
+    for key in [
+        "openai/gpt-4o",
+        "openai/gpt-4o-mini",
+        "openai/gpt-4.1",
+        "openai/gpt-4.1-mini",
+        "openai/gpt-4.1-nano",
+        "openai/gpt-5",
+        "openai/gpt-5-mini",
+        "anthropic/claude-sonnet-4-5",
+        "anthropic/claude-sonnet-5-5",
+        "anthropic/claude-opus-5-5",
+        "anthropic/claude-haiku-5-5",
+        "openai/gpt-6.1-sol",
+        "openai/gpt-6-sol",
+        "openai/gpt-6-astra",
+        "openai/gpt-6-luna",
+        "gemini/gemini-3.8-flash",
+        "mistral/mistral-medium-latest",
+        "anthropic/claude-opus-4-5",
+        "anthropic/claude-haiku-4-5",
+        "anthropic/claude-opus-4-6",
+        "anthropic/claude-opus-4",
+        "anthropic/claude-sonnet-4",
+        "anthropic/claude-3-5-haiku",
+        "vertex/gemini-2.5-flash",
+        "bedrock/openai.gpt-oss-120b-1:0",
+        "bedrock/openai.gpt-oss-20b-1:0",
+        "bedrock/amazon.nova-lite-v1:0",
+        "bedrock/amazon.nova-micro-v1:0",
+        "bedrock/meta.llama3-3-70b-instruct-v1:0",
+        "bedrock/deepseek.r1-v1:0",
+        "gemini/gemini-2.0-flash",
+        "gemini/gemini-2.5-flash",
+        "deepseek/deepseek-chat",
+        "deepseek/deepseek-flash",
+        "deepseek/deepseek-v4-pro",
+        "xai/grok-3",
+        "mistral/mistral-small-2503",
+        "groq/openai/gpt-oss-120b",
+        "groq/openai/gpt-oss-20b",
+        "fireworks/accounts/fireworks/models/gpt-oss-120b",
+        "opencode/minimax-m2.7",
+        "opencode/claude-sonnet-4-6",
+        "dashscope/qwen-plus-2025-01-25",
+        "moonshot/kimi-k2-turbo",
+        "baseten/openai/gpt-oss-120b",
+        "vercel/openai/gpt-4.1",
+        "cerebras/gpt-oss-120b",
+        "together/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+        "minimax/MiniMax-M2",
+        "minimax/MiniMax-M2.7",
+    ] {
+        let (provider, model) = key.split_once('/').unwrap();
+        let p = bundled(provider, model).unwrap_or_else(|| panic!("{key}"));
+        assert!(p.input >= 0. && p.output >= p.input * 0.5, "{key}");
+    }
+    assert!(bundled("openrouter", "google/gemini-2.5-flash").is_some());
+    assert!(bundled("openrouter", "x-ai/grok-3").is_some());
+    for local in ["local", "ollama", "lmstudio", "llamacpp"] {
+        assert_eq!(bundled(local, "anything").unwrap().input, 0.);
+    }
+}
+
+#[test]
+fn gateway_catalog_drops_bad_rates() {
+    let list = load_gateway_prices(
+        br#"{"models":[
+            {"id":"good","input_usd_per_mtok":1.0,"output_usd_per_mtok":2.0,"cache_read_usd_per_mtok":0.1},
+            {"id":"plain","input_usd_per_mtok":1.0,"output_usd_per_mtok":2.0},
+            {"id":"negative","input_usd_per_mtok":-1.0,"output_usd_per_mtok":2.0},
+            {"id":"badcache","input_usd_per_mtok":1.0,"output_usd_per_mtok":2.0,"cache_read_usd_per_mtok":-3.0}
+        ]}"#,
+    )
+    .unwrap();
+    assert_eq!(list.keys().collect::<Vec<_>>(), vec!["good", "plain"]);
+    assert_eq!(list["good"].cached_input, Some(0.1));
+    assert!(list["plain"].cached_input.is_none() && list["plain"].cache_write.is_none());
+    assert!(load_gateway_prices(b"not json").is_none());
+    assert!(load_price_list(b"{}").is_none());
+    assert!(
+        gateway("openai", "good").is_none(),
+        "only the cloud provider"
+    );
+}
+
+#[test]
+fn a_bad_override_prices_nothing() {
+    let usage = crate::llm::Usage {
+        prompt_tokens: 10,
+        completion_tokens: 10,
+        ..Default::default()
+    };
+    let mut overrides = BTreeMap::new();
+    overrides.insert(
+        "openai/gpt-4o".to_string(),
+        Price {
+            input: f64::NAN,
+            output: 1.,
+            cached_input: None,
+            cache_write: None,
+        },
+    );
+    assert!(price("openai", "gpt-4o", &usage, &overrides).is_none());
+    // A reported negative cost is ignored in favour of the price table.
+    let reported = crate::llm::Usage {
+        cost: Some(-1.),
+        ..usage.clone()
+    };
+    assert!(price("openai", "gpt-4o", &reported, &BTreeMap::new()).unwrap() > 0.);
+}
+
+#[tokio::test]
+async fn accounting_estimates_logs_and_summarises() {
+    let root = std::env::temp_dir().join(format!("chanto-acct-{}", uuid::Uuid::new_v4().simple()));
+    let mut config = crate::config::Config::default();
+    config.pricing.insert(
+        "acme/own".into(),
+        Price {
+            input: 1.,
+            output: 1.,
+            cached_input: None,
+            cache_write: None,
+        },
+    );
+    let mut a = Accounting::new(&config);
+    a.root = root.clone();
+    a.set_session("sess-1");
+    let usage = crate::llm::Usage {
+        prompt_tokens: 1_000_000,
+        completion_tokens: 0,
+        ..Default::default()
+    };
+    assert!(a.has_override("acme", "own"));
+    assert_eq!(a.estimate("acme", "own", &usage), (Some(1.), "configured"));
+    assert_eq!(
+        a.estimate("openai", "gpt-4o", &usage),
+        (Some(2.5), "catalog")
+    );
+    assert_eq!(a.estimate("nope", "nothing", &usage), (None, "default"));
+    assert!(a.budgets().is_empty());
+    assert!(a.warning().is_none());
+    assert!(a.check().is_ok());
+
+    a.model_call("acme", "own", Some(&usage), 0.5).await;
+    assert_eq!(a.total(), 1.);
+    assert!(!a.unknown());
+    a.model_call("nope", "nothing", Some(&usage), 0.5).await;
+    assert!(a.unknown());
+    assert!(a.summary().ends_with(" + price unknown"), "{}", a.summary());
+    a.model_call("acme", "own", None, 0.1).await;
+    assert_eq!(a.total(), 1., "a failed call costs nothing");
+    a.tool_call("Read", 0.01, true).await;
+
+    let log = std::fs::read_to_string(log_path(&root)).unwrap();
+    let events: Vec<Value> = log
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(events.len(), 4);
+    assert!(events.iter().all(|e| e["session_id"] == "sess-1"));
+    assert_eq!(events[2]["level"], "error");
+    assert_eq!(events[2]["data"]["status"], "error");
+    assert_eq!(events[3]["event"], "tool_call");
+
+    a.restore(2.5, false);
+    assert_eq!(a.total(), 2.5);
+    assert!(!a.summary().contains("unknown"));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn a_zero_budget_stops_at_once() {
+    let mut a = Accounting::new(&crate::config::Config {
+        max_cost_usd: Some(0.),
+        ..Default::default()
+    });
+    a.root = std::env::temp_dir().join(format!("chanto-zero-{}", uuid::Uuid::new_v4().simple()));
+    assert!(a.check().is_err());
+    a.state.lock().unwrap().unknown = true;
+    let note = a.warning().unwrap();
+    assert!(
+        note.contains("80%") && note.contains("no known price"),
+        "{note}"
+    );
+}
+
+#[test]
+fn old_logs_are_pruned() {
+    let root = std::env::temp_dir().join(format!("chanto-prune-{}", uuid::Uuid::new_v4().simple()));
+    let dir = root.join("logs");
+    std::fs::create_dir_all(&dir).unwrap();
+    let old = dir.join("chanto-2000-01-01.log");
+    let other = dir.join("notes.txt");
+    std::fs::write(&old, "x").unwrap();
+    std::fs::write(&other, "x").unwrap();
+    write_log(
+        &root,
+        "s",
+        "info",
+        "e",
+        json!({"n": [1, "two", {"k": true}]}),
+    )
+    .unwrap();
+    assert!(!old.exists() && other.exists());
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn otlp_payloads_carry_metrics_and_status() {
+    let data = json!({"provider": "openai", "input_tokens": 10, "output_tokens": 5, "cost": 0.5, "ok": false, "skip": null});
+    let attrs = attributes(&data);
+    assert_eq!(attrs.len(), 5, "nulls are dropped");
+    assert!(attrs.iter().any(|a| a["value"]["boolValue"] == false));
+    let out = otlp("model_call", &data, 1.5, "svc");
+    assert_eq!(out[0].0, "traces");
+    assert_eq!(
+        out[0].1["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["status"]["code"],
+        2
+    );
+    let metrics = &out[1].1["resourceMetrics"][0]["scopeMetrics"][0]["metrics"];
+    assert_eq!(metrics.as_array().unwrap().len(), 4);
+    assert_eq!(metrics[3]["unit"], "USD");
+    let ok = otlp("tool_call", &json!({"ok": true}), 0., "svc");
+    assert_eq!(
+        ok[0].1["resourceSpans"][0]["scopeSpans"][0]["spans"][0]["status"]["code"],
+        1
+    );
+}
+
+#[test]
+fn price_refresh_is_skipped_when_disabled() {
+    // Disabled: returns before touching the cache or the network.
+    start_price_refresh(false, true);
+}

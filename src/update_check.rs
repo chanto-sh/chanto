@@ -275,6 +275,54 @@ pub fn known() -> Option<String> {
     Some(text)
 }
 
+/// The daily check proper: take the lock, re-read the cache, record the
+/// attempt and ask `url`. `None` when another process holds the lock or the
+/// cache can't be written, so this run stays quiet.
+async fn refresh(home: &Path, path: &Path, now: u64, url: &str) -> Option<Cache> {
+    if tokio::fs::create_dir_all(home).await.is_err() {
+        return None;
+    }
+    let lock_path = home.join("update-check.lock");
+    // Recover a lock left by a terminated process; active checks take <= 2s.
+    if tokio::fs::metadata(&lock_path)
+        .await
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.elapsed().ok())
+        .is_some_and(|age| age > Duration::from_secs(60))
+    {
+        let _ = tokio::fs::remove_file(&lock_path).await;
+    }
+    let Ok(lock_file) = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock_path)
+        .await
+    else {
+        return None;
+    };
+    drop(lock_file);
+    let _lock = CheckLock(lock_path);
+    // Another process may have refreshed between our read and lock acquisition.
+    let mut cache: Cache = tokio::fs::read(path)
+        .await
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    if due(cache.checked_at, now) {
+        cache.checked_at = now;
+        // Persist the attempt before networking, including cancelled/offline checks.
+        if save_cache(path, &cache).await.is_err() {
+            return None;
+        }
+        if let Ok(tag) = latest_version_at(url, Duration::from_secs(2)).await {
+            cache.latest = Some(tag);
+        }
+        let _ = save_cache(path, &cache).await;
+    }
+    Some(cache)
+}
+
 /// `network`: whether this run may ask GitHub. Short print-mode runs pass
 /// false so an exiting process never waits on the request; they only show a
 /// notice an interactive session already cached. A networked run keeps
@@ -301,47 +349,10 @@ pub fn start(config: &UpdatesConfig, network: bool) {
             .unwrap_or_default();
         let now = epoch_secs();
         if network && due(cache.checked_at, now) {
-            if tokio::fs::create_dir_all(&home).await.is_err() {
-                return;
-            }
-            let lock_path = home.join("update-check.lock");
-            // Recover a lock left by a terminated process; active checks take <= 2s.
-            if tokio::fs::metadata(&lock_path)
-                .await
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.elapsed().ok())
-                .is_some_and(|age| age > Duration::from_secs(60))
-            {
-                let _ = tokio::fs::remove_file(&lock_path).await;
-            }
-            let Ok(lock_file) = tokio::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&lock_path)
-                .await
-            else {
+            let Some(fresh) = refresh(&home, &path, now, LATEST_URL).await else {
                 return;
             };
-            drop(lock_file);
-            let _lock = CheckLock(lock_path);
-            // Another process may have refreshed between our read and lock acquisition.
-            cache = tokio::fs::read(&path)
-                .await
-                .ok()
-                .and_then(|b| serde_json::from_slice(&b).ok())
-                .unwrap_or_default();
-            if due(cache.checked_at, now) {
-                cache.checked_at = now;
-                // Persist the attempt before networking, including cancelled/offline checks.
-                if save_cache(&path, &cache).await.is_err() {
-                    return;
-                }
-                if let Ok(tag) = latest_version().await {
-                    cache.latest = Some(tag);
-                }
-                let _ = save_cache(&path, &cache).await;
-            }
+            cache = fresh;
         }
         if let Some(tag) = cache.latest.clone() {
             announce(&tag, &exe);
