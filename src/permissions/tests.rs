@@ -737,3 +737,92 @@ fn blanket_bash_allow_covers_substitutions_but_prefix_rules_do_not() {
         Some(Decision::Ask)
     );
 }
+
+#[test]
+fn a_hooks_path_alone_only_counts_for_commands_that_run_hooks() {
+    assert_eq!(
+        config_programs("[core]\n\thooksPath = .githooks\n"),
+        RepoPrograms::HooksOnly
+    );
+    assert_eq!(
+        config_programs("[core]\n\thooksPath = .husky/_\n[diff \"x\"]\n\ttextconv = sh\n"),
+        RepoPrograms::Any
+    );
+    for read in [
+        "git log --oneline -15",
+        "git show --stat HEAD",
+        "git grep -n foo v0.1.10 -- src",
+        "git merge-base --is-ancestor a HEAD",
+        "git tag -l 'v0.1.*' --sort=version:refname",
+        "git tag",
+        "git branch -a -v",
+        "git branch --show-current",
+        "git remote -v",
+        "git stash list",
+        "git ls-remote origin main",
+        "/usr/bin/git rev-parse HEAD",
+    ] {
+        assert_eq!(git_hooks_run_by(read), Some(&[][..]), "{read}");
+    }
+    let runs = |cmd: &str, hook: &str| git_hooks_run_by(cmd).is_some_and(|h| h.contains(&hook));
+    assert!(runs("git status --porcelain", "post-index-change"));
+    assert!(runs("git diff --stat", "post-index-change"));
+    assert!(runs("git commit -m x", "pre-commit"));
+    assert!(runs("git commit -m x", "commit-msg"));
+    assert!(runs("git push origin main", "pre-push"));
+    assert!(runs("git checkout main", "post-checkout"));
+    assert!(runs("git worktree add ../x", "post-checkout"));
+    assert!(runs("git tag v1", "reference-transaction"));
+    assert!(runs("git branch -D old", "reference-transaction"));
+    assert!(runs("git merge x", "*"));
+    for unknown in [
+        "git -c core.hooksPath=x log",
+        "git -C ../other log",
+        "GIT_DIR=x git log",
+        "git",
+        "git my-alias",
+        "xargs git commit",
+    ] {
+        assert_eq!(git_hooks_run_by(unknown), None, "{unknown}");
+    }
+}
+
+#[test]
+fn reads_in_a_repository_with_a_hooks_path_dont_ask() {
+    let dir = std::env::temp_dir().join(format!(
+        "chanto-hookspath-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(dir.join(".git")).unwrap();
+    std::fs::create_dir_all(dir.join(".githooks")).unwrap();
+    std::fs::write(dir.join(".githooks/pre-commit"), "#!/bin/sh\n").unwrap();
+    std::fs::write(
+        dir.join(".git/config"),
+        "[core]\n\tbare = false\n\thooksPath = .githooks\n",
+    )
+    .unwrap();
+    let ask = |cmd: &str| git_would_run_repo_programs(cmd, &dir);
+    assert!(!ask("git log --oneline -5 | head -3 && echo done"));
+    assert!(!ask("git show HEAD; git tag -l 'v*'"));
+    assert!(!ask("git status --porcelain && git diff --stat"));
+    assert!(!ask("git push origin main"), "no pre-push hook");
+    assert!(!ask("ls -la"));
+    assert!(ask("git log -1 && git commit -am x"), "pre-commit exists");
+    assert!(ask("echo $(git commit -m x)"));
+    assert!(ask("git my-alias"));
+    assert!(ask("git merge x"), "any hook present");
+    // A hook that appears later counts from then on.
+    std::fs::write(dir.join(".githooks/post-index-change"), "#!/bin/sh\n").unwrap();
+    std::fs::write(dir.join(".githooks/pre-push"), "#!/bin/sh\n").unwrap();
+    assert!(ask("git status"));
+    assert!(ask("git push"));
+    assert!(!ask("git log -1"));
+    // Drivers make every git command ask, reads included.
+    std::fs::write(
+        dir.join(".git/config"),
+        "[core]\n\thooksPath = .githooks\n[diff \"x\"]\n\ttextconv = sh\n",
+    )
+    .unwrap();
+    assert!(ask("git log -1"));
+    std::fs::remove_dir_all(dir).unwrap();
+}
