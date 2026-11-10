@@ -943,3 +943,119 @@ fn worktree_sessions_clean_up_when_nothing_changed() {
     );
     assert!(o.stderr.contains("No changes in"), "{o:?}");
 }
+
+/// `git` in the sandbox, with a fixed identity and no signing.
+#[cfg(unix)]
+fn git(sb: &Sandbox, args: &[&str]) {
+    let o = Command::new("git")
+        .args([
+            "-c",
+            "user.email=t@t",
+            "-c",
+            "user.name=t",
+            "-c",
+            "commit.gpgSign=false",
+        ])
+        .args(args)
+        .current_dir(&sb.dir)
+        .output()
+        .expect("run git");
+    assert!(
+        o.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&o.stderr)
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn prime_writes_a_profile_that_quality_check_enforces() {
+    let sb = Sandbox::new();
+    sb.write("Makefile", "test:\n\ttrue\n");
+
+    // Priming runs the project's commands: only in a trusted folder.
+    let out = sb.run(&["prime", "--yes"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("isn't trusted"), "{out:?}");
+    let dir = sb.dir.canonicalize().unwrap();
+    sb.write(
+        "home/trusted.json",
+        &serde_json::to_string(&[&dir]).unwrap(),
+    );
+
+    let out = sb.run(&["prime", "--dry-run"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("run = \"make test\""), "{out:?}");
+    assert!(!sb.dir.join(".chanto/quality.toml").exists());
+
+    // Not a terminal and no --yes: shown, not written.
+    let out = sb.run(&["prime"]);
+    assert!(out.stdout.contains("Not written"), "{out:?}");
+    assert!(!sb.dir.join(".chanto/quality.toml").exists());
+
+    let out = sb.run(&["prime", "--yes"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("Wrote"), "{out:?}");
+    let out = sb.run(&["prime", "--yes"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stderr.contains("already exists"), "{out:?}");
+
+    let out = sb.run(&["prime", "--hook"]);
+    assert_eq!(out.code, 1, "no repository yet: {out:?}");
+
+    let profile = sb.dir.join(".chanto/quality.toml");
+    let mut text = std::fs::read_to_string(&profile).unwrap();
+    text.push_str("\n[[rule]]\nid = \"no-todo\"\ntitle = \"No TODOs\"\nregex = 'TODO'\n");
+    std::fs::write(&profile, text).unwrap();
+    git(&sb, &["init", "-q"]);
+    sb.write("a.txt", "one\n");
+    git(&sb, &["add", "-A"]);
+    git(&sb, &["commit", "-qm", "init"]);
+
+    let out = sb.run(&["prime", "--hook"]);
+    assert_eq!(out.code, 0, "{out:?}");
+
+    let out = sb.run(&["quality", "check"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(out.stdout.contains("nothing found"), "{out:?}");
+
+    sb.write("a.txt", "one\nTODO later\n");
+    let out = sb.run(&["quality", "check"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.contains("a.txt:2: TODO later"), "{out:?}");
+    let out = sb.run(&["quality", "check", "--all", "--checks"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    git(&sb, &["commit", "-qam", "todo"]);
+    let out = sb.run(&["quality", "check", "--base", "HEAD~1", "--head", "HEAD"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    assert!(out.stdout.contains("a.txt:2:"), "{out:?}");
+    let out = sb.run(&["quality", "check", "--base", "nope"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("Can't compare"), "{out:?}");
+}
+
+#[test]
+fn quality_usage_and_errors() {
+    let sb = Sandbox::new();
+    let out = sb.run(&["quality", "check", "--help"]);
+    assert_eq!(out.code, 0, "{out:?}");
+    assert!(
+        out.stdout.contains("Usage: chanto quality check"),
+        "{out:?}"
+    );
+    let out = sb.run(&["prime", "--help"]);
+    assert!(out.stdout.contains("Usage: chanto prime"), "{out:?}");
+    for args in [
+        &["quality"][..],
+        &["quality", "check", "--bogus"],
+        &["quality", "check", "--base"],
+    ] {
+        let out = sb.run(args);
+        assert_eq!(out.code, 2, "{args:?}: {out:?}");
+    }
+    let out = sb.run(&["prime", "--bogus"]);
+    assert_eq!(out.code, 1, "{out:?}");
+    let out = sb.run(&["quality", "check"]);
+    assert_eq!(out.code, 2, "{out:?}");
+    assert!(out.stderr.contains("chanto prime"), "{out:?}");
+}
