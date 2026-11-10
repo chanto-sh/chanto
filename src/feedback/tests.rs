@@ -336,3 +336,222 @@ fn answer_is_recorded_in_config_and_state() {
     let cfg: crate::config::Config = toml::from_str(&text).unwrap();
     assert_eq!(cfg.feedback.share_errors, Some(false));
 }
+
+/// An address on loopback where nothing listens.
+async fn closed_url() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    drop(listener);
+    format!("http://{addr}/api/feedback")
+}
+
+/// A loopback endpoint that refuses every report with a 500.
+async fn failing_server() -> String {
+    let app = axum::Router::new().route(
+        "/api/feedback",
+        axum::routing::post(|| async { axum::http::StatusCode::INTERNAL_SERVER_ERROR }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/api/feedback")
+}
+
+#[test]
+fn truncation_and_error_payload_fields() {
+    assert_eq!(truncate("short", 10), "short");
+    assert_eq!(truncate("abcdef", 3), "abc…");
+    let p = error_payload_with(
+        "tool",
+        &"x".repeat(MAX_ERROR_CHARS + 50),
+        Some(""),
+        "id-1",
+        1_760_000_000,
+        Some(&"n".repeat(100)),
+        &["a log line".into()],
+    );
+    assert_eq!(p["type"], "error");
+    assert_eq!(p["kind"], "tool");
+    assert_eq!(p["install_id"], "id-1");
+    assert!(p.get("provider").is_none(), "an empty provider is left out");
+    assert_eq!(p["label"].as_str().unwrap().chars().count(), 65);
+    assert_eq!(
+        p["message"].as_str().unwrap().chars().count(),
+        MAX_ERROR_CHARS + 1
+    );
+    assert_eq!(p["log"], json!(["a log line"]));
+    assert!(p["timestamp"].as_str().unwrap().starts_with("2025-10-09"));
+    let p = error_payload_with("k", "m", Some("openai"), "id", 0, Some(""), &[]);
+    assert!(p.get("label").is_none() && p.get("log").is_none());
+    assert_eq!(p["provider"], "openai");
+}
+
+#[test]
+fn feedback_payload_skips_empty_fields_and_truncates() {
+    let d = Diagnostics {
+        provider: Some(String::new()),
+        model: Some("m".repeat(150)),
+        mode: None,
+    };
+    let p = feedback_payload("  hi  ", &d, &["l".into()]);
+    assert_eq!(p["message"], "hi");
+    assert!(p.get("provider").is_none() && p.get("mode").is_none());
+    assert_eq!(p["model"].as_str().unwrap().chars().count(), 101);
+    assert_eq!(p["log"], json!(["l"]));
+    assert_eq!(p["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn scrub_reduces_urls_to_scheme_host_and_port() {
+    assert_eq!(
+        scrub_with("see http://localhost:8080 now", None),
+        "see http://localhost:8080 now"
+    );
+    assert_eq!(
+        scrub_with("at https://h.example/a?b=c", None),
+        "at https://h.example/…"
+    );
+    // No host to keep: only the scheme survives.
+    assert_eq!(scrub_with("file:///etc/passwd", None), "file://…");
+    // A one-character home is never substituted.
+    assert_eq!(scrub_with("/a/b", Some("/")), "/a/b");
+}
+
+#[test]
+fn log_lines_skip_junk_and_drop_null_fields() {
+    let dir = tempfile_dir();
+    std::fs::create_dir_all(dir.join("logs")).unwrap();
+    let lines = [
+        "not json".to_string(),
+        json!({"time": "t1", "level": "warning", "event": "slow", "data": {"cost": null, "ms": 5}})
+            .to_string(),
+        json!({"time": "t2", "level": "error", "event": "bare"}).to_string(),
+    ];
+    std::fs::write(dir.join("logs/chanto-2026-10-14.log"), lines.join("\n")).unwrap();
+    // Not a log file by name: ignored.
+    std::fs::write(dir.join("logs/other.log"), &lines[2]).unwrap();
+    let got = recent_problems(&dir, 10);
+    assert_eq!(got, vec!["t1 warning slow {\"ms\":5}", "t2 error bare"]);
+    assert_eq!(problems_since(&dir, Some("t1"), 10).len(), 1);
+    assert!(recent_problems(&dir.join("missing"), 10).is_empty());
+}
+
+#[tokio::test]
+async fn failed_sends_are_explained() {
+    let d = Diagnostics::default();
+    let refused = closed_url().await;
+    let send_it = Answer(SEND, Mutex::default());
+    let out = confirm_and_send(&send_it, &refused, "hi", &d, &[]).await;
+    assert!(out.starts_with("Couldn't send your feedback"), "{out}");
+    // Without log lines there is no "send without log" choice; the host is named.
+    let q = send_it.1.lock().unwrap()[0].clone();
+    assert!(q.contains("sent to 127.0.0.1"), "{q}");
+    let failing = failing_server().await;
+    let e = send(&failing, &json!({}), Duration::from_secs(5))
+        .await
+        .unwrap_err();
+    assert!(e.to_string().contains("500"), "{e}");
+    // A URL that does not parse is shown as it is.
+    let none = Answer("nope", Mutex::default());
+    assert_eq!(
+        confirm_and_send(&none, "not a url", "hi", &d, &[]).await,
+        "Feedback not sent."
+    );
+    assert!(none.1.lock().unwrap()[0].contains("sent to not a url"));
+}
+
+#[tokio::test]
+async fn crash_files_that_are_broken_old_or_unsendable() {
+    let dir = tempfile_dir();
+    let crashes = crash_dir(&dir);
+    std::fs::create_dir_all(&crashes).unwrap();
+    std::fs::write(crashes.join("0-broken.json"), "{not json").unwrap();
+    std::fs::write(
+        crashes.join("1-old.json"),
+        json!({"message": "m", "location": "l", "version": "0.0.0", "timestamp": 1}).to_string(),
+    )
+    .unwrap();
+    write_crash(&crashes, "boom", "src/x.rs:1").unwrap();
+    // The server refuses: the crash stays for a later start and the failure is logged.
+    let failing = failing_server().await;
+    assert_eq!(send_crashes(&dir, &failing, true, None).await, 0);
+    assert_eq!(std::fs::read_dir(&crashes).unwrap().count(), 1);
+    let log = std::fs::read_to_string(dir.join("logs/feedback.log")).unwrap();
+    assert!(log.contains("crash report not sent"), "{log}");
+    // Rate-limited (a panic was just reported): kept, not sent.
+    let (url, got) = server().await;
+    let mut state = load(&dir);
+    state
+        .sent
+        .insert("panic".into(), chrono::Utc::now().timestamp());
+    save(&dir, &state);
+    assert_eq!(send_crashes(&dir, &url, true, None).await, 0);
+    assert!(got.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read_dir(&crashes).unwrap().count(), 1);
+}
+
+#[test]
+fn crash_files_are_capped() {
+    let dir = tempfile_dir().join("crashes");
+    for i in 0..12 {
+        write_crash(&dir, &format!("panic {i}"), "here").unwrap();
+    }
+    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 10);
+}
+
+#[tokio::test]
+async fn failed_background_reports_are_noted_locally() {
+    let dir = tempfile_dir();
+    let url = closed_url().await;
+    spawn_report(true, dir.clone(), url, "tool", "boom", None)
+        .unwrap()
+        .await
+        .unwrap();
+    let log = std::fs::read_to_string(dir.join("logs/feedback.log")).unwrap();
+    assert!(log.contains("error report (tool) not sent"), "{log}");
+    // Diagnostic mode off: no batch.
+    assert_eq!(
+        send_diagnostics_batch(&dir, "http://127.0.0.1:1/", None)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn spawning_needs_a_runtime() {
+    assert!(
+        spawn_report(
+            true,
+            tempfile_dir(),
+            "http://127.0.0.1:1/".into(),
+            "k",
+            "m",
+            None
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn status_names_the_setting() {
+    let mut cfg = crate::config::Config::default();
+    let in_diagnostics = load(&crate::config::home_dir())
+        .diagnostics(chrono::Utc::now().timestamp())
+        .is_some();
+    if forced_off() || in_diagnostics {
+        return;
+    }
+    assert_eq!(status(&cfg), "off (default)");
+    cfg.feedback.share_errors = Some(true);
+    assert_eq!(status(&cfg), "on ([feedback] share_errors = true)");
+    cfg.feedback.share_errors = Some(false);
+    assert_eq!(status(&cfg), "off ([feedback] share_errors = false)");
+}
+
+#[test]
+fn provider_ids_are_their_config_names() {
+    let id = provider_id(crate::llm::ProviderKind::default());
+    assert!(!id.is_empty());
+    assert!(url().starts_with("http"));
+}

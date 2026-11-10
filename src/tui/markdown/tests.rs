@@ -294,3 +294,215 @@ fn a_wrapped_url_arrives_as_link_fragments() {
         .collect();
     assert_eq!(text, url);
 }
+
+fn rendered(md: &str) -> Vec<String> {
+    render_markdown(md).iter().map(|l| text(&l.line)).collect()
+}
+
+#[test]
+fn nested_lists_alternate_bullets_and_number_items() {
+    let lines = rendered("- outer\n  - inner\n    - deeper\n\n1. first\n2. second\n");
+    assert!(lines.iter().any(|l| l == "• outer"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == "  ◦ inner"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == "    • deeper"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == "1. first"), "{lines:?}");
+    assert!(lines.iter().any(|l| l == "2. second"), "{lines:?}");
+    let md = render_markdown("3. third\n");
+    assert_eq!(text(&md[0].line), "3. third");
+    assert_eq!(md[0].indent, 3);
+}
+
+#[test]
+fn task_lists_show_boxes() {
+    let lines = rendered("- [x] done\n- [ ] todo\n");
+    assert!(lines.iter().any(|l| l.contains("☒ done")), "{lines:?}");
+    assert!(lines.iter().any(|l| l.contains("☐ todo")), "{lines:?}");
+}
+
+#[test]
+fn blockquotes_are_prefixed_and_dim_italic() {
+    let md = render_markdown("> quoted *text*\n\nafter");
+    let q = &md[0];
+    assert_eq!(text(&q.line), "│ quoted text");
+    assert_eq!(q.indent, 2);
+    let span = q.line.spans.iter().find(|s| s.content == "text").unwrap();
+    assert!(span.style.add_modifier.contains(Modifier::ITALIC));
+    assert_eq!(text(&md.last().unwrap().line), "after");
+}
+
+#[test]
+fn inline_styles_and_rules() {
+    let md = render_markdown("**bold** _it_ ~~gone~~\n\n---\n\nend");
+    let first = &md[0].line;
+    let find = |t: &str| first.spans.iter().find(|s| s.content == t).unwrap().style;
+    assert!(find("bold").add_modifier.contains(Modifier::BOLD));
+    assert!(find("it").add_modifier.contains(Modifier::ITALIC));
+    assert!(find("gone").add_modifier.contains(Modifier::CROSSED_OUT));
+    assert!(md.iter().any(|l| text(&l.line) == "─".repeat(40)));
+}
+
+#[test]
+fn links_show_their_destination_unless_already_visible() {
+    let lines = rendered("[docs](https://example.com/docs) and [top](#top)");
+    assert_eq!(lines[0], "docs (https://example.com/docs) and top");
+    let lines = rendered("[https://example.com](https://example.com)");
+    assert_eq!(lines[0], "https://example.com");
+}
+
+#[test]
+fn html_and_hard_breaks_are_kept() {
+    let lines = rendered("a <b>tag</b>  \nnext line");
+    assert_eq!(lines[0], "a <b>tag</b>");
+    assert_eq!(lines[1], "next line");
+}
+
+#[test]
+fn tables_with_code_and_ragged_rows() {
+    let md = render_markdown("| a | `b` |\n|---|---|\n| long cell | x |\n| y |\n");
+    let lines: Vec<String> = md.iter().map(|l| text(&l.line)).collect();
+    assert_eq!(lines[0], "a         │ b");
+    assert!(lines[1].contains("┼"));
+    assert_eq!(lines[2], "long cell │ x");
+    assert_eq!(lines[3], "y         │");
+    assert!(md[0].line.style.add_modifier.contains(Modifier::BOLD));
+}
+
+#[test]
+fn code_blocks_cover_each_highlighter_path() {
+    for (lang, code) in [
+        ("python", "def f():\n    return 1  # c"),
+        ("ts", "const x = 1;"),
+        ("sh", "echo hi"),
+        ("rs", "fn main() {}"),
+        ("yml", "a: 1"),
+        ("jsonc", "{\"a\": 1}"),
+        ("golang", "package main"),
+        ("diff", "+add\n-del\n@@ hunk\n ctx"),
+        ("", "let s = \"q\\\"x\"; // tail"),
+        ("nosuchlang", "fn x() { 42 }\n// comment"),
+        ("lua", "-- comment\nlocal x = 'a'"),
+    ] {
+        let md = render_markdown(&format!("```{lang}\n{code}\n```\n"));
+        let all: Vec<String> = md.iter().map(|l| text(&l.line)).collect();
+        for want in code.lines() {
+            let want = format!("  {want}");
+            assert!(
+                all.iter().any(|l| l.trim_end() == want.trim_end()),
+                "{lang}: {all:?}"
+            );
+        }
+        assert!(md.iter().all(|l| l.indent == 2));
+    }
+    let indented = rendered("para\n\n    indented code\n");
+    assert!(indented.iter().any(|l| l == "  indented code"));
+}
+
+#[test]
+fn light_code_line_highlighting() {
+    let spans = highlight_code_line("let x = 42 \"s\" 'c' `t`", "rust");
+    let style = |t: &str| spans.iter().find(|s| s.content == t).unwrap().style;
+    assert_eq!(style("let").fg, Some(Color::Rgb(200, 140, 220)));
+    assert_eq!(style("42").fg, Some(Color::Rgb(240, 160, 110)));
+    assert_eq!(style("\"s\"").fg, Some(Color::Rgb(150, 200, 120)));
+    assert_eq!(style("x").fg, Some(pal().code_block));
+    let c = highlight_code_line("  # note", "py");
+    assert!(c[0].style.add_modifier.contains(Modifier::ITALIC));
+    let d = highlight_code_line("+x", "diff");
+    assert_eq!(d[0].style.fg, Some(pal().diff_add));
+    assert_eq!(
+        highlight_code_line("@@ x", "patch")[0].style.fg,
+        Some(cyan())
+    );
+}
+
+#[test]
+fn syntect_plain_colour_is_reset() {
+    let c = syntect::highlighting::Color {
+        r: 1,
+        g: 2,
+        b: 3,
+        a: 255,
+    };
+    assert_eq!(syntect_fg(c, Some(c)), Color::Reset);
+    assert_eq!(syntect_fg(c, None), Color::Rgb(1, 2, 3));
+}
+
+#[test]
+fn sgr_codes_set_and_clear_styles() {
+    let s = apply_sgr(Style::default(), "1;2;3;4");
+    assert!(
+        s.add_modifier
+            .contains(Modifier::BOLD | Modifier::DIM | Modifier::ITALIC | Modifier::UNDERLINED)
+    );
+    let s = apply_sgr(s, "22;23");
+    assert!(!s.add_modifier.contains(Modifier::BOLD));
+    assert!(!s.add_modifier.contains(Modifier::ITALIC));
+    assert_eq!(apply_sgr(Style::default(), "0"), Style::default());
+    if !crate::tui::theme::no_color() {
+        assert_eq!(
+            apply_sgr(Style::default(), "31").fg,
+            Some(Color::Indexed(1))
+        );
+        assert_eq!(
+            apply_sgr(Style::default(), "92").fg,
+            Some(Color::Indexed(10))
+        );
+        assert_eq!(
+            apply_sgr(Style::default(), "38;5;200").fg,
+            Some(Color::Indexed(200))
+        );
+        assert_eq!(
+            apply_sgr(Style::default(), "38;2;1;2;3").fg,
+            Some(Color::Rgb(1, 2, 3))
+        );
+        assert!(apply_sgr(Style::default(), "48;5;1").bg.is_some());
+        assert!(apply_sgr(Style::default(), "41").bg.is_some());
+        assert_eq!(apply_sgr(apply_sgr(Style::default(), "31"), "39").fg, None);
+        assert_eq!(apply_sgr(apply_sgr(Style::default(), "41"), "49").bg, None);
+    }
+    // Unknown and malformed codes are ignored.
+    assert_eq!(apply_sgr(Style::default(), "38;9;x;77"), Style::default());
+}
+
+#[test]
+fn ansi_lines_expand_tabs_and_skip_non_sgr_escapes() {
+    let l = ansi_lines("a\tb\r\x1b[2Kc");
+    assert_eq!(text(&l[0]), "a    bc");
+}
+
+#[test]
+fn wrap_handles_long_words_and_wide_glyphs() {
+    let l = Line::raw("short averyveryveryverylongwordthatdoesnotfit end");
+    let w = wrap(&l, 10, 2);
+    assert!(w.iter().all(|x| x.width() <= 10), "{w:?}");
+    let joined: String = w.iter().map(|x| text(x).trim().to_string()).collect();
+    assert_eq!(joined, "shortaveryveryveryverylongwordthatdoesnotfitend");
+    // Wide CJK glyphs never overflow.
+    let w = wrap(&Line::raw("漢字漢字漢字漢字漢字漢字"), 8, 0);
+    assert!(w.iter().all(|x| x.width() <= 8));
+    // An indent too large for the width is dropped.
+    let w = wrap(&Line::raw("aaaa bbbb cccc dddd"), 8, 6);
+    assert!(text(&w[1]).starts_with('b'));
+    // Styles survive wrapping as separate spans.
+    let l = Line::from(vec![
+        Span::styled("red words here ", Style::default().fg(Color::Red)),
+        Span::raw("plain words"),
+    ]);
+    let w = wrap(&l, 10, 0);
+    assert!(
+        w.iter()
+            .flat_map(|x| x.spans.iter())
+            .any(|s| s.style.fg == Some(Color::Red))
+    );
+}
+
+#[test]
+fn colour_shorthands_follow_the_palette() {
+    assert_eq!(warn(), pal().warning);
+    assert_eq!(amber(), pal().auto_mode);
+    assert_eq!(panel_bg(), pal().panel_bg);
+    assert_eq!(highlight_bg(), pal().selection_bg);
+    assert_eq!(highlight_fg(), pal().selection_fg);
+    assert_eq!(faint(), pal().faint);
+    let _ = take_typeahead();
+}
