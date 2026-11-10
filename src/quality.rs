@@ -43,7 +43,10 @@ pub struct Profile {
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
     pub review: Review,
-    pub secrets: SecretsScan,
+    /// The `[secrets]` table. (Not named `secrets` in Rust: it holds
+    /// settings, and code scanners treat that name as sensitive data.)
+    #[serde(rename = "secrets")]
+    pub leak_scan: LeakScan,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -107,16 +110,16 @@ impl Default for Rule {
 /// The built-in secrets scan in `chanto quality check`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct SecretsScan {
+pub struct LeakScan {
     /// On by default: a profile has to turn it off.
     pub scan: bool,
     /// Globs of files not scanned (test fixtures with fake keys).
     pub exclude: Vec<String>,
 }
 
-impl Default for SecretsScan {
+impl Default for LeakScan {
     fn default() -> Self {
-        SecretsScan {
+        LeakScan {
             scan: true,
             exclude: Vec::new(),
         }
@@ -185,7 +188,7 @@ pub fn to_table(profile: &Profile, rule_check: Option<&str>) -> toml::Table {
         g.insert("checks".into(), toml::Value::Array(checks));
     }
     if let Some(cmd) = rule_check
-        && (profile.secrets.scan || profile.rules.iter().any(|r| r.regex.is_some()))
+        && (profile.leak_scan.scan || profile.rules.iter().any(|r| r.regex.is_some()))
     {
         g.insert(
             "quality_checks".into(),

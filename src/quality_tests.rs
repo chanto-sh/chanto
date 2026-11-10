@@ -76,7 +76,7 @@ fn profile_maps_to_guardrails_and_denies() {
 #[test]
 fn no_checks_keeps_detection_and_the_secrets_scan_runs_by_default() {
     let p = parse("[[rule]]\nid = \"x\"\ntitle = \"prose\"\n").unwrap();
-    assert!(p.secrets.scan);
+    assert!(p.leak_scan.scan);
     let t = to_table(&p, Some("chanto quality check"));
     let g = t["guardrails"].as_table().unwrap();
     assert!(
@@ -139,7 +139,7 @@ fn rules_check_new_lines_or_whole_files() {
     std::fs::write(root.join("src/a.rs"), "old.unwrap();\nfine();\n").unwrap();
     std::fs::write(root.join("src/a_tests.rs"), "t.unwrap();\n").unwrap();
     let mut p = parse(SAMPLE).unwrap();
-    p.secrets.scan = false;
+    p.leak_scan.scan = false;
 
     // Only the added line counts.
     let mut changed = std::collections::BTreeMap::new();
@@ -299,7 +299,7 @@ fn secrets_scan_flags_added_lines_without_echoing_them() {
     );
     let v = pattern::check(&p, &dir, Some(&changed)).unwrap();
     assert_eq!(v.len(), 2, "{v:?}");
-    assert!(v.iter().all(|v| v.rule == pattern::SECRETS));
+    assert!(v.iter().all(|v| v.rule == pattern::LEAK_RULE));
     let out = pattern::report(&p, &v);
     assert!(out.failed);
     assert!(out.text.contains("src/config.rs:7:"), "{}", out.text);
@@ -310,9 +310,9 @@ fn secrets_scan_flags_added_lines_without_echoing_them() {
     assert!(out.text.contains("[secrets] exclude"), "{}", out.text);
 
     // Fixtures excluded; then the scan turned off.
-    p.secrets.exclude = vec!["tests/fixtures/**".into()];
+    p.leak_scan.exclude = vec!["tests/fixtures/**".into()];
     assert_eq!(pattern::check(&p, &dir, Some(&changed)).unwrap().len(), 1);
-    p.secrets.scan = false;
+    p.leak_scan.scan = false;
     assert!(pattern::check(&p, &dir, Some(&changed)).unwrap().is_empty());
 }
 

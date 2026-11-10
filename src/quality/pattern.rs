@@ -265,15 +265,15 @@ pub fn check(
             }
         }
     }
-    if profile.secrets.scan {
-        let exclude = globs(&profile.secrets.exclude).context("[secrets] exclude")?;
+    if profile.leak_scan.scan {
+        let exclude = globs(&profile.leak_scan.exclude).context("[secrets] exclude")?;
         let applies = |f: &str| {
             !f.starts_with(".chanto/") && !exclude.as_ref().is_some_and(|g| g.is_match(f))
         };
         let mut hit = |file: &str, line: usize, text: &str| {
             if crate::secrets::contains_secret(text) {
                 out.push(Violation {
-                    rule: SECRETS.into(),
+                    rule: LEAK_RULE.into(),
                     file: file.to_string(),
                     line,
                     // Never echo the secret itself.
@@ -308,7 +308,7 @@ pub fn check(
 }
 
 /// The id violations of the built-in secrets scan carry.
-pub const SECRETS: &str = "secrets";
+pub const LEAK_RULE: &str = "secrets";
 
 /// Files in the project, respecting .gitignore, relative with `/`.
 fn project_files(root: &Path) -> Vec<String> {
@@ -333,7 +333,7 @@ pub fn report(profile: &Profile, violations: &[Violation]) -> Outcome {
     let checked = format!(
         "{rules} {}{}",
         if rules == 1 { "rule" } else { "rules" },
-        if profile.secrets.scan {
+        if profile.leak_scan.scan {
             " and the secrets scan"
         } else {
             ""
@@ -349,7 +349,7 @@ pub fn report(profile: &Profile, violations: &[Violation]) -> Outcome {
     let mut last = "";
     for v in violations.iter().take(MAX_LISTED) {
         if v.rule != last {
-            let title = if v.rule == SECRETS {
+            let title = if v.rule == LEAK_RULE {
                 "looks like a key, token or password"
             } else {
                 profile
@@ -383,7 +383,7 @@ pub fn report(profile: &Profile, violations: &[Violation]) -> Outcome {
         },
         if broken == 1 { "rule" } else { "rules" },
     ));
-    if violations.iter().any(|v| v.rule == SECRETS) {
+    if violations.iter().any(|v| v.rule == LEAK_RULE) {
         text.push_str(
             "\nA secret in a commit stays in its history: take it out, keep it in an untracked file or an environment variable, and rotate it if it's real. A test fixture's path can go in [secrets] exclude.",
         );
