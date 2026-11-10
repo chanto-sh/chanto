@@ -12,14 +12,16 @@ use std::time::Duration;
 const SLOW: f32 = 300.0;
 const TIMEOUT: Duration = Duration::from_secs(600);
 
-const USAGE: &str = "Usage: chanto prime [--yes] [--dry-run] [--force]
+const USAGE: &str = "Usage: chanto prime [--yes] [--dry-run] [--force] | --hook
 
-Find this project's checks (tests, lint, typecheck, format), run each once,
-and write .chanto/quality.toml so verified mode runs them on every change.
+Find this project's checks (tests, lint, typecheck, format, secrets), run
+each once, and write .chanto/quality.toml so verified mode runs them on
+every change.
 
   --yes      write without asking
   --dry-run  print the profile instead of writing it
-  --force    replace an existing .chanto/quality.toml";
+  --force    replace an existing .chanto/quality.toml
+  --hook     only install a git pre-push hook that runs the profile's checks";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
@@ -35,6 +37,7 @@ pub async fn cli(args: &[String]) -> Result<String> {
             "--yes" | "-y" => yes = true,
             "--dry-run" => dry = true,
             "--force" => force = true,
+            "--hook" => return super::hook::install(&std::env::current_dir()?),
             "-h" | "--help" | "help" => return Ok(USAGE.into()),
             other => anyhow::bail!("unknown argument {other:?}\n\n{USAGE}"),
         }
@@ -154,6 +157,13 @@ pub fn discover(root: &Path) -> Vec<Candidate> {
     if has("mypy") && (pyproject.contains("[tool.mypy") || root.join("mypy.ini").exists()) {
         add("mypy", "mypy .", "typecheck");
     }
+    if has("gitleaks") {
+        add(
+            "gitleaks",
+            "gitleaks git --pre-commit --redact --no-banner .",
+            "secrets",
+        );
+    }
     if root.join("go.mod").exists() && has("gofmt") {
         add("gofmt", "test -z \"$(gofmt -l .)\"", "format");
     }
@@ -236,6 +246,12 @@ oracle = false          # true: a reviewer model checks each diff before the gat
 
 # [review]
 # no_touch = [\"vendor/**\"]   # the agent may not edit these paths
+
+# `chanto quality check` also scans the lines a change adds for keys, tokens
+# and passwords. Keep test fixtures with fake keys out of it, or turn it off:
+# [secrets]
+# exclude = [\"tests/fixtures/**\"]
+# scan = false
 ",
     );
     s
@@ -266,5 +282,6 @@ fn summary(candidates: &[Candidate], runs: &[(bool, f32)], target: &Path) -> Str
     s.push_str(
         "\nCommit it so everyone (and CI) gets the same checks: git add .chanto/quality.toml",
     );
+    s.push_str("\n`chanto prime --hook` adds a pre-push hook that runs them before each push.");
     s
 }

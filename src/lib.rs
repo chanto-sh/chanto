@@ -125,8 +125,8 @@ Commands:
   plugin <command>              Install and manage plugins and marketplaces
   customize <request>           Have chanto write a command, skill, hook or agent
   check-extensions              Validate custom commands, skills, hooks and agents
-  prime [--dry-run]             Find this project's checks and write .chanto/quality.toml
-  quality check [--all]         Check the quality profile's rules against this change
+  prime [--dry-run | --hook]    Find this project's checks and write .chanto/quality.toml
+  quality check [--all]         Check the quality profile's rules and scan for secrets
   goal <objective>              Keep working until acceptance criteria pass
   team <task>                   Split a task across parallel agents in worktrees
   run --bg <task>               Run a task in the background in its own worktree
@@ -1982,7 +1982,7 @@ pub async fn run() {
     }
     if argv.get(1).map(String::as_str) == Some("quality") {
         let result = match argv.get(2).map(String::as_str) {
-            Some("check") => quality::check_cli(&argv[3..]),
+            Some("check") => quality::check_cli(&argv[3..]).await,
             _ => Err(anyhow::anyhow!("usage: chanto quality check [--all]")),
         };
         match result {

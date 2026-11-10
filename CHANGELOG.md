@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Quality profile.** `chanto prime` finds a project's checks (tests, lint, format, typecheck), runs each once, and writes `.chanto/quality.toml`, which turns verified mode on with those checks: ones that fail now are written turned off, and slow ones are kept for nightly CI. The profile can also hold pattern rules (a regex, the paths it covers, and whether only new lines count); `chanto quality check` reports the lines that break them and the gate runs it, so a convention fails a change instead of being a suggestion. `[review] no_touch` paths can't be edited. It only applies in trusted folders.
+- **Quality profile.** `chanto prime` finds a project's checks (tests, lint, format, typecheck), runs each once, and writes `.chanto/quality.toml`, which turns verified mode on with those checks: ones that fail now are written turned off, and slow ones are kept for nightly CI. The profile can also hold pattern rules (a regex, the paths it covers, and whether only new lines count); `chanto quality check` reports the lines that break them and the gate runs it, so a convention fails a change instead of being a suggestion. It also scans the lines a change adds for keys, tokens and passwords (`[secrets] exclude` for fixtures), and `chanto prime --hook` installs a pre-push hook that runs all of it before each push. `[review] no_touch` paths can't be edited. It only applies in trusted folders.
 ## v0.1.15 (November 2, 2026)
 
 - **Security: approving an `.mcp.json` server now covers that server as it was.** A project server that's added or changed later, including by a pull, no longer starts until you approve it with `/mcp enable`, even in a trusted folder. Upgrade recommended.

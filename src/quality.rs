@@ -7,7 +7,8 @@
 //!   `"off"` keeps one out of the gate (CI can still run it).
 //! - `[[rule]]` entries with a `regex` are pattern checks, run by
 //!   `chanto quality check` on the lines a change adds (or on whole files,
-//!   with `new_code_only = false`). The gate runs that command too.
+//!   with `new_code_only = false`). The same command scans those lines for
+//!   secrets unless `[secrets] scan = false`. The gate runs it too.
 //! - `[review] no_touch` paths become `Edit(...)` deny rules.
 //!
 //! The profile is read as a project layer just below `.chanto/config.toml`,
@@ -19,6 +20,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+mod hook;
 mod pattern;
 mod prime;
 
@@ -41,6 +43,7 @@ pub struct Profile {
     #[serde(rename = "rule")]
     pub rules: Vec<Rule>,
     pub review: Review,
+    pub secrets: SecretsScan,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -97,6 +100,25 @@ impl Default for Rule {
             exclude: Vec::new(),
             new_code_only: true,
             source: None,
+        }
+    }
+}
+
+/// The built-in secrets scan in `chanto quality check`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SecretsScan {
+    /// On by default: a profile has to turn it off.
+    pub scan: bool,
+    /// Globs of files not scanned (test fixtures with fake keys).
+    pub exclude: Vec<String>,
+}
+
+impl Default for SecretsScan {
+    fn default() -> Self {
+        SecretsScan {
+            scan: true,
+            exclude: Vec::new(),
         }
     }
 }
@@ -163,7 +185,7 @@ pub fn to_table(profile: &Profile, rule_check: Option<&str>) -> toml::Table {
         g.insert("checks".into(), toml::Value::Array(checks));
     }
     if let Some(cmd) = rule_check
-        && profile.rules.iter().any(|r| r.regex.is_some())
+        && (profile.secrets.scan || profile.rules.iter().any(|r| r.regex.is_some()))
     {
         g.insert(
             "quality_checks".into(),

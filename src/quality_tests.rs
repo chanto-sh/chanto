@@ -74,10 +74,20 @@ fn profile_maps_to_guardrails_and_denies() {
 }
 
 #[test]
-fn no_checks_keeps_detection_and_no_regex_rules_adds_no_command() {
+fn no_checks_keeps_detection_and_the_secrets_scan_runs_by_default() {
     let p = parse("[[rule]]\nid = \"x\"\ntitle = \"prose\"\n").unwrap();
+    assert!(p.secrets.scan);
     let t = to_table(&p, Some("chanto quality check"));
-    assert!(t.is_empty(), "{t:?}");
+    let g = t["guardrails"].as_table().unwrap();
+    assert!(
+        !g.contains_key("checks"),
+        "no checks listed: detection stays"
+    );
+    assert_eq!(g["quality_checks"].as_array().unwrap().len(), 1);
+
+    // Scan off and no regex rules: nothing for the gate to run.
+    let p = parse("[secrets]\nscan = false\n[[rule]]\nid = \"x\"\n").unwrap();
+    assert!(to_table(&p, Some("chanto quality check")).is_empty());
 }
 
 #[test]
@@ -129,6 +139,7 @@ fn rules_check_new_lines_or_whole_files() {
     std::fs::write(root.join("src/a.rs"), "old.unwrap();\nfine();\n").unwrap();
     std::fs::write(root.join("src/a_tests.rs"), "t.unwrap();\n").unwrap();
     let mut p = parse(SAMPLE).unwrap();
+    p.secrets.scan = false;
 
     // Only the added line counts.
     let mut changed = std::collections::BTreeMap::new();
@@ -167,7 +178,7 @@ fn rules_check_new_lines_or_whole_files() {
     // Nothing broken.
     let ok = pattern::report(&p, &[]);
     assert!(!ok.failed);
-    assert!(ok.text.contains("1 checked"), "{}", ok.text);
+    assert!(ok.text.contains("1 rule,"), "{}", ok.text);
 }
 
 #[test]
@@ -261,4 +272,130 @@ fn rules_skip_chanto_files() {
     );
     assert!(pattern::check(&p, &dir, Some(&changed)).unwrap().is_empty());
     assert!(pattern::check(&p, &dir, None).unwrap().is_empty());
+}
+
+/// A token in a format the secrets detector knows, built at run time so the
+/// source holds no secret-shaped literal.
+fn fake_token() -> String {
+    format!("gh{}_{}", "p", "a1B2c3D4".repeat(5))
+}
+
+#[test]
+fn secrets_scan_flags_added_lines_without_echoing_them() {
+    let dir = scratch();
+    let token = fake_token();
+    let mut p = parse("").unwrap();
+    let mut changed = std::collections::BTreeMap::new();
+    changed.insert(
+        "src/config.rs".to_string(),
+        vec![
+            (7, format!("let token = \"{token}\";")),
+            (8, "ok();".into()),
+        ],
+    );
+    changed.insert(
+        "tests/fixtures/keys.txt".to_string(),
+        vec![(1, token.clone())],
+    );
+    let v = pattern::check(&p, &dir, Some(&changed)).unwrap();
+    assert_eq!(v.len(), 2, "{v:?}");
+    assert!(v.iter().all(|v| v.rule == pattern::SECRETS));
+    let out = pattern::report(&p, &v);
+    assert!(out.failed);
+    assert!(out.text.contains("src/config.rs:7:"), "{}", out.text);
+    assert!(
+        !out.text.contains(&token),
+        "the report must not echo the secret"
+    );
+    assert!(out.text.contains("[secrets] exclude"), "{}", out.text);
+
+    // Fixtures excluded; then the scan turned off.
+    p.secrets.exclude = vec!["tests/fixtures/**".into()];
+    assert_eq!(pattern::check(&p, &dir, Some(&changed)).unwrap().len(), 1);
+    p.secrets.scan = false;
+    assert!(pattern::check(&p, &dir, Some(&changed)).unwrap().is_empty());
+}
+
+#[test]
+fn commits_between_two_revisions_are_checked() {
+    let dir = scratch();
+    let git = |args: &[&str]| {
+        let o = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.email=t@t",
+                "-c",
+                "user.name=t",
+                "-c",
+                "commit.gpgSign=false",
+            ])
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+        String::from_utf8_lossy(&o.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    std::fs::write(dir.join("a.txt"), "one\n").unwrap();
+    git(&["add", "-A"]);
+    git(&["commit", "-qm", "one"]);
+    let base = git(&["rev-parse", "HEAD"]);
+    std::fs::write(dir.join("a.txt"), "one\ntwo\n").unwrap();
+    git(&["commit", "-qam", "two"]);
+    std::fs::write(dir.join("a.txt"), "one\ntwo\nuncommitted\n").unwrap();
+    let m = pattern::added_between(&dir, &base, "HEAD").unwrap();
+    assert_eq!(m["a.txt"], vec![(2, "two".to_string())]);
+    assert!(pattern::added_between(&dir, "--output=x", "HEAD").is_none());
+    assert!(pattern::added_between(&dir, "nope", "HEAD").is_none());
+}
+
+#[test]
+fn hook_script_is_valid_sh_and_marked() {
+    let s = hook::script("/opt/my tools/chanto");
+    assert!(s.starts_with("#!/bin/sh\n# Installed by `chanto prime --hook`"));
+    assert!(s.contains("chanto='/opt/my tools/chanto'"), "{s}");
+    assert!(s.contains("quality check $checks --base"));
+    if cfg!(unix) {
+        let f = scratch().join("pre-push");
+        std::fs::write(&f, &s).unwrap();
+        let o = std::process::Command::new("sh")
+            .arg("-n")
+            .arg(&f)
+            .output()
+            .unwrap();
+        assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_install_leaves_someone_elses_hook_alone() {
+    let dir = scratch();
+    assert!(hook::install(&dir).is_err(), "no profile yet");
+    std::fs::create_dir_all(dir.join(".chanto")).unwrap();
+    std::fs::write(path(&dir), "version = 1\n").unwrap();
+    std::process::Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    let hook = dir.join(".git/hooks/pre-push");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(&hook, "#!/bin/sh\nmine\n").unwrap();
+    let msg = hook::install(&dir).unwrap();
+    assert!(msg.contains("Add this"), "{msg}");
+    assert_eq!(std::fs::read_to_string(&hook).unwrap(), "#!/bin/sh\nmine\n");
+
+    // Without one, it's installed (unless global config moves hooks elsewhere).
+    std::fs::remove_file(&hook).unwrap();
+    let msg = hook::install(&dir).unwrap();
+    if msg.starts_with("Installed") {
+        let text = std::fs::read_to_string(&hook).unwrap();
+        assert!(text.contains("Installed by `chanto prime --hook`"));
+        // Running it again replaces Chanto's own hook.
+        assert!(hook::install(&dir).unwrap().starts_with("Installed"));
+    } else {
+        assert!(msg.contains("core.hooksPath"), "{msg}");
+    }
 }

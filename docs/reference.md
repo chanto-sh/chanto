@@ -913,7 +913,7 @@ Checks (configured or detected), goal and outcome criteria, team checks and form
 
 `chanto prime` sets up [verified mode](#verified-mode-guardrails) for a project in one step and writes the result to `.chanto/quality.toml`, a file you commit so everyone, and CI, checks the same things:
 
-1. **Finds the checks** the project declares: the detected test commands, plus clippy and `cargo fmt --check` (Rust), the `lint` script (npm), ruff and mypy when configured (Python), and gofmt (Go).
+1. **Finds the checks** the project declares: the detected test commands, plus clippy and `cargo fmt --check` (Rust), the `lint` script (npm), ruff and mypy when configured (Python), gofmt (Go), and gitleaks when it's installed.
 2. **Runs each one once.** A check that fails now is written with `when = "off"` and a note, so it doesn't fail every turn until you fix it. A check slower than 5 minutes gets `when = "nightly"`: it's kept out of the gate and left for scheduled CI.
 3. **Shows the profile and asks** before writing it (`--yes` skips the question, `--dry-run` prints it, `--force` replaces an existing one).
 
@@ -942,10 +942,15 @@ new_code_only = true   # only lines this change adds; false: every line of every
 
 [review]
 no_touch = ["vendor/**"]   # becomes an Edit(vendor/**) deny rule
+
+[secrets]
+exclude = ["tests/fixtures/**"]   # files with fake keys; `scan = false` turns the scan off
 ```
 
 - **Checks:** the `when = "turn"` commands are the gate's `checks`. A profile with no `[[check]]` keeps the detected ones.
-- **Rules:** `chanto quality check` reports every line a rule's `regex` matches: the lines added since `HEAD` and untracked files (`--all`: whole files). It exits 1 when a rule is broken, so CI can run it too. When the profile has a rule with a `regex`, the gate runs this command after the checks. Files under `.chanto/` are skipped.
+- **Rules:** `chanto quality check` reports every line a rule's `regex` matches: the lines added since `HEAD` and untracked files, the commits from `--base <rev>` to `--head <rev>` (default `HEAD`), or whole files with `--all`. `--checks` also runs the `when = "turn"` checks (trusted folders only). It exits 1 when anything is found, so CI can run it too. Files under `.chanto/` are skipped.
+- **Secrets:** the same command scans those lines for keys, tokens and passwords with the detector that masks them in transcripts (known token formats and high-entropy `KEY=value` pairs). It's on in every profile unless `[secrets] scan = false`; the report shows the line with the secret masked. The gate runs `chanto quality check` after the checks whenever the scan is on or a rule has a `regex`.
+- **Before a push:** `chanto prime --hook` installs a git pre-push hook that runs `chanto quality check --checks` over the commits being pushed and stops the push when it fails. It never replaces a hook that isn't Chanto's, or writes into a `core.hooksPath` directory; it prints the line to add instead. `git push --no-verify` skips it, so run `chanto quality check --all` in CI too.
 - **Precedence:** the profile is read as a project layer just below `.chanto/config.toml`, so a `[guardrails]` setting there (or in `config.local.toml`) wins. In an untrusted folder its gate, checks and deny rules are skipped like any project `[guardrails]` section. `chanto doctor` lists it among the config layers.
 
 ## Learning from your corrections
