@@ -486,7 +486,9 @@ pub struct Env {
     fs: RwLock<Arc<dyn chanto_core::fs::Fs>>,
     pub todos: Mutex<Vec<Todo>>,
     pub shells: Mutex<HashMap<String, Arc<BgShell>>>,
-    shell_counter: AtomicU64,
+    /// Every background shell id handed out this session, so none is reused
+    /// after its shell ends (the model may still refer to it).
+    shell_ids: Mutex<std::collections::HashSet<String>>,
     pub browser: tokio::sync::Mutex<Option<BrowserSession>>,
     pub tools: Registry,
     pub session_tool_policy: RwLock<(Option<Vec<String>>, Vec<String>)>,
@@ -863,7 +865,7 @@ impl Env {
             fs: RwLock::new(Arc::new(chanto_core::fs::NativeFs)),
             todos: Default::default(),
             shells: Default::default(),
-            shell_counter: AtomicU64::new(1),
+            shell_ids: Mutex::default(),
             browser: tokio::sync::Mutex::new(None),
             tools: i.tools,
             session_tool_policy: RwLock::new((None, vec![])),
@@ -1236,8 +1238,16 @@ impl Env {
     pub fn set_vision(&self, b: bool) {
         self.vision.store(b, Ordering::Relaxed)
     }
-    pub fn next_shell_id(&self) -> u64 {
-        self.shell_counter.fetch_add(1, Ordering::Relaxed)
+    /// A new background shell id from `base`: `base` itself, or `base-2`,
+    /// `base-3`… when an earlier shell this session had it.
+    pub fn issue_shell_id(&self, base: &str) -> String {
+        let mut ids = self.shell_ids.lock().unwrap();
+        let id = std::iter::once(base.to_string())
+            .chain((2..).map(|n| format!("{base}-{n}")))
+            .find(|id| !ids.contains(id))
+            .unwrap();
+        ids.insert(id.clone());
+        id
     }
     /// The file system the file tools use.
     pub fn fs(&self) -> Arc<dyn chanto_core::fs::Fs> {
