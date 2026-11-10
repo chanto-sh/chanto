@@ -2,7 +2,7 @@
 
 Full reference for every feature. The [README](../README.md) is the overview.
 
-**Contents:** [Setup](#setup) · [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Outcome mode](#outcome-mode) · [Goals](#goals) · [Verified mode (guardrails)](#verified-mode-guardrails) · [Learning from your corrections](#learning-from-your-corrections) · [Usage insights](#usage-insights) · [Secrets](#secrets) · [Resource limits](#resource-limits) · [Computer use](#computer-use) · [Background agents and worktrees](#background-agents-and-worktrees) · [Background and remote runs](#background-and-remote-runs) · [Teams](#teams) · [Voice input](#voice-input) · [Server](#server) · [Claude Code and Codex compatibility](#claude-code-and-codex-compatibility) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [License](#license) · [ACP client](#acp-client) · [Managing spend](#managing-spend) · [Costs, budgets and telemetry](#costs-budgets-and-telemetry) · [Durable memory](#durable-memory) · [Permission modes](#permission-modes) · [Tools](#tools) · [Sandbox](#sandbox) · [Sessions and checkpoints](#sessions-and-checkpoints) · [Context management](#context-management)
+**Contents:** [Setup](#setup) · [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Outcome mode](#outcome-mode) · [Goals](#goals) · [Verified mode (guardrails)](#verified-mode-guardrails) · [Quality profile](#quality-profile) · [Learning from your corrections](#learning-from-your-corrections) · [Usage insights](#usage-insights) · [Secrets](#secrets) · [Resource limits](#resource-limits) · [Computer use](#computer-use) · [Background agents and worktrees](#background-agents-and-worktrees) · [Background and remote runs](#background-and-remote-runs) · [Teams](#teams) · [Voice input](#voice-input) · [Server](#server) · [Claude Code and Codex compatibility](#claude-code-and-codex-compatibility) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [License](#license) · [ACP client](#acp-client) · [Managing spend](#managing-spend) · [Costs, budgets and telemetry](#costs-budgets-and-telemetry) · [Durable memory](#durable-memory) · [Permission modes](#permission-modes) · [Tools](#tools) · [Sandbox](#sandbox) · [Sessions and checkpoints](#sessions-and-checkpoints) · [Context management](#context-management)
 
 A fast, local-first agentic coding CLI written in Rust, built around one rule: it has to prove its work before it calls the job done. It runs against **local models** through Ollama's native API or any OpenAI-compatible server (llama.cpp `llama-server`, LM Studio, vLLM, MLX, …), and against hosted models: the native **Anthropic Messages** and **OpenAI Responses** APIs, OpenAI-compatible services (OpenRouter, Gemini, DeepSeek, Groq and others; `chanto providers` lists them), and Amazon Bedrock, Google Vertex AI and Azure.
 
@@ -908,6 +908,50 @@ Project-level `[guardrails]` runs commands, so it only applies in trusted folder
 Checks (configured or detected), goal and outcome criteria, team checks and formatters run the way the agent's Bash commands do: in the [sandbox](#sandbox) when it's on, with the same writable places (the project, temporary directories, tool caches), and without secret-named environment variables. A check that needs a token gets it through `[secrets] pass_env`. Under a network allowlist or `network = "deny"`, a check that needs the network fails as a Bash command would. Language servers start without secret-named variables too. Detecting pytest never imports code from the project.
 
 **The oracle.** `oracle` is a built-in subagent type, next to `Explore` and `general-purpose`: a read-only reviewer (Read, Grep, Glob, read-only Bash, web) prompted to find bugs, wrong assumptions and broken callers in a plan or diff, and to answer `LGTM` when there's nothing to fix. It runs on `oracle_model` (top-level setting, e.g. a stronger hosted model), else the main model. The model can consult it any time through the Task tool (`subagent_type: "oracle"`). With `oracle = true` under `[guardrails]` and verified mode on, when the model first gives its final answer after changing files, the oracle reviews that turn's diff; its findings go back to the model once (it fixes what's real or says why not), and then the done-gate runs as usual. An `LGTM`, a failed review or an empty diff goes straight to the gate. A custom agent named `oracle` replaces the built-in.
+
+## Quality profile
+
+`chanto prime` sets up [verified mode](#verified-mode-guardrails) for a project in one step and writes the result to `.chanto/quality.toml`, a file you commit so everyone, and CI, checks the same things:
+
+1. **Finds the checks** the project declares: the detected test commands, plus clippy and `cargo fmt --check` (Rust), the `lint` script (npm), ruff and mypy when configured (Python), gofmt (Go), and gitleaks when it's installed.
+2. **Runs each one once.** A check that fails now is written with `when = "off"` and a note, so it doesn't fail every turn until you fix it. A check slower than 5 minutes gets `when = "nightly"`: it's kept out of the gate and left for scheduled CI.
+3. **Shows the profile and asks** before writing it (`--yes` skips the question, `--dry-run` prints it, `--force` replaces an existing one).
+
+Priming runs the project's commands, so it only works in a trusted folder, and they run the way the gate runs them: sandboxed, without secret-named variables.
+
+```toml
+version = 1
+
+[gate]                 # any [guardrails] setting: enabled, scope, oracle, protect_tests, max_attempts, timeout_secs
+enabled = true
+
+[[check]]
+name = "tests"
+run = "cargo test --quiet"
+when = "turn"          # turn (the gate runs it) | nightly | off
+baseline = "passing"   # what it did when primed; informational
+source = "detected"
+
+[[rule]]
+id = "no-unwrap"
+title = "No unwrap() in library code"
+regex = '\.unwrap\(\)'
+paths = ["src/**"]
+exclude = ["**/*_tests.rs"]
+new_code_only = true   # only lines this change adds; false: every line of every matching file
+
+[review]
+no_touch = ["vendor/**"]   # becomes an Edit(vendor/**) deny rule
+
+[secrets]
+exclude = ["tests/fixtures/**"]   # files with fake keys; `scan = false` turns the scan off
+```
+
+- **Checks:** the `when = "turn"` commands are the gate's `checks`. A profile with no `[[check]]` keeps the detected ones.
+- **Rules:** `chanto quality check` reports every line a rule's `regex` matches: the lines added since `HEAD` and untracked files, the commits from `--base <rev>` to `--head <rev>` (default `HEAD`), or whole files with `--all`. `--checks` also runs the `when = "turn"` checks (trusted folders only). It exits 1 when anything is found, so CI can run it too. Files under `.chanto/` are skipped.
+- **Secrets:** the same command scans those lines for keys, tokens and passwords with the detector that masks them in transcripts (known token formats and high-entropy `KEY=value` pairs). It's on in every profile unless `[secrets] scan = false`; the report shows the line with the secret masked. The gate runs `chanto quality check` after the checks whenever the scan is on or a rule has a `regex`.
+- **Before a push:** `chanto prime --hook` installs a git pre-push hook that runs `chanto quality check --checks` over the commits being pushed and stops the push when it fails. It never replaces a hook that isn't Chanto's, or writes into a `core.hooksPath` directory; it prints the line to add instead. `git push --no-verify` skips it, so run `chanto quality check --all` in CI too.
+- **Precedence:** the profile is read as a project layer just below `.chanto/config.toml`, so a `[guardrails]` setting there (or in `config.local.toml`) wins. In an untrusted folder its gate, checks and deny rules are skipped like any project `[guardrails]` section. `chanto doctor` lists it among the config layers.
 
 ## Learning from your corrections
 

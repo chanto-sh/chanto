@@ -1263,6 +1263,17 @@ impl Config {
                     launch.wants(if local_file(src) { "local" } else { "project" })
                 }),
         );
+        // The quality profile: a project layer just below .chanto/config.toml.
+        if launch.wants("project") {
+            match crate::quality::layer(cwd) {
+                Ok(Some((src, t))) => layers.push((src, true, t)),
+                Ok(None) => {}
+                Err(e) if diagnostic => cfg
+                    .diagnostics
+                    .push(format!("Skipped the quality profile: {e:#}; fix the file")),
+                Err(e) => return Err(e),
+            }
+        }
         for p in [
             cwd.join(".chanto").join("config.toml"),
             cwd.join(".chanto").join("config.local.toml"),
