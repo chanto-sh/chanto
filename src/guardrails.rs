@@ -36,6 +36,9 @@ pub struct GuardrailsConfig {
     /// Before the done-gate, have the `oracle` subagent review the turn's
     /// diff once; its findings go back to the model (default false).
     pub oracle: Option<bool>,
+    /// Checks added after `checks` (or the detected ones): the quality
+    /// profile's pattern rules (`chanto quality check`).
+    pub quality_checks: Vec<String>,
 }
 
 /// Which tests the done-gate runs.
@@ -87,6 +90,9 @@ impl GuardrailsConfig {
         }
         if o.oracle.is_some() {
             self.oracle = o.oracle;
+        }
+        if !o.quality_checks.is_empty() {
+            self.quality_checks = o.quality_checks;
         }
     }
 }

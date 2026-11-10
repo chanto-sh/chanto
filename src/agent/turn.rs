@@ -325,6 +325,13 @@ impl Agent {
         } else {
             guard.checks.clone()
         };
+        if verify {
+            for c in &guard.quality_checks {
+                if !verify_checks.contains(c) {
+                    verify_checks.push(c.clone());
+                }
+            }
+        }
         if let Some((extra, _)) = &forced {
             for c in extra {
                 if !verify_checks.contains(c) {
