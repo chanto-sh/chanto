@@ -1,0 +1,88 @@
+# Runs the GitHub Action from this checkout (uses: ./action) against a fixture
+# project, the way a user's workflow runs it: the installer, the composite
+# steps, quality mode, annotations and outputs. The unit tests in
+# action/tests cover the logic; this catches what only a real run shows (an
+# input or path that doesn't reach the script, a broken install).
+#
+# Quality mode needs no model or key, so this runs on every pull request that
+# touches the action, forks included. Review and @chanto commands need a model
+# and a real pull request; they're exercised in a sandbox repository instead.
+name: action e2e
+on:
+  pull_request:
+    paths: [action/**, .github/workflows/action-e2e.yml]
+  push:
+    branches: [main]
+    paths: [action/**, .github/workflows/action-e2e.yml]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: action-e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  quality:
+    name: quality mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Make a fixture project
+        run: |
+          set -euo pipefail
+          mkdir -p e2e-fixture/.chanto
+          cd e2e-fixture
+          cat > .chanto/quality.toml <<'TOML'
+          version = 1
+
+          [[rule]]
+          id = "no-todo"
+          title = "No TODOs"
+          regex = 'TODO'
+          TOML
+          echo "fn main() {}" > main.rs
+          git init -q
+          git -c user.name=e2e -c user.email=e2e@example.com add -A
+          git -c user.name=e2e -c user.email=e2e@example.com commit -qm fixture
+      - name: Check the clean project
+        id: clean
+        uses: ./action
+        with:
+          quality: "true"
+          quality_scope: all
+          working_directory: e2e-fixture
+      - name: Add a TODO and a token
+        run: |
+          # Built from pieces so this file holds no token-shaped string.
+          token="ghp_$(printf 'a1B2c3D4%.0s' 1 2 3 4 5)"
+          printf '// TODO remove\nconst KEY: &str = "%s";\n' "$token" >> e2e-fixture/main.rs
+      - name: Check the broken project
+        id: broken
+        continue-on-error: true
+        uses: ./action
+        with:
+          quality: "true"
+          quality_scope: all
+          working_directory: e2e-fixture
+      - name: Expect a pass, then two findings
+        env:
+          CLEAN_PASSED: ${{ steps.clean.outputs.passed }}
+          CLEAN_FINDINGS: ${{ steps.clean.outputs.findings }}
+          BROKEN_OUTCOME: ${{ steps.broken.outcome }}
+          BROKEN_PASSED: ${{ steps.broken.outputs.passed }}
+          BROKEN_FINDINGS: ${{ steps.broken.outputs.findings }}
+        run: |
+          set -u
+          fail=0
+          check() { if [ "$2" != "$3" ]; then echo "::error::$1: expected $3, got '$2'"; fail=1; fi; }
+          check "clean project passed" "$CLEAN_PASSED" true
+          check "clean project findings" "$CLEAN_FINDINGS" 0
+          check "broken project step" "$BROKEN_OUTCOME" failure
+          check "broken project passed" "$BROKEN_PASSED" false
+          check "broken project findings (TODO and token)" "$BROKEN_FINDINGS" 2
+          exit $fail

@@ -63,8 +63,10 @@ def escape(s: str, prop: bool = False) -> str:
     return s
 
 
-def annotations(output: str) -> list[str]:
-    """`::error` workflow commands for each finding in a report."""
+def annotations(output: str, prefix: str = "") -> list[str]:
+    """`::error` workflow commands for each finding in a report. `prefix` is
+    the checked directory relative to the repository, which GitHub's file
+    paths are relative to."""
     out, rule, title = [], "", ""
     for line in output.splitlines():
         m = RULE.match(line)
@@ -74,7 +76,7 @@ def annotations(output: str) -> list[str]:
         m = VIOLATION.match(line)
         if m and rule:
             out.append(
-                f"::error file={escape(m['file'], True)},line={m['line']},"
+                f"::error file={escape(prefix + m['file'], True)},line={m['line']},"
                 f"title={escape(f'{rule}: {title}', True)}::{escape(m['text'])}"
             )
     return out
@@ -97,8 +99,8 @@ def trust(home: Path, workspace: Path) -> None:
     (home / "trusted.json").write_text(json.dumps([str(workspace.resolve())]))
 
 
-def ensure_commit(sha: str, runner: Callable[..., subprocess.CompletedProcess]) -> bool:
-    ok = lambda *a: runner(["git", *a], capture_output=True, text=True).returncode == 0
+def ensure_commit(sha: str, runner: Callable[..., subprocess.CompletedProcess], cwd: Path | None = None) -> bool:
+    ok = lambda *a: runner(["git", *a], capture_output=True, text=True, cwd=cwd).returncode == 0
     return ok("cat-file", "-e", f"{sha}^{{commit}}") or (
         ok("fetch", "--no-tags", "--depth=1", "origin", sha) and ok("cat-file", "-e", f"{sha}^{{commit}}")
     )
@@ -106,7 +108,18 @@ def ensure_commit(sha: str, runner: Callable[..., subprocess.CompletedProcess]) 
 
 def main(env: dict[str, str] | None = None, runner=subprocess.run) -> int:
     env = dict(os.environ if env is None else env)
-    workspace = Path(env.get("GITHUB_WORKSPACE") or ".")
+    workspace = Path(env.get("GITHUB_WORKSPACE") or ".").resolve()
+    # The directory to check: the repository, or a project inside it.
+    sub = (env.get("INPUT_WORKING_DIRECTORY") or ".").strip() or "."
+    root = (workspace / sub).resolve()
+    if root != workspace and workspace not in root.parents:
+        print(f"::error::working_directory {sub!r} is outside the repository.")
+        return 1
+    prefix = "" if root == workspace else f"{root.relative_to(workspace).as_posix()}/"
+    scope = (env.get("INPUT_QUALITY_SCOPE") or "changes").strip().lower()
+    if scope not in ("changes", "all"):
+        print(f"::error::quality_scope must be 'changes' or 'all', not {scope!r}.")
+        return 1
     event_name = env.get("GITHUB_EVENT_NAME", "")
     event: dict = {}
     if env.get("GITHUB_EVENT_PATH"):
@@ -118,26 +131,33 @@ def main(env: dict[str, str] | None = None, runner=subprocess.run) -> int:
     if args is None:
         print(f"::error::{reason}")
         return 1
-    if not (workspace / PROFILE).exists():
-        print(f"::error::No {PROFILE} in this repository. Run `chanto prime` locally and commit the file.")
+    if scope == "all":
+        args, reason = ["--all"], "every file"
+    if not (root / PROFILE).exists():
+        where = "this repository" if not prefix else prefix.rstrip("/")
+        print(f"::error::No {PROFILE} in {where}. Run `chanto prime` there and commit the file.")
         return 1
     help_text = runner(["chanto", "--help"], capture_output=True, text=True).stdout
     if not supports_quality(help_text):
         print("::error::This Chanto release has no `chanto quality`; set `version` to a newer release or `latest`.")
         return 1
-    if "--base" in args and not ensure_commit(args[1], runner):
+    if "--base" in args and not ensure_commit(args[1], runner, root):
         print(f"::error::Can't find commit {args[1]}; check out with `fetch-depth: 0`.")
         return 1
-    trust(Path(env.get("CHANTO_HOME") or Path(env.get("RUNNER_TEMP", "/tmp")) / "chanto-home"), workspace)
+    trust(Path(env.get("CHANTO_HOME") or Path(env.get("RUNNER_TEMP", "/tmp")) / "chanto-home"), root)
     cmd = ["chanto", "quality", "check", *args]
     if env.get("INPUT_QUALITY_CHECKS", "true").lower() != "false":
         cmd.append("--checks")
     print(f"Checking {reason}: {' '.join(cmd)}", flush=True)
-    r = runner(cmd, capture_output=True, text=True, cwd=workspace, env=env)
+    r = runner(cmd, capture_output=True, text=True, cwd=root, env=env)
     output = (r.stdout or "") + (r.stderr or "")
     print(output, end="" if output.endswith("\n") else "\n")
-    for a in annotations(output):
+    found = annotations(output, prefix)
+    for a in found:
         print(a)
+    if env.get("GITHUB_OUTPUT"):
+        with open(env["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write(f"findings={len(found)}\npassed={'true' if r.returncode == 0 else 'false'}\n")
     if env.get("GITHUB_STEP_SUMMARY"):
         with open(env["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as f:
             f.write(summary(reason, output, r.returncode == 0))

@@ -54,6 +54,10 @@ class Report(unittest.TestCase):
         self.assertIn("title=secrets%3A looks like a key%2C token or password", a[2])
         self.assertNotIn("✓", "".join(a))
 
+    def test_annotations_are_relative_to_the_repository(self):
+        a = quality.annotations(REPORT, "services/api/")
+        self.assertTrue(a[0].startswith("::error file=services/api/src/a.rs,line=12,"), a[0])
+
     def test_no_findings_no_annotations(self):
         self.assertEqual(quality.annotations("Quality check: 1 rule and the secrets scan, nothing found."), [])
 
@@ -112,6 +116,42 @@ class Main(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertNotIn("--checks", self.calls[-1])
         self.assertIn("✅", (self.tmp / "summary.md").read_text())
+
+    def test_scope_all_and_outputs(self):
+        out = self.tmp / "out.txt"
+        code = quality.main(self.env(INPUT_QUALITY_SCOPE="all", GITHUB_OUTPUT=str(out)), self.runner())
+        self.assertEqual(code, 1)
+        self.assertEqual(self.calls[-1], ["chanto", "quality", "check", "--all", "--checks"])
+        self.assertIn("findings=3\npassed=false\n", out.read_text())
+        self.assertFalse(any(c[:2] == ["git", "cat-file"] for c in self.calls), "no base needed")
+
+    def test_working_directory(self):
+        sub = self.ws / "services" / "api"
+        (sub / ".chanto").mkdir(parents=True)
+        (sub / ".chanto/quality.toml").write_text("version = 1\n")
+        seen = {}
+        base = self.runner()
+
+        def run(cmd, **kw):
+            if cmd[:2] == ["chanto", "quality"]:
+                seen["cwd"] = kw.get("cwd")
+            return base(cmd, **kw)
+
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            code = quality.main(self.env(INPUT_WORKING_DIRECTORY="services/api"), run)
+        self.assertEqual(code, 1)
+        self.assertEqual(Path(seen["cwd"]), sub.resolve())
+        self.assertIn("::error file=services/api/src/a.rs,line=12,", buf.getvalue())
+        trusted = json.loads((self.tmp / "home/trusted.json").read_text())
+        self.assertEqual(trusted, [str(sub.resolve())])
+
+    def test_bad_scope_and_directory_are_refused(self):
+        self.assertEqual(quality.main(self.env(INPUT_QUALITY_SCOPE="some"), self.runner()), 1)
+        self.assertEqual(quality.main(self.env(INPUT_WORKING_DIRECTORY="../elsewhere"), self.runner()), 1)
+        self.assertEqual(quality.main(self.env(INPUT_WORKING_DIRECTORY="missing"), self.runner()), 1)
+        self.assertFalse(any(c[:2] == ["chanto", "quality"] for c in self.calls))
 
     def test_refusals(self):
         self.assertEqual(quality.main(self.env(GITHUB_EVENT_NAME="pull_request_target"), self.runner()), 1)
