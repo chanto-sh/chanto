@@ -1,6 +1,6 @@
-name: Chanto
+name: Chanto Agent
 description: Check pull requests against your repository's quality profile, review them, or run the Chanto coding agent from comments.
-author: dphang
+author: chanto-sh
 branding:
   icon: terminal
   color: orange

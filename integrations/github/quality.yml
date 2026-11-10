@@ -27,8 +27,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # Pin to a reviewed commit of chanto-sh/chanto.
-      - uses: chanto-sh/chanto/action@main
+      - uses: chanto-sh/chanto-action@b5d7d206eeed246dabaed3a5f7ff24f849568b79 # v1.0.1
         with:
           quality: "true"
           # quality_checks: "false"   # only the rules and the secrets scan, not the profile's checks
