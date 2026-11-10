@@ -265,3 +265,52 @@ async fn dropping_a_running_command_stops_it() {
         "the command's child {pid} outlived the dropped tool call"
     );
 }
+
+#[test]
+fn background_shells_get_readable_ids() {
+    assert_eq!(
+        readable_id(Some("Build release binary"), "cargo build", "bash"),
+        "build-release-binary"
+    );
+    assert_eq!(readable_id(None, "npm run dev", "bash"), "npm-run-dev");
+    assert_eq!(
+        readable_id(None, "cd web && PORT=3000 npm run dev", "bash"),
+        "npm-run-dev"
+    );
+    assert_eq!(
+        readable_id(None, "/usr/bin/python3 -m http.server 8000", "bash"),
+        "python3-m-http-server"
+    );
+    assert_eq!(
+        readable_id(Some("  "), "sleep 30; echo done", "bash"),
+        "sleep-30"
+    );
+    assert_eq!(
+        readable_id(Some("Watch CI for PR #234 until it finishes"), "", "x"),
+        "watch-ci-for-pr-234"
+    );
+    assert_eq!(readable_id(None, "$(x)", "monitor"), "monitor");
+    assert_eq!(readable_id(None, "", "monitor"), "monitor");
+    assert!(readable_id(Some(&"a".repeat(60)), "", "x").len() <= MAX_ID);
+}
+
+#[test]
+fn shell_ids_are_never_reused_in_a_session() {
+    let (ctx, ..) = setup();
+    assert_eq!(ctx.env.issue_shell_id("npm-run-dev"), "npm-run-dev");
+    assert_eq!(ctx.env.issue_shell_id("npm-run-dev"), "npm-run-dev-2");
+    assert_eq!(ctx.env.issue_shell_id("npm-run-dev"), "npm-run-dev-3");
+    assert_eq!(ctx.env.issue_shell_id("tests"), "tests");
+}
+
+#[test]
+fn the_start_line_names_the_shell_once() {
+    assert_eq!(
+        started_line("build-release-binary", "Build release binary"),
+        "Started in background · Build release binary (build-release-binary)"
+    );
+    assert_eq!(
+        started_line("npm-run-dev", "cd web && npm run dev"),
+        "Started in background · npm-run-dev\ncd web && npm run dev"
+    );
+}

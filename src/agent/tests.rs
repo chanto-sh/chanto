@@ -3006,7 +3006,7 @@ async fn bash_output_waits_and_foreground_sleep_is_refused() {
     let dir = tmpdir("bg-wait");
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 1; echo ready", "run_in_background": true}))}),
-        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20}))}),
+        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "sleep-1", "wait_secs": 20}))}),
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 30 && echo done"}))}),
         json!({"content": "Done."}),
     ])
@@ -3047,7 +3047,7 @@ async fn a_failure_from_a_background_run_still_bounces_the_finish() {
         json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_x", "run_in_background": true}))}),
         // Output can arrive in several chunks. Wait for the complete failure
         // line instead of treating the first separator or traceback as final.
-        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20, "filter": r"^FAIL: test_f \([^)]+\)$"}))}),
+        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "python3-m-unittest", "wait_secs": 20, "filter": r"^FAIL: test_f \([^)]+\)$"}))}),
         json!({"content": "Done."}),
         json!({"content": "The existing test is failing, so the work is not done."}),
     ])
@@ -4348,7 +4348,7 @@ async fn monitor_lines_reach_the_model_and_the_run_waits_for_them() {
     assert_eq!(crate::tools::monitor::active(&env), 0);
     let all = seen.lock().unwrap().last().unwrap()["messages"].to_string();
     assert!(
-        all.contains("Monitor monitor_1 (test watch) output"),
+        all.contains("Monitor test-watch (test watch) output"),
         "{all}"
     );
     assert!(
@@ -4361,7 +4361,7 @@ async fn monitor_lines_reach_the_model_and_the_run_waits_for_them() {
         env.shells
             .lock()
             .unwrap()
-            .get("monitor_1")
+            .get("test-watch")
             .is_some_and(|s| s.monitor.as_deref() == Some("test watch"))
     );
 }
