@@ -215,3 +215,144 @@ fn detection_reads_the_installer_marker_and_cargo_records() {
     assert_eq!(InstallMethod::detect(&exe), InstallMethod::Installer);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A one-shot HTTP server on localhost answering with `status` and `body`.
+async fn serve_once(status: &'static str, body: &'static str) -> String {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/latest", listener.local_addr().unwrap());
+    tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = vec![0; 4096];
+        let _ = stream.read(&mut request).await;
+        let _ = stream
+            .write_all(
+                format!(
+                    "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            )
+            .await;
+    });
+    url
+}
+
+fn temp_home() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "chanto-update-refresh-{}",
+        uuid::Uuid::new_v4().simple()
+    ))
+}
+
+#[tokio::test]
+async fn bad_release_responses_are_errors() {
+    let two = Duration::from_secs(2);
+    let url = serve_once("200 OK", r#"{"name":"no tag"}"#).await;
+    assert!(latest_version_at(&url, two).await.is_err());
+    let url = serve_once("200 OK", "{\"tag_name\":\"v1.2.3\\u001b[31m\"}").await;
+    let err = latest_version_at(&url, two).await.unwrap_err();
+    assert!(err.to_string().contains("invalid release version"), "{err}");
+    let url = serve_once("500 Internal Server Error", "{}").await;
+    assert!(latest_version_at(&url, two).await.is_err());
+}
+
+#[tokio::test]
+async fn a_due_check_records_the_attempt_and_the_release() {
+    let home = temp_home();
+    let path = home.join("update-check.json");
+    let url = serve_once("200 OK", r#"{"tag_name":"v42.0.0"}"#).await;
+    let cache = refresh(&home, &path, 1_000, &url).await.unwrap();
+    assert_eq!(cache.checked_at, 1_000);
+    assert_eq!(cache.latest.as_deref(), Some("v42.0.0"));
+    let saved: Cache = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved.latest.as_deref(), Some("v42.0.0"));
+    assert!(!home.join("update-check.lock").exists(), "lock released");
+    // Within a day another run takes the cached answer without asking.
+    let cache = refresh(&home, &path, 2_000, "http://127.0.0.1:1/never")
+        .await
+        .unwrap();
+    assert_eq!(cache.checked_at, 1_000);
+    assert_eq!(cache.latest.as_deref(), Some("v42.0.0"));
+    // Offline after a day: the attempt is still recorded, the old release kept.
+    let cache = refresh(&home, &path, 1_000 + 86_400, "http://127.0.0.1:1/never")
+        .await
+        .unwrap();
+    assert_eq!(cache.checked_at, 1_000 + 86_400);
+    assert_eq!(cache.latest.as_deref(), Some("v42.0.0"));
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[tokio::test]
+async fn a_held_lock_keeps_a_second_check_quiet() {
+    let home = temp_home();
+    std::fs::create_dir_all(&home).unwrap();
+    let path = home.join("update-check.json");
+    let lock = home.join("update-check.lock");
+    std::fs::write(&lock, "").unwrap();
+    assert!(
+        refresh(&home, &path, 5, "http://127.0.0.1:1/never")
+            .await
+            .is_none()
+    );
+    assert!(lock.exists(), "a fresh lock belongs to someone else");
+    assert!(!path.exists());
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[tokio::test]
+async fn an_unwritable_home_keeps_the_check_quiet() {
+    let home = temp_home();
+    std::fs::create_dir_all(home.parent().unwrap()).unwrap();
+    // A file where the home directory should be.
+    std::fs::write(&home, "").unwrap();
+    let path = home.join("update-check.json");
+    assert!(
+        refresh(&home, &path, 5, "http://127.0.0.1:1/never")
+            .await
+            .is_none()
+    );
+    std::fs::remove_file(&home).unwrap();
+}
+
+#[test]
+fn announcing_queues_one_notice_per_release_and_known_reads_the_cache() {
+    let _g = crate::compat::TEST_HOME_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let exe = std::path::PathBuf::from("/usr/local/bin/chanto");
+    take_notice();
+    announce("v0.0.1", &exe);
+    assert!(take_notice().is_none(), "an older release says nothing");
+    announce("v97.0.0", &exe);
+    let notice = take_notice().unwrap();
+    assert!(notice.contains("v97.0.0"), "{notice}");
+    assert!(take_notice().is_none(), "taken once");
+    announce("v97.0.0", &exe);
+    assert!(take_notice().is_none(), "the same release stays quiet");
+
+    let home = temp_home();
+    std::fs::create_dir_all(&home).unwrap();
+    let previous = std::env::var_os("CHANTO_HOME");
+    // SAFETY: test-only, under TEST_HOME_LOCK.
+    unsafe { std::env::set_var("CHANTO_HOME", &home) };
+    let none = known();
+    std::fs::write(
+        home.join("update-check.json"),
+        r#"{"checked_at":1,"latest":"v98.0.0"}"#,
+    )
+    .unwrap();
+    let text = known();
+    match previous {
+        // SAFETY: as above.
+        Some(v) => unsafe { std::env::set_var("CHANTO_HOME", v) },
+        None => unsafe { std::env::remove_var("CHANTO_HOME") },
+    }
+    assert!(none.is_none());
+    assert!(text.unwrap().contains("v98.0.0"));
+    // The startup line counts as the announcement.
+    announce("v98.0.0", &exe);
+    assert!(take_notice().is_none());
+    assert!(epoch_secs() > 1_700_000_000);
+    std::fs::remove_dir_all(&home).unwrap();
+}
