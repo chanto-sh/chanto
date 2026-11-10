@@ -1,1 +1,0 @@
-- **A failed voice recording says why more reliably.** When the recorder stopped with an error, such as a busy or missing microphone, the message could read "no audio was captured" instead of the recorder's own reason. Chanto now waits briefly for the recorder's last output before reporting the failure.

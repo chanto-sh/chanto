@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.1.16 (November 10, 2026)
+
+- **A failed voice recording says why more reliably.** When the recorder stopped with an error, such as a busy or missing microphone, the message could read "no audio was captured" instead of the recorder's own reason. Chanto now waits briefly for the recorder's last output before reporting the failure.
+- **Quality profile.** `chanto prime` finds a project's checks (tests, lint, format, typecheck), runs each once, and writes `.chanto/quality.toml`, which turns verified mode on with those checks: ones that fail now are written turned off, and slow ones are kept for nightly CI. The profile can also hold pattern rules (a regex, the paths it covers, and whether only new lines count); `chanto quality check` reports the lines that break them and the gate runs it, so a convention fails a change instead of being a suggestion. It also scans the lines a change adds for keys, tokens and passwords (`[secrets] exclude` for fixtures), and `chanto prime --hook` installs a pre-push hook that runs all of it before each push. `[review] no_touch` paths can't be edited. It only applies in trusted folders.
+- **Quality checks in CI.** The GitHub Action's `quality: "true"` mode runs `chanto quality check --checks` on what a pull request, push or merge group changes, without a model or API key, so pull requests from forks are checked too. Findings are annotated on their lines (secrets masked) and summarized in the job summary. `chanto github install` now also writes `.github/workflows/chanto-quality.yml`, and the action has a README covering every mode.
+
 ## v0.1.15 (November 2, 2026)
 
 - **Security: approving an `.mcp.json` server now covers that server as it was.** A project server that's added or changed later, including by a pull, no longer starts until you approve it with `/mcp enable`, even in a trusted folder. Upgrade recommended.
