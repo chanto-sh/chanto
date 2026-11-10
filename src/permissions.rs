@@ -1457,12 +1457,13 @@ fn part_sends_data_out(cmd: &str) -> bool {
     .is_match(cmd)
 }
 
-/// Whether this repository's own git config names programs for git to run: diff
-/// and filter drivers, an fsmonitor, a pager or an included file. A "read-only"
-/// `git diff` runs them. Few repositories have any, and Git LFS's are standard.
-fn repo_config_runs_programs(cwd: &Path) -> bool {
+/// What this repository's own git config can make git run: diff and filter
+/// drivers, an fsmonitor, a pager or an included file (which a "read-only"
+/// `git diff` runs), or only hooks (`core.hooksPath`). Git LFS's drivers are
+/// standard and don't count.
+fn repo_config_programs(cwd: &Path) -> RepoPrograms {
     let Some(dotgit) = cwd.ancestors().map(|d| d.join(".git")).find(|p| p.exists()) else {
-        return false;
+        return RepoPrograms::None;
     };
     let gitdir = if dotgit.is_dir() {
         dotgit
@@ -1472,7 +1473,7 @@ fn repo_config_runs_programs(cwd: &Path) -> bool {
             .ok()
             .and_then(|t| t.strip_prefix("gitdir:").map(|p| p.trim().to_string()))
         else {
-            return true;
+            return RepoPrograms::Any;
         };
         dotgit.parent().unwrap_or(cwd).join(dir)
     };
@@ -1482,10 +1483,18 @@ fn repo_config_runs_programs(cwd: &Path) -> bool {
     [gitdir.join("config.worktree"), common.join("config")]
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
-        .any(|config| config_runs_programs(&config))
+        .map(|config| config_programs(&config))
+        .max()
+        .unwrap_or(RepoPrograms::None)
 }
 
+#[cfg(test)]
 fn config_runs_programs(config: &str) -> bool {
+    config_programs(config) != RepoPrograms::None
+}
+
+fn config_programs(config: &str) -> RepoPrograms {
+    let mut found = RepoPrograms::None;
     let mut section = String::new();
     for line in config.lines() {
         let line = line.trim().to_ascii_lowercase();
@@ -1495,7 +1504,7 @@ fn config_runs_programs(config: &str) -> bool {
                 .trim_end_matches(']')
                 .to_string();
             if section.starts_with("include") {
-                return true;
+                return RepoPrograms::Any;
             }
             continue;
         }
@@ -1506,29 +1515,176 @@ fn config_runs_programs(config: &str) -> bool {
             "filter" => {
                 !section.contains("\"lfs\"") && matches!(key, "clean" | "smudge" | "process")
             }
+            "core" if key == "hookspath" => {
+                found = RepoPrograms::HooksOnly;
+                false
+            }
             "core" => {
-                matches!(
-                    key,
-                    "pager" | "sshcommand" | "gitproxy" | "hookspath" | "attributesfile"
-                ) || (key == "fsmonitor" && !matches!(value, "" | "false" | "0" | "no" | "off"))
+                matches!(key, "pager" | "sshcommand" | "gitproxy" | "attributesfile")
+                    || (key == "fsmonitor" && !matches!(value, "" | "false" | "0" | "no" | "off"))
             }
             "pager" => !matches!(value, "" | "false" | "true" | "0" | "1"),
             _ => false,
         };
         if runs {
-            return true;
+            return RepoPrograms::Any;
         }
     }
-    false
+    found
 }
 
 /// A git command in a repository that would have git run the repository's programs.
 fn git_would_run_repo_programs(cmd: &str, cwd: &Path) -> bool {
     use std::sync::OnceLock;
     static GIT: OnceLock<regex::Regex> = OnceLock::new();
-    GIT.get_or_init(|| regex::Regex::new(r"(^|[\s;&|(`])git\s").unwrap())
+    if !GIT
+        .get_or_init(|| regex::Regex::new(r"(^|[\s;&|(`])git\s").unwrap())
         .is_match(cmd)
-        && repo_config_runs_programs(cwd)
+    {
+        return false;
+    }
+    match repo_config_programs(cwd) {
+        RepoPrograms::None => false,
+        RepoPrograms::Any => true,
+        // Hooks only run for commands that commit, check out, merge, push or
+        // write the index; a command made only of reads never starts one.
+        RepoPrograms::HooksOnly => {
+            let hooks = repo_hooks(cwd);
+            split_shell(cmd)
+                .iter()
+                .filter(|p| GIT.get().is_some_and(|g| g.is_match(&format!(" {p}"))))
+                .any(|p| match (git_hooks_run_by(p), &hooks) {
+                    (None, _) | (Some(_), None) => true,
+                    (Some(runs), Some(present)) => runs.iter().any(|h| {
+                        if *h == "*" {
+                            !present.is_empty()
+                        } else {
+                            present.iter().any(|p| p == h)
+                        }
+                    }),
+                })
+        }
+    }
+}
+
+/// The file names in the repository's `core.hooksPath` directory (empty when
+/// it doesn't exist), or None when they can't be worked out.
+fn repo_hooks(cwd: &Path) -> Option<Vec<String>> {
+    let dotgit = cwd
+        .ancestors()
+        .map(|d| d.join(".git"))
+        .find(|p| p.exists())?;
+    let config = std::fs::read_to_string(dotgit.join("config")).ok()?;
+    let mut section = String::new();
+    let mut hooks = None;
+    for line in config.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            section = line.trim_matches(['[', ']']).to_ascii_lowercase();
+        } else if section == "core"
+            && let Some((k, v)) = line.split_once('=')
+            && k.trim().eq_ignore_ascii_case("hookspath")
+        {
+            hooks = Some(v.trim().trim_matches('"').to_string());
+        }
+    }
+    let hooks = hooks.filter(|h| !h.is_empty() && !h.starts_with('~') && !h.contains('$'))?;
+    let dir = dotgit.parent().unwrap_or(cwd).join(hooks);
+    match std::fs::read_dir(&dir) {
+        Ok(entries) => Some(
+            entries
+                .flatten()
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect(),
+        ),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Some(Vec::new()),
+        Err(_) => None,
+    }
+}
+
+/// What a repository's own git config can make git run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum RepoPrograms {
+    None,
+    /// Only hooks (`core.hooksPath`, as husky and many repositories set).
+    HooksOnly,
+    /// Programs that read-only commands run too: drivers, pagers, fsmonitor.
+    Any,
+}
+
+/// Every hook git can run, for commands that may run any of them.
+const ANY_HOOK: &[&str] = &["*"];
+
+/// The hooks a simple command (from [`split_shell`]) can make git run, or
+/// None when that can't be said: it isn't plainly `git <subcommand>`, it
+/// passes a global option (`-c` could point git anywhere), or the
+/// subcommand is unknown (it may be an alias that runs a shell).
+fn git_hooks_run_by(p: &str) -> Option<&'static [&'static str]> {
+    let words: Vec<&str> = p.split_whitespace().collect();
+    let (first, rest) = words.split_first()?;
+    if first.rsplit('/').next() != Some("git") || first.contains('=') {
+        return None;
+    }
+    let (sub, args) = rest.split_first()?;
+    let has = |flags: &[&str]| args.iter().any(|a| flags.contains(a));
+    const INDEX: &[&str] = &[
+        "post-index-change",
+        "reference-transaction",
+        "post-checkout",
+    ];
+    const REFS: &[&str] = &["reference-transaction"];
+    Some(match *sub {
+        "log" | "show" | "grep" | "rev-parse" | "merge-base" | "rev-list" | "cat-file"
+        | "ls-files" | "ls-tree" | "ls-remote" | "archive" | "blame" | "annotate" | "describe"
+        | "shortlog" | "show-ref" | "for-each-ref" | "name-rev" | "whatchanged"
+        | "count-objects" | "check-ignore" | "cherry" | "range-diff" | "diff-tree" | "version"
+        | "help" | "remote" | "config" | "reflog" => &[],
+        // They can refresh and rewrite the index.
+        "status" | "diff" => &["post-index-change"],
+        "tag" | "branch" => {
+            let listing = args.is_empty()
+                || has(&["-l", "--list", "--show-current"])
+                || (*sub == "branch" && args.iter().all(|a| a.starts_with('-')));
+            let changes = has(&[
+                "-d",
+                "-D",
+                "--delete",
+                "-m",
+                "-M",
+                "--move",
+                "-c",
+                "-C",
+                "--copy",
+                "-f",
+                "--force",
+                "-u",
+                "--set-upstream-to",
+                "--unset-upstream",
+            ]);
+            if listing && !changes { &[] } else { REFS }
+        }
+        "stash" if matches!(args.first().copied(), Some("list" | "show")) => &[],
+        "add" | "rm" | "mv" | "restore" | "reset" | "stash" | "update-index" | "read-tree" => INDEX,
+        "checkout" | "switch" | "worktree" => INDEX,
+        "update-ref" => REFS,
+        "commit" => &[
+            "pre-commit",
+            "prepare-commit-msg",
+            "commit-msg",
+            "post-commit",
+            "post-rewrite",
+            "reference-transaction",
+            "post-index-change",
+            "pre-auto-gc",
+        ],
+        "push" => &["pre-push", "reference-transaction"],
+        "fetch" => &["reference-transaction", "pre-auto-gc"],
+        "gc" => &["pre-auto-gc"],
+        "merge" | "pull" | "rebase" | "cherry-pick" | "revert" | "am" | "clone" | "init" => {
+            ANY_HOOK
+        }
+        _ => return None,
+    })
 }
 
 pub fn dangerous_reason(cmd: &str) -> Option<String> {
