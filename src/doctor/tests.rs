@@ -57,3 +57,14 @@ fn readable_report_and_home_paths() {
     assert!(text.contains("← config.toml"));
     assert!(!text.contains("{\"") && !text.contains('\u{1b}'));
 }
+
+#[test]
+fn home_is_shortened_only_when_known() {
+    assert_eq!(shorten("/bin/chanto", ""), "/bin/chanto");
+    assert_eq!(shorten("/h/.chanto", "/h"), "~/.chanto");
+    assert_eq!(shorten("/hx/.chanto", "/h"), "/hx/.chanto");
+    assert_eq!(
+        shorten(r"C:\Users\me\.chanto\config.toml", r"C:\Users\me"),
+        r"~/.chanto\config.toml"
+    );
+}

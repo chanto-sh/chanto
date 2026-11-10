@@ -1,0 +1,1 @@
+- **`chanto doctor` paths on Windows.** The report shortened every absolute path to `~/…` on Windows, where `HOME` isn't set, so it showed paths that don't exist. It now finds the profile folder the way the rest of Chanto does, shortens only paths that are really inside it (with either separator), and leaves the rest as they are.
