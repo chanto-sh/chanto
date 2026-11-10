@@ -185,7 +185,7 @@ fn render_shows_every_part_of_a_full_report() {
         "sandbox": "macOS seatbelt",
         "folder_trusted": true,
         "error_reports": "off (default)",
-        "mcp_sources": {"fs": "/x"},
+        "mcp_sources": {"fs": "/srv/mcp.json"},
         "local_servers": [{"provider": "ollama", "model": "qwen", "source": "http://localhost:11434"}],
         "warnings": ["careful"],
     });
@@ -203,7 +203,8 @@ fn render_shows_every_part_of_a_full_report() {
         "account            someone",
         "Network: off",
         "Folder trusted: yes",
-        "fs  ← /x",
+        "fs  ← ",
+        "srv/mcp.json",
         "ollama       qwen  ← http://localhost:11434",
         "  careful",
     ] {
