@@ -241,6 +241,12 @@ async fn recap_needs_a_conversation() {
 
 #[tokio::test]
 async fn cd_moves_the_session_and_its_file() {
+    // `/cd` moves the whole process (working directory, project root), and the
+    // directory is removed afterwards: run it in a child of its own so other
+    // tests never start a command in a directory that's gone.
+    if crate::test_support::isolated("session_cmds::tests::cd_moves_the_session_and_its_file") {
+        return;
+    }
     let _g = crate::compat::TEST_HOME_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
@@ -274,6 +280,14 @@ async fn cd_moves_the_session_and_its_file() {
 
 #[tokio::test]
 async fn cd_into_an_untrusted_directory_asks_first() {
+    // `/cd` moves the whole process (working directory, project root), and the
+    // directory is removed afterwards: run it in a child of its own so other
+    // tests never start a command in a directory that's gone.
+    if crate::test_support::isolated(
+        "session_cmds::tests::cd_into_an_untrusted_directory_asks_first",
+    ) {
+        return;
+    }
     let _g = crate::compat::TEST_HOME_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
