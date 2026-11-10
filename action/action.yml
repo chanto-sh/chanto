@@ -1,4 +1,4 @@
-name: Chanto
+name: Chanto Agent
 description: Check pull requests against your repository's quality profile, review them, or run the Chanto coding agent from comments.
 author: chanto-sh
 branding:
