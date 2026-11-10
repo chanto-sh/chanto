@@ -73,7 +73,7 @@ pub async fn cli(args: &[String]) -> Result<Outcome> {
 
 /// Run the profile's `when = "turn"` checks as the gate does (sandboxed,
 /// without secrets). Returns their report and whether any failed.
-async fn run_checks(profile: &Profile, root: &Path) -> Result<(String, bool)> {
+pub(super) async fn run_checks(profile: &Profile, root: &Path) -> Result<(String, bool)> {
     if !crate::config::is_trusted(root) {
         anyhow::bail!(
             "This folder isn't trusted, so its checks don't run. Start `chanto` here once and trust it."

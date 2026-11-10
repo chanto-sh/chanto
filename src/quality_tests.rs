@@ -399,3 +399,56 @@ fn hook_install_leaves_someone_elses_hook_alone() {
         assert!(msg.contains("core.hooksPath"), "{msg}");
     }
 }
+
+#[test]
+fn a_broken_profile_fails_loading_but_doctor_reports_it() {
+    let dir = scratch();
+    std::fs::create_dir_all(dir.join(".chanto")).unwrap();
+    std::fs::write(path(&dir), "[[check]]\nrun = 3\n").unwrap();
+    let e = crate::config::Config::load(&dir, true).unwrap_err();
+    assert!(format!("{e:#}").contains("quality.toml"), "{e:#}");
+    let (cfg, _) = crate::config::Config::load_for_doctor(&dir, true).unwrap();
+    assert!(
+        cfg.diagnostics
+            .iter()
+            .any(|d| d.contains("quality profile")),
+        "{:?}",
+        cfg.diagnostics
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hook_install_leaves_a_hooks_path_directory_alone() {
+    let dir = scratch();
+    std::fs::create_dir_all(dir.join(".chanto")).unwrap();
+    std::fs::write(path(&dir), "version = 1\n").unwrap();
+    for args in [
+        &["init", "-q"][..],
+        &["config", "core.hooksPath", ".githooks"],
+    ] {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(&dir)
+            .output()
+            .unwrap();
+    }
+    let msg = hook::install(&dir).unwrap();
+    assert!(
+        msg.contains("core.hooksPath") && msg.contains("Add this"),
+        "{msg}"
+    );
+    assert!(!dir.join(".githooks/pre-push").exists());
+}
+
+#[test]
+fn checks_run_only_in_trusted_folders() {
+    let dir = scratch();
+    let p = parse("[[check]]\nname = \"t\"\nrun = \"true\"\n").unwrap();
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let e = rt.block_on(pattern::run_checks(&p, &dir)).unwrap_err();
+    assert!(format!("{e:#}").contains("isn't trusted"), "{e:#}");
+}
