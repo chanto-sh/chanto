@@ -354,12 +354,7 @@ pub async fn cli(args: &[String]) -> Result<()> {
     }
     let exe = std::env::current_exe().context("finding the Chanto executable")?;
     let manager = Manager::open(Store::new(store_dir()), Launcher::Process(exe), 1);
-    // Leftovers from a runner that stopped mid-run: their leases are gone.
-    for r in manager.list() {
-        if !r.state.is_active() {
-            let _ = manager.remove(&r.id).await;
-        }
-    }
+    clear_leftovers(&manager).await;
     let labels = if o.labels.is_empty() {
         String::new()
     } else {
@@ -990,6 +985,12 @@ async fn finish(
             Err(e) => {
                 unpushed = true;
                 status = RunStatus::Failed;
+                if let Err(k) = manager.store.keep(run_id) {
+                    eprintln!(
+                        "{}",
+                        crate::ui::dim(&format!("! marking run {run_id} as kept: {k:#}"))
+                    );
+                }
                 summary.push_str(&format!(
                     "\n\nThe changes are committed but could not be pushed: {e:#}\nThey're kept on the runner's machine in {} (branch {}).",
                     finished.source.path.display(),
@@ -1031,6 +1032,30 @@ async fn finish(
         s.outcome.cleanup();
     }
     Ok(status)
+}
+
+/// Remove what a runner that stopped mid-run left behind: those runs'
+/// leases are gone. A run whose push failed is kept, since its worktree
+/// and branch hold the only copy of its commits.
+async fn clear_leftovers(manager: &Manager) {
+    for r in manager.list() {
+        if r.state.is_active() {
+            continue;
+        }
+        if manager.store.kept(&r.id) {
+            eprintln!(
+                "{}",
+                crate::ui::dim(&format!(
+                    "! keeping run {}: its changes were never pushed; they're in {} (branch {})",
+                    r.id,
+                    r.source.path.display(),
+                    r.branch
+                ))
+            );
+            continue;
+        }
+        let _ = manager.remove(&r.id).await;
+    }
 }
 
 // ------------------------------------------------------------------ scripts
