@@ -314,7 +314,7 @@ impl Provider {
             stream.event(event, on_delta)
         })
         .await?;
-        Ok(stream.finish(&req.model))
+        stream.finish(&req.model)
     }
 
     async fn chat_converse(
@@ -335,6 +335,8 @@ impl Provider {
         let mut calls: std::collections::BTreeMap<u64, (String, String, String)> =
             Default::default();
         let (mut cache_r, mut cache_w) = (0, 0);
+        // `messageStop` arrived: the body didn't just end early.
+        let mut stopped = false;
         events(self.body(resp), |kind, v| {
             let i = v["contentBlockIndex"].as_u64().unwrap_or(0);
             match kind {
@@ -380,6 +382,7 @@ impl Provider {
                     }
                 }
                 "messageStop" => {
+                    stopped = true;
                     out.finish_reason = Some(
                         match v["stopReason"].as_str().unwrap_or("end_turn") {
                             "max_tokens" | "model_context_window_exceeded" => "length",
@@ -404,6 +407,11 @@ impl Provider {
             Ok(true)
         })
         .await?;
+        // Ended at a frame boundary before the end of the message: the text or
+        // a tool call's input may be cut short, so don't use it.
+        if !stopped {
+            bail!("{CUT_OFF} its reply (no messageStop)");
+        }
         out.usage.cached_tokens = cache_r;
         out.usage.cache_write_tokens = cache_w;
         for (_, (id, name, args)) in calls {

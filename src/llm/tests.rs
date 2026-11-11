@@ -178,6 +178,16 @@ fn a_dropped_stream_says_what_to_do() {
         "{hint}"
     );
     assert!(hint.contains("retry the turn"), "{hint}");
+    // A body that ended before the provider's end-of-message event.
+    let hint = failure_hint(
+        &format!("{CUT_OFF} its reply (no message_stop)"),
+        ProviderKind::Anthropic,
+        "https://api.anthropic.com",
+        "m",
+        None,
+    )
+    .unwrap();
+    assert!(hint.starts_with("Lost the connection"), "{hint}");
 }
 
 /// A server that waits `prefill`, sends `head` (status line, headers and

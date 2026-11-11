@@ -164,6 +164,8 @@ impl Provider {
         let mut done: std::collections::BTreeMap<u64, Value> = Default::default();
         let mut refused = false;
         let mut refusal_text_sent = false;
+        // A terminal event arrived: the body didn't just end early.
+        let mut finished = false;
         sse_json(self.body(resp), |v| {
             let idx = v["output_index"].as_u64().unwrap_or(0);
             match v["type"].as_str().unwrap_or("") {
@@ -238,6 +240,7 @@ impl Provider {
                     out.usage.cached_tokens = r["usage"]["input_tokens_details"]["cached_tokens"]
                         .as_u64()
                         .unwrap_or(0);
+                    finished = true;
                     let reason = r["incomplete_details"]["reason"].as_str();
                     out.finish_reason = Some(match reason {
                         Some("max_output_tokens") => "length".into(),
@@ -280,6 +283,12 @@ impl Provider {
             Ok(true)
         })
         .await?;
+        // Without `response.completed` (or `.incomplete`/`.failed`) the
+        // connection dropped: a function call's arguments may be cut short,
+        // and repairing them would run a truncated command.
+        if !finished {
+            bail!("{CUT_OFF} its reply (no response.completed)");
+        }
         // Prefer completed items; fall back to what streamed.
         for (i, (call_id, name, args)) in &partial {
             let item = done.get(i);
