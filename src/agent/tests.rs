@@ -2073,18 +2073,38 @@ async fn a_pipe_does_not_hide_a_failing_check_from_the_finish_guard() {
 #[test]
 fn only_the_latest_check_after_an_edit_counts() {
     let runs = vec![
-        ("a".to_string(), 0, false, "FAILED t".to_string()),
-        ("b".to_string(), 0, true, String::new()),
+        (
+            "a".to_string(),
+            0,
+            false,
+            "FAILED t".to_string(),
+            PathBuf::new(),
+        ),
+        ("b".to_string(), 0, true, String::new(), PathBuf::new()),
     ];
     assert_eq!(last_failed_check(&runs, 0), None, "a later pass clears it");
     assert_eq!(last_failed_check(&runs, 1), None, "an edit makes it stale");
-    let only_fail = vec![("a".to_string(), 2, false, "FAILED t".to_string())];
+    let only_fail = vec![(
+        "a".to_string(),
+        2,
+        false,
+        "FAILED t".to_string(),
+        PathBuf::new(),
+    )];
     assert_eq!(last_failed_check(&only_fail, 2), Some(("a", "FAILED t")));
 }
 
 #[test]
 fn a_failure_only_re_run_on_a_narrower_scope_stays_unverified() {
-    let run = |cmd: &str, ok: bool, out: &str| (cmd.to_string(), 0u64, ok, out.to_string());
+    let run = |cmd: &str, ok: bool, out: &str| {
+        (
+            cmd.to_string(),
+            0u64,
+            ok,
+            out.to_string(),
+            PathBuf::from("/p"),
+        )
+    };
     let fail = run(
         "pytest tests/ -q",
         false,
@@ -2927,6 +2947,105 @@ async fn gate_trusts_the_agents_own_passing_run() {
         panic!()
     };
     assert!(text.contains("your run, no edits since"), "{text}");
+}
+
+/// An external (MCP-style) tool that rewrites `calc.py` with a bug.
+struct BreakCalc;
+
+#[async_trait]
+impl crate::tools::Tool for BreakCalc {
+    fn name(&self) -> String {
+        "mcp__fs__write".into()
+    }
+    fn description(&self) -> String {
+        "Write a file.".into()
+    }
+    fn schema(&self) -> Value {
+        json!({"type": "object", "properties": {}})
+    }
+    fn kind(&self) -> ToolKind {
+        ToolKind::External
+    }
+    async fn run(&self, _args: Value, ctx: &Ctx) -> Result<ToolOutput> {
+        std::fs::write(
+            ctx.cwd().join("calc.py"),
+            "def add(a, b):\n    return a - b  # broken later\n",
+        )?;
+        Ok(ToolOutput::ok("written"))
+    }
+}
+
+/// Runs the "fix, test, then something else changes the file" turn and
+/// returns the final answer and every model request. The late change makes
+/// calc.py a different size from the fixed one: written in the same second
+/// at the same size, Python would reuse the earlier run's cached bytecode.
+async fn finish_after_a_late_change(name: &str, late: Value, sub: &[Value]) -> (String, String) {
+    let dir = tmpdir(name);
+    std::fs::write(
+        dir.join("calc.py"),
+        "def add(a, b):\n    return a - b  # broken later\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("test_calc.py"), "import unittest\nfrom calc import add\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n").unwrap();
+    let fixed = "def add(a, b):\n    return a + b\n";
+    let mut script = vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "calc.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": fixed}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q"}))}),
+        json!({"tool_calls": late}),
+    ];
+    script.extend(sub.iter().cloned());
+    script.extend([
+        json!({"content": "Fixed."}),
+        // Sent back with the failure: fix it again.
+        json!({"tool_calls": tc("Read", json!({"file_path": "calc.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": fixed}))}),
+        json!({"content": "Fixed again."}),
+    ]);
+    let (base, seen) = mock_server(script).await;
+    let mut env = verified_env(&base, &dir, "python3 -m unittest -q");
+    Arc::get_mut(&mut env)
+        .unwrap()
+        .tools
+        .tools
+        .push(Arc::new(BreakCalc));
+    let mut agent = Agent::new(env);
+    let TurnEnd::Done(text) = agent
+        .run_turn("fix add", vec![], CancellationToken::new())
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let reqs = serde_json::to_string(&*seen.lock().unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    (text, reqs)
+}
+
+#[tokio::test]
+async fn an_external_tool_change_makes_the_agents_run_stale() {
+    let (text, reqs) =
+        finish_after_a_late_change("vouch-external", tc("mcp__fs__write", json!({})), &[]).await;
+    assert!(!text.contains("no edits since"), "{text}");
+    assert!(reqs.contains("AssertionError"), "the gate ran the tests");
+}
+
+#[tokio::test]
+async fn a_subagent_change_makes_the_agents_run_stale() {
+    let (text, reqs) = finish_after_a_late_change(
+        "vouch-task",
+        tc(
+            "Task",
+            json!({"description": "d", "prompt": "tidy calc.py"}),
+        ),
+        &[
+            json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": "def add(a, b):\n    return a - b  # broken later\n"}))}),
+            json!({"content": "sub done"}),
+        ],
+    )
+    .await;
+    assert!(!text.contains("no edits since"), "{text}");
+    assert!(reqs.contains("AssertionError"), "the gate ran the tests");
 }
 
 fn slow_tests(name: &str) -> PathBuf {

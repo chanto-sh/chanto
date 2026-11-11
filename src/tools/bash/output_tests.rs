@@ -31,6 +31,7 @@ fn setup() -> (Ctx, Arc<BgShell>, Arc<Capture>, std::path::PathBuf) {
     let shell = Arc::new(BgShell {
         id: "bash_6".into(),
         command: "cd /some/long/path && cargo build --release".into(),
+        cwd: "/some/long/path".into(),
         description: Some("Build release binary".into()),
         monitor: None,
         output: Mutex::new(String::new()),

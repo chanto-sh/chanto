@@ -119,13 +119,17 @@ fn timed_out_after(output: &str) -> Option<u64> {
     rest.split_once('s')?.0.parse().ok()
 }
 
+/// A check the agent ran itself: command, edit sequence at the time, whether
+/// it passed, its output (kept for failures), and the directory it ran in.
+type CheckRun = (String, u64, bool, String, PathBuf);
+
 /// The last check the agent ran since its most recent edit, if that run
 /// failed. Anything edited after the run makes it stale, so no nudge.
-fn last_failed_check(runs: &[(String, u64, bool, String)], edit_seq: u64) -> Option<(&str, &str)> {
+fn last_failed_check(runs: &[CheckRun], edit_seq: u64) -> Option<(&str, &str)> {
     runs.iter()
         .rev()
-        .find(|(_, seq, _, _)| *seq == edit_seq)
-        .and_then(|(cmd, _, ok, out)| (!ok).then_some((cmd.as_str(), out.as_str())))
+        .find(|(_, seq, _, _, _)| *seq == edit_seq)
+        .and_then(|(cmd, _, ok, out, _)| (!ok).then_some((cmd.as_str(), out.as_str())))
 }
 
 /// The target a failing test name belongs to, and the selector within it: the
@@ -151,16 +155,17 @@ fn test_target(name: &str) -> Option<(String, Option<String>)> {
 /// failing test's own file, module, class or the test itself. This is the
 /// "ran the suite, saw it fail, then ran a narrower thing that passed" finish,
 /// which no single-run guard catches.
-fn unverified_failure(runs: &[(String, u64, bool, String)]) -> Option<(&str, &str)> {
-    let (idx, cmd, out) = runs
+fn unverified_failure(runs: &[CheckRun]) -> Option<(&str, &str)> {
+    let (idx, cmd, out, dir) = runs
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, (_, _, ok, _))| !ok)
-        .map(|(i, (cmd, _, _, out))| (i, cmd, out))?;
+        .find(|(_, (_, _, ok, _, _))| !ok)
+        .map(|(i, (cmd, _, _, out, dir))| (i, cmd, out, dir))?;
     let failing = crate::guardrails::failing_tests(out)?;
-    let covered = runs[idx + 1..].iter().any(|(run, _, ok, _)| {
-        *ok && (crate::guardrails::covers(run, cmd)
+    let covered = runs[idx + 1..].iter().any(|(run, _, ok, _, run_dir)| {
+        *ok && (crate::guardrails::at_root(run, run_dir, dir)
+            .is_some_and(|run| crate::guardrails::covers(&run, cmd))
             || failing.iter().all(|test| runs_test(run, test)))
     });
     (!covered).then_some((cmd.as_str(), out.as_str()))
@@ -1485,16 +1490,16 @@ pub struct Agent {
     /// Deferred built-ins already recorded as used in this project.
     recorded_builtins: std::collections::HashSet<String>,
     /// The agent's own shell commands that looked like checks, with edit_seq at
-    /// the time: (command, seq, passed, output). The verify gate accepts a
-    /// covering *passing* run with no edits since, and reuses a covering failing
-    /// run instead of repeating it (its failures are then split against the
-    /// baseline like a fresh run's).
-    check_runs: Vec<(String, u64, bool, String)>,
+    /// the time (see [`CheckRun`]). The verify gate accepts a covering
+    /// *passing* run from the verify root with no edits since, and reuses a
+    /// covering failing run instead of repeating it (its failures are then
+    /// split against the baseline like a fresh run's).
+    check_runs: Vec<CheckRun>,
     /// Low disk space was already reported this turn.
     disk_warned: bool,
     /// Read-only commands of this turn that hit their time limit: command,
-    /// edit sequence, seconds.
-    check_timeouts: Vec<(String, u64, u64)>,
+    /// edit sequence, seconds, and the directory it ran in.
+    check_timeouts: Vec<(String, u64, u64, PathBuf)>,
     /// Verified mode: the checks run before any change, and their results.
     baseline_task: Option<tokio::task::JoinHandle<Vec<crate::guardrails::CheckResult>>>,
     baseline: Option<Vec<crate::guardrails::CheckResult>>,
