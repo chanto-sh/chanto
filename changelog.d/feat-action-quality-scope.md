@@ -1,1 +1,0 @@
-- **GitHub Action: projects in subfolders and full scans.** Quality mode takes `working_directory` (check a project inside the repository, for monorepos) and `quality_scope: all` (check every file, e.g. on a schedule, instead of the event's changes), and reports `passed` and `findings` as outputs for later steps.

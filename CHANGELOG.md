@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## v0.1.17 (November 10, 2026)
+
+- **Fewer git prompts in repositories with hooks.** A repository with `core.hooksPath` set (husky, or `git config core.hooksPath .githooks`) made every git command ask, `git log` included, in every permission mode. Now a command asks only if it can run a hook that's actually in that directory: with just a `pre-commit` hook, `git commit` still asks, but `git log`, `show`, `status`, `diff`, `push` and listing tags or branches don't. On this repository's own sessions that cut the git commands asking in auto mode from 131 of 153 to 31. Diff and filter drivers, pagers and fsmonitor still make every git command ask.
+- **Readable background command names.** A background command or monitor is named after its description, or its command when it has none (`build-release-binary`, `npm-run-dev`), instead of `bash_2` or `monitor_3`. That's the name the model uses when it tells you what's running, and the one `/bashes` lists. A name is never reused within a session: a second `npm run dev` is `npm-run-dev-2`. The start line reads `Started in background · Build release binary (build-release-binary)`.
+- **GitHub Action: projects in subfolders and full scans.** Quality mode takes `working_directory` (check a project inside the repository, for monorepos) and `quality_scope: all` (check every file, e.g. on a schedule, instead of the event's changes), and reports `passed` and `findings` as outputs for later steps.
+- **`chanto doctor` paths on Windows.** The report shortened every absolute path to `~/…` on Windows, where `HOME` isn't set, so it showed paths that don't exist. It now finds the profile folder the way the rest of Chanto does, shortens only paths that are really inside it (with either separator), and leaves the rest as they are.
+
 ## v0.1.16 (November 10, 2026)
 
 - **A failed voice recording says why more reliably.** When the recorder stopped with an error, such as a busy or missing microphone, the message could read "no audio was captured" instead of the recorder's own reason. Chanto now waits briefly for the recorder's last output before reporting the failure.
