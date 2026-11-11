@@ -77,7 +77,10 @@ impl Drop for TestHome {
 }
 
 pub(crate) fn sh(dir: &Path, args: &[&str]) -> String {
+    // As Chanto's own git calls do: temp paths plus object paths can pass
+    // Windows' 260-character limit.
     let o = Command::new("git")
+        .args(["-c", "core.longpaths=true"])
         .args(args)
         .current_dir(dir)
         .output()

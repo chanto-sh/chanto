@@ -54,8 +54,14 @@ fn only_one_server_hosts_the_runs_store() {
     let e = runs_lock(&store, true, true).unwrap_err().to_string();
     assert!(e.contains("already hosts background runs"), "{e}");
 
-    // Released with the first host: the next one takes over.
+    // Released with the first host: the next one takes over. On Linux a
+    // child process another test forks at this moment shares the lock file
+    // until it execs, so give the release a moment to be seen.
     drop(first);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.hosted_elsewhere() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
     assert!(!store.hosted_elsewhere());
     assert!(runs_lock(&store, true, true).unwrap().is_some());
     std::fs::remove_dir_all(&dir).unwrap();
