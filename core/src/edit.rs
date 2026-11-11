@@ -98,6 +98,11 @@ fn indent(line: &str) -> &str {
     &line[..line.len() - line.trim_start().len()]
 }
 
+/// How a line's indentation in new_string becomes the file's, given whether
+/// it is new_string's first non-blank line (0) or a later one (1); None when
+/// it can't be said.
+type IndentMap = Box<dyn Fn(usize, &str) -> Option<String>>;
+
 /// `new` rewritten to sit where a fuzzy match landed, so the edit changes
 /// only what the model changed: its indentation in the file's own
 /// (`old_string` often drops the first line's indent, or uses spaces where
@@ -141,7 +146,7 @@ fn fit_to_match(
         ))
     };
     // How each new line's indentation becomes the file's.
-    let map: Box<dyn Fn(usize, &str) -> Option<String>> = if pairs.iter().all(|(o, f)| o == f) {
+    let map: IndentMap = if pairs.iter().all(|(o, f)| o == f) {
         // Only trailing whitespace differed: keep new_string as written.
         Box::new(|_, n| Some(n.to_string()))
     } else if matches!(
