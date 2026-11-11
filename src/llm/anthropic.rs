@@ -375,7 +375,7 @@ impl Provider {
         let resp = self.post_retrying(&url, &body, &headers).await?;
         let mut stream = AnthropicStream::default();
         sse_json(self.body(resp), |v| stream.event(v, on_delta)).await?;
-        Ok(stream.finish(&req.model))
+        stream.finish(&req.model)
     }
 }
 
@@ -388,6 +388,8 @@ pub(super) struct AnthropicStream {
     input: u64,
     cache_w: u64,
     cache_r: u64,
+    /// `message_stop` arrived: the body didn't just end early.
+    stopped: bool,
 }
 
 impl AnthropicStream {
@@ -494,7 +496,10 @@ impl AnthropicStream {
                     self.cache_r = x;
                 }
             }
-            "message_stop" => return Ok(false),
+            "message_stop" => {
+                self.stopped = true;
+                return Ok(false);
+            }
             "error" => {
                 let e = &v["error"];
                 bail!(
@@ -508,7 +513,13 @@ impl AnthropicStream {
         Ok(true)
     }
 
-    pub(super) fn finish(self, model: &str) -> ChatResponse {
+    /// The whole response, or an error if the body ended before
+    /// `message_stop`: a tool call's input would still be empty (or cut
+    /// short) and the text truncated.
+    pub(super) fn finish(self, model: &str) -> Result<ChatResponse> {
+        if !self.stopped {
+            bail!("{CUT_OFF} its reply (no message_stop)");
+        }
         let AnthropicStream {
             mut blocks,
             mut out,
@@ -558,6 +569,6 @@ impl AnthropicStream {
                 items: blocks,
             });
         }
-        out
+        Ok(out)
     }
 }

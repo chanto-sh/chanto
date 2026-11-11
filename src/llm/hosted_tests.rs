@@ -1283,3 +1283,128 @@ async fn a_coding_plan_without_a_model_list_offers_its_documented_models() {
     assert_eq!(p.list_models().await.unwrap(), vec!["kimi-for-coding"]);
     assert!(p.list_models().await.is_err());
 }
+
+/// Each body through a fresh mock server: the error text, or the response.
+async fn chat_each(kind: ProviderKind, bodies: Vec<String>) -> Vec<Result<ChatResponse, String>> {
+    let mut out = Vec::new();
+    for body in bodies {
+        let (base, _) = serve(vec![(200, body)]).await;
+        let base = match kind {
+            ProviderKind::Anthropic => base,
+            _ => format!("{base}/v1"),
+        };
+        let p = Provider::new(kind, &base, Some("k-test".into()), 200_000);
+        let req = ChatRequest {
+            tools: vec![read_tool()],
+            ..chat_req("m", vec![Message::user("hi".to_string())])
+        };
+        out.push(
+            p.chat(&req, &mut |_| {})
+                .await
+                .map_err(|e| format!("{e:#}")),
+        );
+    }
+    out
+}
+
+#[tokio::test]
+async fn an_anthropic_stream_cut_off_before_message_stop_is_an_error() {
+    let ev = |v: Value| (v["type"].as_str().unwrap().to_string(), v);
+    let tool = vec![
+        ev(
+            json!({"type": "message_start", "message": {"usage": {"input_tokens": 5, "output_tokens": 1}}}),
+        ),
+        ev(
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}}),
+        ),
+        ev(
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"command\":\"rm -rf build/ca"}}),
+        ),
+    ];
+    let text = vec![
+        tool[0].clone(),
+        ev(
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ),
+        ev(
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "The answer is"}}),
+        ),
+    ];
+    let mut whole = text.clone();
+    whole.extend([
+        ev(json!({"type": "content_block_stop", "index": 0})),
+        ev(
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+        ),
+        ev(json!({"type": "message_stop"})),
+    ]);
+    let sse_of = |evs: &[(String, Value)]| {
+        let evs: Vec<(&str, Value)> = evs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        sse(&evs)
+    };
+    let r = chat_each(
+        ProviderKind::Anthropic,
+        vec![sse_of(&tool), sse_of(&text), sse_of(&whole)],
+    )
+    .await;
+    for e in &r[..2] {
+        let e = e.as_ref().unwrap_err();
+        assert!(e.contains(CUT_OFF) && e.contains("message_stop"), "{e}");
+    }
+    let ok = r[2].as_ref().unwrap();
+    assert_eq!(ok.text, "The answer is");
+    assert_eq!(ok.finish_reason.as_deref(), Some("stop"));
+}
+
+#[tokio::test]
+async fn a_responses_stream_cut_off_before_completed_is_an_error_not_a_repaired_call() {
+    let ev = |v: Value| (v["type"].as_str().unwrap().to_string(), v);
+    let tool = vec![
+        ev(
+            json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "Bash", "arguments": ""}}),
+        ),
+        ev(
+            json!({"type": "response.function_call_arguments.delta", "output_index": 0, "delta": "{\"command\":\"rm -rf build/ca"}),
+        ),
+    ];
+    let text = vec![ev(
+        json!({"type": "response.output_text.delta", "output_index": 0, "delta": "The answer is"}),
+    )];
+    let mut whole = text.clone();
+    whole.push(ev(
+        json!({"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 5, "output_tokens": 3}}}),
+    ));
+    // Hitting the output cap still ends the stream properly, as `length`.
+    let mut capped = tool.clone();
+    capped.push(ev(
+        json!({"type": "response.incomplete", "response": {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "usage": {"input_tokens": 5, "output_tokens": 3}}}),
+    ));
+    let sse_of = |evs: &[(String, Value)]| {
+        let evs: Vec<(&str, Value)> = evs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        sse(&evs)
+    };
+    let r = chat_each(
+        ProviderKind::OpenaiResponses,
+        vec![
+            sse_of(&tool),
+            sse_of(&text),
+            sse_of(&whole),
+            sse_of(&capped),
+        ],
+    )
+    .await;
+    for e in &r[..2] {
+        let e = e.as_ref().unwrap_err();
+        assert!(
+            e.contains(CUT_OFF) && e.contains("response.completed"),
+            "{e}"
+        );
+    }
+    let ok = r[2].as_ref().unwrap();
+    assert_eq!(ok.text, "The answer is");
+    assert_eq!(ok.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(
+        r[3].as_ref().unwrap().finish_reason.as_deref(),
+        Some("length")
+    );
+}

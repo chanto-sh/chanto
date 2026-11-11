@@ -393,6 +393,93 @@ fn replacing_keeps_the_old_binary_until_the_new_one_is_staged() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A fresh directory holding `dest` ("old") and `new` ("new").
+fn swap_dir() -> (PathBuf, PathBuf, PathBuf) {
+    let dir = std::env::temp_dir().join(format!("chanto-swap-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dest = dir.join(binary_name());
+    std::fs::write(&dest, b"old").unwrap();
+    std::fs::write(dir.join("new"), b"new").unwrap();
+    (dir.clone(), dir.join("new"), dest)
+}
+
+fn staged_files(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.to_string_lossy().contains(".upgrade-"))
+        .collect()
+}
+
+/// A rename that fails for the moves `fail` picks.
+fn failing_rename(
+    fail: impl Fn(&Path, &Path) -> bool,
+) -> impl Fn(&Path, &Path) -> std::io::Result<()> {
+    move |from, to| {
+        if fail(from, to) {
+            Err(std::io::Error::other("held open"))
+        } else {
+            std::fs::rename(from, to)
+        }
+    }
+}
+
+#[test]
+fn a_failed_rename_over_the_binary_leaves_the_old_one() {
+    let (dir, new, dest) = swap_dir();
+    let rename = failing_rename(|_, _| true);
+    assert!(replace_binary_with(&new, &dest, false, &rename).is_err());
+    assert_eq!(std::fs::read(&dest).unwrap(), b"old");
+    assert!(staged_files(&dir).is_empty());
+    // And the real rename replaces it in one step.
+    replace_binary_with(&new, &dest, false, &failing_rename(|_, _| false)).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert!(staged_files(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn moving_aside_puts_the_old_binary_back_when_the_new_one_cannot_go_in() {
+    let (dir, new, dest) = swap_dir();
+    let old = dest.with_extension("old");
+    // The new binary can't take the name (antivirus holding it, say).
+    let rename = failing_rename(|from, _| from.to_string_lossy().contains(".upgrade-"));
+    let err = replace_binary_with(&new, &dest, true, &rename).unwrap_err();
+    assert!(format!("{err:#}").contains("installing"), "{err:#}");
+    assert_eq!(std::fs::read(&dest).unwrap(), b"old");
+    assert!(!old.exists());
+    assert!(staged_files(&dir).is_empty());
+
+    // Nor can the old one go back: both copies are kept, and the error says where.
+    let rename = failing_rename(|from, _| {
+        let f = from.to_string_lossy();
+        f.contains(".upgrade-") || f.ends_with(".old")
+    });
+    let err = format!(
+        "{:#}",
+        replace_binary_with(&new, &dest, true, &rename).unwrap_err()
+    );
+    assert!(!dest.exists());
+    assert_eq!(std::fs::read(&old).unwrap(), b"old");
+    let staged = staged_files(&dir);
+    assert_eq!(staged.len(), 1, "{staged:?}");
+    assert_eq!(std::fs::read(&staged[0]).unwrap(), b"new");
+    assert!(
+        err.contains(&old.display().to_string()) && err.contains(&staged[0].display().to_string()),
+        "{err}"
+    );
+
+    // Moving aside works when nothing fails, leaving the old binary as `.old`.
+    std::fs::rename(&old, &dest).unwrap();
+    std::fs::remove_file(&staged[0]).unwrap();
+    replace_binary_with(&new, &dest, true, &failing_rename(|_, _| false)).unwrap();
+    assert_eq!(std::fs::read(&dest).unwrap(), b"new");
+    assert_eq!(std::fs::read(&old).unwrap(), b"old");
+    assert!(staged_files(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A release server: the GitHub API's latest-release answer, SHA256SUMS
 /// and the archive, all from a local port.
 #[cfg(unix)]

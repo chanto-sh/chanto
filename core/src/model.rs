@@ -304,8 +304,13 @@ pub fn label_probs_from(top: &[(String, f64)], labels: &[&str]) -> Option<LabelP
 /// strings/brackets).
 /// Marks tool-call arguments that weren't valid JSON and were repaired
 /// (closed brackets, strings): they were probably cut off, so the agent
-/// won't run an edit with them. Removed before the call is recorded.
+/// only runs a read-only tool with them. Removed before the call is recorded.
 pub const REPAIRED: &str = "__repaired";
+
+/// How every decoder's error starts when a reply's body ends before the
+/// provider's end-of-message event: the connection dropped, so the text or a
+/// tool call's arguments may be cut short. `failure_hint` matches on it.
+pub const CUT_OFF: &str = "the connection closed before the model finished";
 
 /// The start of the error when the Ollama provider gets an OpenAI-style reply.
 pub const OPENAI_SHAPED: &str = "This looks like an OpenAI-compatible server; set provider = \"openai\" (or kind = \"openai\" in its [providers.<name>] section) and point base_url at its /v1 endpoint";
@@ -844,9 +849,7 @@ impl OpenaiDecoder {
             && self.out.finish_reason.is_none()
             && self.partial.iter().any(|p| !p.2.is_empty())
         {
-            anyhow::bail!(
-                "the connection closed before the model finished its tool call (no finish_reason or [DONE])"
-            );
+            anyhow::bail!("{CUT_OFF} its tool call (no finish_reason or [DONE])");
         }
         self.partial.sort_by_key(|p| p.0);
         let mut extras = Vec::new();

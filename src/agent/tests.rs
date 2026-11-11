@@ -4235,13 +4235,16 @@ async fn messages_reach_a_background_agent_queued_or_resumed() {
 }
 
 #[tokio::test]
-async fn a_write_with_repaired_arguments_is_not_run() {
+async fn a_call_with_repaired_arguments_runs_only_if_read_only() {
     let dir = tmpdir("repaired-write");
+    std::fs::write(dir.join("r.txt"), "readable").unwrap();
     let cut = |name: &str, args: &str| json!([{"index": 0, "id": "c1", "type": "function", "function": {"name": name, "arguments": args}}]);
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": cut("Write", "{\"file_path\": \"a.txt\", \"content\": \"line one\\nline tw")}),
-        // Other tools still run with repaired arguments.
+        // A cut-off shell command isn't run either.
         json!({"tool_calls": cut("Bash", "{\"command\": \"echo ran > b.txt")}),
+        // A read-only tool still runs with repaired arguments.
+        json!({"tool_calls": cut("Read", "{\"file_path\": \"r.txt")}),
         json!({"content": "done"}),
     ])
     .await;
@@ -4255,15 +4258,24 @@ async fn a_write_with_repaired_arguments_is_not_run() {
         !dir.join("a.txt").exists(),
         "the truncated Write was not run"
     );
-    assert!(dir.join("b.txt").exists(), "the Bash call ran");
+    assert!(
+        !dir.join("b.txt").exists(),
+        "the truncated Bash was not run"
+    );
     let seen = seen.lock().unwrap();
     let second = seen[1].to_string();
     assert!(
         second.contains("was not run") && second.contains("smaller pieces"),
         "{second}"
     );
+    let third = seen[2].to_string();
     assert!(
-        !seen[2].to_string().contains(llm::REPAIRED),
+        third.contains("was not run") && third.contains("complete arguments"),
+        "{third}"
+    );
+    assert!(seen[3].to_string().contains("readable"), "the Read ran");
+    assert!(
+        !seen[3].to_string().contains(llm::REPAIRED),
         "the marker never reaches the model"
     );
 }
@@ -6803,4 +6815,38 @@ fn nesting_is_capped_and_gives_its_room_back() {
     assert!(crate::resources::nested_agent().is_none());
     drop(held);
     assert!(crate::resources::nested_agent().is_some());
+}
+
+#[tokio::test]
+async fn every_waiter_waits_for_the_snapshot() {
+    // Two foreground Task calls run concurrently and each subagent waits for
+    // the turn's snapshot before its first edit. Only the first used to wait:
+    // the second found the slot empty and edited while the snapshot was still
+    // being taken, so rewind could keep that edit.
+    let dir = tmpdir("snapshot-waiters");
+    let env = make_env("http://127.0.0.1:1", &dir, Mode::Bypass, 32768);
+    let done = Arc::new(AtomicBool::new(false));
+    let flag = done.clone();
+    *env.pending_snapshot.lock().unwrap() =
+        Some(pending_snapshot(tokio::task::spawn_blocking(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            flag.store(true, Ordering::SeqCst);
+        })));
+    let waiter = |env: Arc<Env>, done: Arc<AtomicBool>| {
+        tokio::spawn(async move {
+            env.wait_snapshot().await;
+            done.load(Ordering::SeqCst)
+        })
+    };
+    let a = waiter(env.clone(), done.clone());
+    let b = waiter(env.clone(), done.clone());
+    assert!(a.await.unwrap(), "the first waiter saw the snapshot finish");
+    assert!(
+        b.await.unwrap(),
+        "the second waiter saw the snapshot finish"
+    );
+    // A finished snapshot doesn't hold up later callers.
+    let start = Instant::now();
+    env.wait_snapshot().await;
+    assert!(start.elapsed() < Duration::from_millis(500));
 }

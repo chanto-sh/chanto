@@ -66,6 +66,7 @@ pub fn failure_hint(
         "incomplete message",
         "unexpected eof",
         "stream error",
+        CUT_OFF,
     ]
     .iter()
     .any(|s| lower.contains(s))
