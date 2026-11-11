@@ -38,10 +38,13 @@ async fn checks_do_not_wait_for_daemons_holding_their_output() {
 #[test]
 fn covers_only_plain_full_runs_of_the_same_runner() {
     assert!(covers("cargo test", "cargo test --quiet"));
-    assert!(covers(
-        "cd /x/proj && cargo test --quiet 2>&1",
-        "cargo test --quiet"
-    ));
+    assert!(
+        !covers(
+            "cd /x/proj && cargo test --quiet 2>&1",
+            "cargo test --quiet"
+        ),
+        "a `cd` needs the directory it ran in: see at_root"
+    );
     assert!(covers("python3 -m pytest -q", "python3 -m pytest -q -rfE"));
     assert!(covers(
         "go vet ./... && go test ./...",
@@ -1182,4 +1185,36 @@ fn test_file_patterns() {
     ] {
         assert!(!is_test_file(Path::new(p)), "{p}");
     }
+}
+
+#[test]
+fn only_a_run_from_the_root_stands_for_the_root_check() {
+    let root = Path::new("/x/proj");
+    let from = |cmd: &str, cwd: &str| at_root(cmd, Path::new(cwd), root);
+    let covered = |cmd: &str, cwd: &str| from(cmd, cwd).is_some_and(|c| covers(&c, "cargo test"));
+    assert_eq!(
+        from("cd /x/proj && cargo test --quiet 2>&1", "/elsewhere").as_deref(),
+        Some("cargo test --quiet 2>&1")
+    );
+    assert!(covered("cargo test", "/x/proj"));
+    assert!(covered("cd /x/proj && cargo test", "/x/proj/crates/a"));
+    assert!(covered("cd ../.. && cargo test", "/x/proj/crates/a"));
+    assert!(covered("cd crates/a && cd ../.. && cargo test", "/x/proj"));
+    assert!(
+        !covered("cd crates/a && cargo test", "/x/proj"),
+        "one crate's tests don't stand for the workspace"
+    );
+    assert!(
+        !covered("cargo test", "/x/proj/crates/a"),
+        "a shell left in a subdirectory by an earlier `cd`"
+    );
+    assert!(!covered("cd /x/proj/crates/a && cargo test", "/x/proj"));
+    assert!(!covered(
+        "cargo test && cd crates/a && cargo test",
+        "/x/proj"
+    ));
+    assert!(!covered("cd && cargo test", "/x/proj"), "home directory");
+    assert!(!covered("cd - && cargo test", "/x/proj"));
+    assert!(!covered("cd $DIR && cargo test", "/x/proj"));
+    assert!(from("cd /x/proj", "/x/proj").is_none(), "runs nothing");
 }

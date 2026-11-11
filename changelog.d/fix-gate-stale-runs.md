@@ -1,0 +1,2 @@
+- **Verified mode no longer trusts a stale test run.** A passing test run you made earlier no longer counts as verification once a subagent or an external (MCP) tool has changed files since; Chanto runs the checks again instead.
+- **A test run in a subfolder no longer verifies the whole project.** Running the tests from inside one package (for example after `cd crates/a`) no longer counts for the project-wide check, so Chanto runs that check itself.

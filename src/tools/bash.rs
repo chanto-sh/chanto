@@ -32,6 +32,8 @@ fn append_bounded(buf: &mut Vec<u8>, data: &[u8]) {
 pub struct BgShell {
     pub id: String,
     pub command: String,
+    /// The directory the command started in.
+    pub cwd: std::path::PathBuf,
     /// The originating Bash call's short description, for human-facing status.
     pub description: Option<String>,
     /// Set for a Monitor watch: its description.
@@ -756,6 +758,7 @@ independent calls in parallel."
             let shell = Arc::new(BgShell {
                 id: id.clone(),
                 command: command.clone(),
+                cwd: cwd.clone(),
                 description,
                 monitor: None,
                 output: Mutex::new(text.clone()),
@@ -1169,6 +1172,7 @@ pub(crate) fn spawn_background(
     let shell = Arc::new(BgShell {
         id: id.clone(),
         command: command.to_string(),
+        cwd: cwd.to_path_buf(),
         description,
         monitor,
         output: Mutex::new(String::new()),
