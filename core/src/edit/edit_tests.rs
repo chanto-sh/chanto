@@ -53,3 +53,71 @@ fn a_crlf_file_takes_an_lf_edit() {
 fn changes_are_counted_by_line() {
     assert_eq!(count_changes("a\nb\nc\n", "a\nB\nc\nd\n"), (2, 1));
 }
+
+#[test]
+fn fuzzy_edit_keeps_the_first_lines_indentation() {
+    // old_string drops the first line's indent; the file has trailing spaces.
+    let text = "def f():\n    if x:  \n        return 1\n    return 2\n";
+    let (out, _) = apply_edit(
+        text,
+        "if x:\n        return 1",
+        "if y:\n        return 1",
+        false,
+    )
+    .unwrap();
+    assert_eq!(out, "def f():\n    if y:\n        return 1\n    return 2\n");
+    // A line added deeper keeps its place relative to the others.
+    let (out, _) = apply_edit(
+        text,
+        "if x:\n        return 1",
+        "if y:\n        log()\n            more()\n        return 1",
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        out,
+        "def f():\n    if y:\n        log()\n            more()\n        return 1\n    return 2\n"
+    );
+}
+
+#[test]
+fn fuzzy_edit_adds_no_blank_line() {
+    let (out, _) = apply_edit("x\na  \nb\ny\n", "a\nb\n", "A\nB\n", false).unwrap();
+    assert_eq!(out, "x\nA\nB\ny\n");
+}
+
+#[test]
+fn fuzzy_edit_keeps_tabs_and_crlf() {
+    let text = "x\r\n\ta\r\n\tb\r\ny\r\n";
+    let (out, _) = apply_edit(text, "    a\n    b", "    A\n    B", false).unwrap();
+    assert_eq!(out, "x\r\n\tA\r\n\tB\r\ny\r\n");
+}
+
+#[test]
+fn fuzzy_edit_in_the_files_own_indentation_is_kept() {
+    let text = "fn main() {\n    let x = 1;  \n    let y = 2;\n}\n";
+    let (out, _) = apply_edit(
+        text,
+        "let x = 1;\nlet y = 2;",
+        "    let x = 1;\n    if y {\n        z();\n    }",
+        false,
+    )
+    .unwrap();
+    assert_eq!(
+        out,
+        "fn main() {\n    let x = 1;\n    if y {\n        z();\n    }\n}\n"
+    );
+}
+
+#[test]
+fn fuzzy_edit_refuses_indentation_it_cant_place() {
+    // old_string's lines are all unindented but sit at two different file
+    // indents, and new_string's unindented line could belong to either.
+    let text = "a:\n    b\nc\n";
+    let err = apply_edit(text, "a:\nb\nc", "a:\nB\nc\n  odd", false).unwrap_err();
+    assert!(
+        err.contains("Retry with old_string copied exactly"),
+        "{err}"
+    );
+    assert!(err.contains("    b"), "{err}");
+}

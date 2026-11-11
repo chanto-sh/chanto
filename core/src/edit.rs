@@ -23,11 +23,12 @@ pub fn apply_edit(
                 return apply_edit(text, &o, &new.replace('\n', "\r\n"), all);
             }
         }
-        if let Some((s, e)) = fuzzy_find(text, old) {
+        if let Some(m) = fuzzy_find(text, old) {
+            let new = fit_to_match(text, &m, old, new)?;
             let mut out = String::with_capacity(text.len() + new.len());
-            out.push_str(&text[..s]);
-            out.push_str(new);
-            out.push_str(&text[e..]);
+            out.push_str(&text[..m.start]);
+            out.push_str(&new);
+            out.push_str(&text[m.end..]);
             return Ok((out, 1));
         }
         return Err("old_string not found in file. Make sure it matches the file contents exactly, including whitespace and indentation (Read the file again if unsure).".into());
@@ -47,9 +48,18 @@ pub fn apply_edit(
     ))
 }
 
-/// Line-based match ignoring trailing whitespace and uniform indentation
-/// differences. Returns a byte range only if the match is unique.
-fn fuzzy_find(text: &str, old: &str) -> Option<(usize, usize)> {
+/// Where a whitespace-tolerant match landed: the byte range (from the first
+/// matched line's start to the end of the last one's text, before its line
+/// ending) and the matched lines.
+struct FuzzyMatch<'a> {
+    start: usize,
+    end: usize,
+    lines: Vec<&'a str>,
+}
+
+/// Line-based match ignoring trailing whitespace and indentation
+/// differences. Returns the match only if it is unique.
+fn fuzzy_find<'a>(text: &'a str, old: &str) -> Option<FuzzyMatch<'a>> {
     let old_lines: Vec<&str> = old.lines().map(|l| l.trim()).collect();
     if old_lines.len() < 2 || old_lines.iter().all(|l| l.is_empty()) {
         return None;
@@ -71,10 +81,142 @@ fn fuzzy_find(text: &str, old: &str) -> Option<(usize, usize)> {
             }
             let last = &starts[i + old_lines.len() - 1];
             let end = last.0 + last.1.trim_end_matches(['\n', '\r']).len();
-            found = Some((starts[i].0, end));
+            found = Some(FuzzyMatch {
+                start: starts[i].0,
+                end,
+                lines: starts[i..i + old_lines.len()]
+                    .iter()
+                    .map(|(_, l)| l.trim_end_matches(['\n', '\r']))
+                    .collect(),
+            });
         }
     }
     found
+}
+
+fn indent(line: &str) -> &str {
+    &line[..line.len() - line.trim_start().len()]
+}
+
+/// `new` rewritten to sit where a fuzzy match landed, so the edit changes
+/// only what the model changed: its indentation in the file's own
+/// (`old_string` often drops the first line's indent, or uses spaces where
+/// the file has tabs), its line endings in the file's, and no doubled
+/// newline when both strings end in one (the matched range stops before the
+/// last line's ending). When the indentation can't be worked out for sure,
+/// the edit is refused with the matched lines, so the model can retry with
+/// them exactly instead of getting a silently misindented file.
+fn fit_to_match(
+    text: &str,
+    m: &FuzzyMatch,
+    old: &str,
+    new: &str,
+) -> std::result::Result<String, String> {
+    let crlf = text[m.start..].contains("\r\n")
+        && text[m.start..]
+            .split_inclusive('\n')
+            .take(m.lines.len())
+            .all(|l| l.ends_with("\r\n") || !l.ends_with('\n'));
+    let mut new = new.replace("\r\n", "\n");
+    if old.ends_with('\n') && new.ends_with('\n') {
+        new.pop();
+    }
+    // Pairs of (indent in old_string, indent in the file), non-blank lines.
+    let pairs: Vec<(&str, &str)> = old
+        .lines()
+        .zip(&m.lines)
+        .filter(|(o, _)| !o.trim().is_empty())
+        .map(|(o, f)| (indent(o), indent(f)))
+        .collect();
+    let new_lines: Vec<&str> = new.split('\n').collect();
+    let new_indents: Vec<&str> = new_lines
+        .iter()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| indent(l))
+        .collect();
+    let refuse = || {
+        Err(format!(
+            "old_string only matched after ignoring whitespace, and the indentation of new_string can't be fitted to the file for sure. The matched lines are:\n{}\nRetry with old_string copied exactly from them, and new_string indented the same way.",
+            m.lines.join("\n")
+        ))
+    };
+    // How each new line's indentation becomes the file's.
+    let map: Box<dyn Fn(usize, &str) -> Option<String>> = if pairs.iter().all(|(o, f)| o == f) {
+        // Only trailing whitespace differed: keep new_string as written.
+        Box::new(|_, n| Some(n.to_string()))
+    } else if matches!(
+        (pairs.first(), new_indents.first()),
+        (Some((o, f)), Some(n)) if n == f && n != o
+    ) {
+        // new_string starts at the file's indent, not old_string's: it
+        // was written in the file's own indentation already.
+        Box::new(|_, n| Some(n.to_string()))
+    } else if !pairs.is_empty()
+        && new_indents
+            .iter()
+            .all(|n| pairs.iter().any(|(o, _)| o == n))
+    {
+        // Written in old_string's indentation: translate it line by line,
+        // unless one old indent stands for two different file indents.
+        let pairs = pairs.clone();
+        Box::new(move |_, n| {
+            let mut targets = pairs.iter().filter(|(o, _)| *o == n).map(|(_, f)| *f);
+            let first = targets.next()?;
+            targets.all(|f| f == first).then(|| first.to_string())
+        })
+    } else if new_indents.iter().all(|n| {
+        m.lines
+            .iter()
+            .any(|f| !f.trim().is_empty() && indent(f) == *n)
+    }) {
+        // Already in the file's indentation.
+        Box::new(|_, n| Some(n.to_string()))
+    } else if let Some((o, f)) = shift(&pairs) {
+        // A uniform shift (another indent width or tabs for spaces).
+        Box::new(move |_, n| n.strip_prefix(o.as_str()).map(|rest| format!("{f}{rest}")))
+    } else if let (Some((o0, f0)), Some((o, f))) = (pairs.first().copied(), shift(&pairs[1..])) {
+        // A uniform shift, except old_string dropped the first line's indent.
+        Box::new(move |i, n| {
+            if i == 0 && n == o0 {
+                Some(f0.to_string())
+            } else {
+                n.strip_prefix(o.as_str()).map(|rest| format!("{f}{rest}"))
+            }
+        })
+    } else {
+        return refuse();
+    };
+    let mut out = Vec::with_capacity(new_lines.len());
+    let mut first_text = true;
+    for line in &new_lines {
+        if line.trim().is_empty() {
+            out.push(String::new());
+            continue;
+        }
+        let i = if first_text { 0 } else { 1 };
+        first_text = false;
+        match map(i, indent(line)) {
+            Some(ind) => out.push(format!("{ind}{}", line.trim_start())),
+            None => return refuse(),
+        }
+    }
+    let joined = out.join("\n");
+    Ok(if crlf {
+        joined.replace('\n', "\r\n")
+    } else {
+        joined
+    })
+}
+
+/// The (old prefix, file prefix) every pair shares, when each old indent and
+/// its file indent differ only by those prefixes.
+fn shift(pairs: &[(&str, &str)]) -> Option<(String, String)> {
+    let (o0, f0) = pairs.iter().min_by_key(|(o, _)| o.len())?;
+    let (o0, f0) = (o0.to_string(), f0.to_string());
+    pairs
+        .iter()
+        .all(|(o, f)| matches!((o.strip_prefix(o0.as_str()), f.strip_prefix(f0.as_str())), (Some(a), Some(b)) if a == b || a.replace("    ", "\t") == b || b.replace("    ", "\t") == a))
+        .then_some((o0, f0))
 }
 
 /// Lines added and removed between two versions of a file.
