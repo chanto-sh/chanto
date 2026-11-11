@@ -512,7 +512,7 @@ impl Tool for NotebookEdit {
         "NotebookEdit".into()
     }
     fn description(&self) -> String {
-        "Edit a Jupyter notebook (.ipynb) cell by 0-based index: edit_mode `replace` (default) replaces the cell source, `insert` inserts a new cell before the index (or at the end if index == number of cells), `delete` removes it. Read the notebook first.".into()
+        "Edit a Jupyter notebook (.ipynb) cell by 0-based index: edit_mode `replace` (default) replaces the cell source, `insert` inserts a new cell before the index (or at the end if index == number of cells), `delete` removes it. cell_index is required and counts from 0; negative indexes are not supported. Read the notebook first.".into()
     }
     fn schema(&self) -> Value {
         json!({
@@ -550,7 +550,7 @@ impl Tool for NotebookEdit {
         let updated = notebook_preview(&original, &args)?;
         write_text(ctx, &path, Some(&original), &updated).await?;
         let mode = args["edit_mode"].as_str().unwrap_or("replace");
-        let idx = args["cell_index"].as_u64().unwrap_or(0);
+        let idx = arg_u64(&args, "cell_index").unwrap_or(0);
         ctx.env.mark_read(&path);
         Ok(ToolOutput::ok(format!(
             "Notebook {} updated ({mode} cell {idx}).",
@@ -600,13 +600,54 @@ pub(crate) async fn write_text(
     Ok(())
 }
 
+/// The cell NotebookEdit's `cell_index` names, checked against the notebook.
+/// A negative, fractional or missing index is an error rather than cell 0:
+/// a model that sends `-1` for "the last cell" must not delete the first.
+/// `insert` may also name one past the end, to append.
+fn notebook_cell_index(args: &Value, len: usize, mode: &str) -> Result<usize> {
+    let raw = &args["cell_index"];
+    let idx = match raw {
+        Value::Null => None,
+        Value::Number(n) => n.as_u64().or_else(|| {
+            n.as_f64()
+                .filter(|f| *f >= 0.0 && f.fract() == 0.0 && *f <= u64::MAX as f64)
+                .map(|f| f as u64)
+        }),
+        Value::String(s) => s.trim().parse::<u64>().ok(),
+        _ => None,
+    };
+    let last = if mode == "insert" {
+        len
+    } else {
+        len.saturating_sub(1)
+    };
+    let valid = if mode != "insert" && len == 0 {
+        "the notebook has no cells, so only `insert` at cell_index 0 works".to_string()
+    } else if mode == "insert" {
+        format!("the notebook has {len} cell(s), so use 0 to {last} ({len} appends at the end)")
+    } else {
+        format!("the notebook has {len} cell(s), so use 0 to {last}")
+    };
+    match idx {
+        Some(i) if (i as usize) <= last && (mode == "insert" || len > 0) => Ok(i as usize),
+        _ if raw.is_null() => Err(anyhow::anyhow!(
+            "cell_index is required: {valid}. Cells count from 0"
+        )),
+        Some(_) => Err(anyhow::anyhow!("cell_index {raw} is out of range: {valid}")),
+        None => Err(anyhow::anyhow!(
+            "cell_index {raw} isn't a cell number: {valid}. Cells count from 0; \
+there is no negative index for counting from the end"
+        )),
+    }
+}
+
 pub(crate) fn notebook_preview(original: &str, args: &Value) -> Result<String> {
     let mut nb: Value = serde_json::from_str(original)?;
-    let idx = arg_u64(args, "cell_index").unwrap_or(0) as usize;
     let mode = args["edit_mode"].as_str().unwrap_or("replace");
     let cells = nb["cells"]
         .as_array_mut()
         .ok_or_else(|| anyhow::anyhow!("not a notebook: no cells array"))?;
+    let idx = notebook_cell_index(args, cells.len(), mode)?;
     let source = |s: &str| {
         Value::Array(
             s.split_inclusive('\n')
@@ -616,21 +657,9 @@ pub(crate) fn notebook_preview(original: &str, args: &Value) -> Result<String> {
     };
     match mode {
         "delete" => {
-            if idx >= cells.len() {
-                return Err(anyhow::anyhow!(format!(
-                    "cell_index {idx} out of range ({} cells)",
-                    cells.len()
-                )));
-            }
             cells.remove(idx);
         }
         "insert" => {
-            if idx > cells.len() {
-                return Err(anyhow::anyhow!(format!(
-                    "cell_index {idx} out of range ({} cells)",
-                    cells.len()
-                )));
-            }
             let ty = args["cell_type"].as_str().unwrap_or("code");
             let mut cell = json!({"cell_type": ty, "metadata": {}, "source": source(args["new_source"].as_str().unwrap_or(""))});
             if ty == "code" {
@@ -640,9 +669,7 @@ pub(crate) fn notebook_preview(original: &str, args: &Value) -> Result<String> {
             cells.insert(idx, cell);
         }
         _ => {
-            let Some(cell) = cells.get_mut(idx) else {
-                return Err(anyhow::anyhow!(format!("cell_index {idx} out of range")));
-            };
+            let cell = &mut cells[idx];
             cell["source"] = source(arg_str(args, "new_source")?);
             if let Some(t) = args["cell_type"].as_str() {
                 cell["cell_type"] = json!(t);
@@ -650,6 +677,11 @@ pub(crate) fn notebook_preview(original: &str, args: &Value) -> Result<String> {
             if cell["cell_type"] == "code" {
                 cell["outputs"] = json!([]);
                 cell["execution_count"] = Value::Null;
+            } else if let Some(obj) = cell.as_object_mut() {
+                // nbformat allows outputs and an execution count on code
+                // cells only; a markdown cell carrying them is invalid.
+                obj.remove("outputs");
+                obj.remove("execution_count");
             }
         }
     }

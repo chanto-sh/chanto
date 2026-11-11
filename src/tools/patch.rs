@@ -295,8 +295,19 @@ or `*** Delete File: <path>`, and finally `*** End Patch`."
                     // `*** Add File:` means "create", so refuse to clobber an
                     // existing file (Codex's apply_patch errors here too). Without
                     // this a model-emitted patch silently destroys user files.
-                    let s = slot(&mut state, &resolve(&cwd, path));
-                    if s.1.is_some() {
+                    // Ask the file system rather than trust the text read: a
+                    // Latin-1, UTF-16 or binary file reads as None yet exists.
+                    let p = resolve(&cwd, path);
+                    let exists = {
+                        let (fs, p) = (ctx.env.fs(), p.clone());
+                        tokio::task::spawn_blocking(move || {
+                            fs.exists(&p) || std::fs::symlink_metadata(&p).is_ok()
+                        })
+                        .await
+                        .unwrap_or(true)
+                    };
+                    let s = slot(&mut state, &p);
+                    if exists || s.1.is_some() {
                         return Ok(ToolOutput::err(format!(
                             "Cannot add {path}: file already exists (use `*** Update File:` to change it)"
                         )));
