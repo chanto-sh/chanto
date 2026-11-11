@@ -656,6 +656,20 @@ pub async fn resume(
     if team.state == TeamState::Done {
         return Ok(report(&team));
     }
+    // An accepted sub-task is merged from its last run, which must have
+    // finished. One whose run is still going (a record written before a
+    // stopped lead kept re-delegated work running) goes back to phase 1,
+    // which waits for it and reviews it like any other.
+    for t in team
+        .subtasks
+        .iter_mut()
+        .filter(|t| t.state == SubState::Accepted)
+    {
+        let Some(rid) = t.runs.last() else { continue };
+        if host.get(rid).await?.state.is_active() {
+            t.state = SubState::Running;
+        }
+    }
     team.state = TeamState::Running;
     drive(env, team, host, cancel).await
 }
@@ -1002,12 +1016,23 @@ async fn drive_inner(
             status(env, ctl, team, &[]);
             let rid = team.subtasks[i].runs.last().cloned().unwrap_or_default();
             let r = host.get(&rid).await?;
+            if r.state != RunState::Done {
+                // Only finished work is merged: committing a live run's
+                // worktree would take half its work and race the agent.
+                let t = &mut team.subtasks[i];
+                t.state = SubState::Failed;
+                t.note = Some(format!("not merged: run {} is {}", r.id, r.state.label()));
+                team.save()?;
+                continue;
+            }
             match cherry_pick(&team.repo, &team.worktree, &r).await? {
                 Ok(()) => team.subtasks[i].state = SubState::Merged,
                 Err(files) => {
-                    // Re-delegate once, on top of the merged work.
+                    // Re-delegate once, on top of the merged work (`start`
+                    // is set only by a re-delegation).
                     let fits = team.spent() + team.share() <= team.budget_usd + 1e-9;
-                    if team.subtasks[i].runs.len() >= 3 || !fits {
+                    let redelegated = team.subtasks[i].start.is_some();
+                    if team.subtasks[i].runs.len() >= 3 || redelegated || !fits {
                         let t = &mut team.subtasks[i];
                         t.state = SubState::Conflict;
                         t.note = Some(format!(
@@ -1043,7 +1068,9 @@ async fn drive_inner(
                     team.save()?;
                     status(env, ctl, team, &[]);
                     let Some(done) = wait(host, &run.id, ctl, cancel).await? else {
-                        team.subtasks[i].state = SubState::Accepted;
+                        // The sub-task stays Running: on resume, phase 1
+                        // waits for this run and reviews it before it can
+                        // be merged, and counts its cost.
                         team.state = if ctl.stop.load(Ordering::SeqCst) {
                             TeamState::Cancelled
                         } else {
