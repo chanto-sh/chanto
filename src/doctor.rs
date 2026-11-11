@@ -397,18 +397,29 @@ fn human(value: &Value) -> String {
     }
 }
 
+/// `path` with the home folder shown as `~`. An unknown (empty) home leaves
+/// it alone, and either separator counts, for Windows paths.
 fn shorten(path: &str, home: &str) -> String {
+    if home.is_empty() {
+        return path.into();
+    }
     if path == home {
-        "~".into()
-    } else if let Some(rest) = path.strip_prefix(&format!("{home}/")) {
-        format!("~/{rest}")
-    } else {
-        path.into()
+        return "~".into();
+    }
+    match path
+        .strip_prefix(home)
+        .and_then(|rest| rest.strip_prefix(['/', '\\']))
+    {
+        Some(rest) => format!("~/{rest}"),
+        None => path.into(),
     }
 }
 
 pub fn render(report: &Value) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    // `HOME` isn't set on Windows; this finds the profile folder there too.
+    let home = dirs::home_dir()
+        .map(|h| h.display().to_string())
+        .unwrap_or_default();
     let mut out = format!(
         "chanto {}\nBinary: {}\nConfig home: {}\n",
         human(&report["version"]),

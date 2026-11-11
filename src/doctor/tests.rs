@@ -296,3 +296,14 @@ async fn report_explains_a_refused_key_and_a_missing_model() {
     assert!(warnings.contains("No model is set up"), "{warnings}");
     assert!(warnings.contains("Provider unreachable"), "{warnings}");
 }
+
+#[test]
+fn home_is_shortened_only_when_known() {
+    assert_eq!(shorten("/bin/chanto", ""), "/bin/chanto");
+    assert_eq!(shorten("/h/.chanto", "/h"), "~/.chanto");
+    assert_eq!(shorten("/hx/.chanto", "/h"), "/hx/.chanto");
+    assert_eq!(
+        shorten(r"C:\Users\me\.chanto\config.toml", r"C:\Users\me"),
+        r"~/.chanto\config.toml"
+    );
+}
