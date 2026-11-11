@@ -4235,13 +4235,16 @@ async fn messages_reach_a_background_agent_queued_or_resumed() {
 }
 
 #[tokio::test]
-async fn a_write_with_repaired_arguments_is_not_run() {
+async fn a_call_with_repaired_arguments_runs_only_if_read_only() {
     let dir = tmpdir("repaired-write");
+    std::fs::write(dir.join("r.txt"), "readable").unwrap();
     let cut = |name: &str, args: &str| json!([{"index": 0, "id": "c1", "type": "function", "function": {"name": name, "arguments": args}}]);
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": cut("Write", "{\"file_path\": \"a.txt\", \"content\": \"line one\\nline tw")}),
-        // Other tools still run with repaired arguments.
+        // A cut-off shell command isn't run either.
         json!({"tool_calls": cut("Bash", "{\"command\": \"echo ran > b.txt")}),
+        // A read-only tool still runs with repaired arguments.
+        json!({"tool_calls": cut("Read", "{\"file_path\": \"r.txt")}),
         json!({"content": "done"}),
     ])
     .await;
@@ -4255,15 +4258,24 @@ async fn a_write_with_repaired_arguments_is_not_run() {
         !dir.join("a.txt").exists(),
         "the truncated Write was not run"
     );
-    assert!(dir.join("b.txt").exists(), "the Bash call ran");
+    assert!(
+        !dir.join("b.txt").exists(),
+        "the truncated Bash was not run"
+    );
     let seen = seen.lock().unwrap();
     let second = seen[1].to_string();
     assert!(
         second.contains("was not run") && second.contains("smaller pieces"),
         "{second}"
     );
+    let third = seen[2].to_string();
     assert!(
-        !seen[2].to_string().contains(llm::REPAIRED),
+        third.contains("was not run") && third.contains("complete arguments"),
+        "{third}"
+    );
+    assert!(seen[3].to_string().contains("readable"), "the Read ran");
+    assert!(
+        !seen[3].to_string().contains(llm::REPAIRED),
         "the marker never reaches the model"
     );
 }
