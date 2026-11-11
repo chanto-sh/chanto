@@ -455,6 +455,16 @@ impl Queued {
 
 // --------------------------------------------------------------------- env
 
+/// A background snapshot any number of callers can await. A snapshot task
+/// that panics leaves its checkpoints without a tree; waiters just resume.
+pub type PendingSnapshot = futures::future::Shared<futures::future::BoxFuture<'static, ()>>;
+
+/// Wrap a snapshot task so any number of callers can wait for it.
+pub fn pending_snapshot(handle: tokio::task::JoinHandle<()>) -> PendingSnapshot {
+    use futures::FutureExt;
+    handle.map(|_| ()).boxed().shared()
+}
+
 pub struct Env {
     pub accounting: Arc<crate::cost::Accounting>,
     /// Spend guard: fan-out estimates, burn-rate notices, the `/cost` breakdown.
@@ -513,8 +523,10 @@ pub struct Env {
     /// File snapshots per user turn, for /rewind.
     pub checkpoints: Mutex<Vec<Checkpoint>>,
     /// The per-prompt working-tree snapshot, taken in the background; tools
-    /// that change files wait for it first.
-    pub pending_snapshot: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// that change files wait for it first. Shared so that every waiter, not
+    /// just the first, blocks until it is done: parallel subagents each
+    /// wait before their first edit.
+    pub pending_snapshot: Mutex<Option<PendingSnapshot>>,
     /// The checkpoint whose snapshot hasn't been taken yet: it is taken when
     /// something may change files (`start_snapshot`), so a turn that only
     /// reads never pays for one.
@@ -1293,7 +1305,7 @@ impl Env {
         // A snapshot the previous turn started has to finish first.
         let running = self.pending_snapshot.lock().unwrap().take();
         if let Some(h) = running {
-            let _ = h.await;
+            h.await;
         }
         if let Some(previous) = self.deferred_snapshot.lock().unwrap().replace(id) {
             self.unsnapped.lock().unwrap().push(previous);
@@ -1306,7 +1318,7 @@ impl Env {
             return;
         };
         let env = self.clone();
-        *self.pending_snapshot.lock().unwrap() = Some(tokio::task::spawn_blocking(move || {
+        let handle = tokio::task::spawn_blocking(move || {
             crate::util::timing("snapshot start");
             // After `/cd` out of the project, a snapshot of the old project
             // says nothing about this turn's files (and restoring it would
@@ -1329,15 +1341,19 @@ impl Env {
             {
                 cp.tree = tree.clone();
             }
-        }));
+        });
+        *self.pending_snapshot.lock().unwrap() = Some(pending_snapshot(handle));
     }
 
     /// Wait for the per-prompt snapshot, taking it first if it was deferred.
+    /// Every caller waits for it to finish: the handle stays in place (a
+    /// finished one resolves at once) so a second concurrent waiter can't
+    /// find the slot empty and edit while the snapshot is still being taken.
     pub async fn wait_snapshot(self: &Arc<Self>) {
         self.start_snapshot();
-        let h = self.pending_snapshot.lock().unwrap().take();
+        let h = self.pending_snapshot.lock().unwrap().clone();
         if let Some(h) = h {
-            let _ = h.await;
+            h.await;
         }
     }
 

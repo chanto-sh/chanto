@@ -1,7 +1,16 @@
 use super::*;
 use crate::llm::mock::{serve, sse};
 
-async fn response(kind: ProviderKind, events: Vec<Value>) -> (ChatResponse, String) {
+async fn response(kind: ProviderKind, mut events: Vec<Value>) -> (ChatResponse, String) {
+    // A Responses stream ends with its terminal event (or it was cut off).
+    let ended = |v: &Value| {
+        v["type"]
+            .as_str()
+            .is_some_and(|t| t == "response.completed" || t == "response.incomplete")
+    };
+    if kind == ProviderKind::OpenaiResponses && !events.iter().any(ended) {
+        events.push(json!({"type":"response.completed","response":{}}));
+    }
     let body = sse(&events
         .into_iter()
         .map(|v| ("message", v))

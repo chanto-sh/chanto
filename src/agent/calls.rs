@@ -51,18 +51,31 @@ impl Agent {
                 .and_then(|o| o.remove(llm::REPAIRED))
                 .is_some();
             let mut call = codex_call(call);
-            if repaired
-                && self
-                    .lookup_tool(&call.name)
-                    .is_some_and(|t| t.kind() == ToolKind::Edit)
-            {
-                // Broken JSON in a file write was most likely cut off: running
-                // the repaired version would leave a truncated file.
-                plan.push((call.clone(), None, Err(format!(
-                    "This {} call was not run: its arguments weren't valid JSON (they look cut off), and writing a repaired guess could leave a truncated file. \
-                     Resend it in smaller pieces: e.g. Write a short first part, then add the rest with several Edit calls.",
-                    call.name
-                )), None));
+            // Broken JSON was most likely cut off: a repaired guess may be a
+            // truncated file or command (`rm -rf build/ca`). Only a tool
+            // without side effects runs with one.
+            let repaired_kind = repaired
+                .then(|| self.lookup_tool(&call.name))
+                .flatten()
+                .map(|t| t.kind())
+                .filter(|k| !matches!(k, ToolKind::ReadOnly));
+            if let Some(kind) = repaired_kind {
+                let why = if kind == ToolKind::Edit {
+                    "writing a repaired guess could leave a truncated file. \
+                     Resend it in smaller pieces: e.g. Write a short first part, then add the rest with several Edit calls."
+                } else {
+                    "running a repaired guess could do something other than intended (a truncated command or input). \
+                     Resend the call with its complete arguments."
+                };
+                plan.push((
+                    call.clone(),
+                    None,
+                    Err(format!(
+                        "This {} call was not run: its arguments weren't valid JSON (they look cut off), and {why}",
+                        call.name
+                    )),
+                    None,
+                ));
                 continue;
             }
             let tool_cwd = self.cwd_override.clone().filter(|_| {
