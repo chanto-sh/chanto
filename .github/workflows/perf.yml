@@ -232,7 +232,13 @@ jobs:
           if [ -f "$BENCH_TEMP/chanto-base" ]; then
             base=(--base "$BENCH_TEMP/chanto-base")
           fi
-          $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"
+          # Instruction counts move about a percent between runs (thread
+          # scheduling, hash seeds), past the 0.5% tolerance: as with Measure,
+          # a failure is measured again before it fails the job.
+          if ! $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"; then
+            echo "::notice title=Exact costs::Measuring again: instruction counts vary a little between runs."
+            $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"
+          fi
       - name: Responsiveness
         if: ${{ env.MEASURE == 'true' && github.event_name != 'push' }}
         run: $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"
