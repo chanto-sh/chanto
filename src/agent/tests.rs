@@ -6804,3 +6804,37 @@ fn nesting_is_capped_and_gives_its_room_back() {
     drop(held);
     assert!(crate::resources::nested_agent().is_some());
 }
+
+#[tokio::test]
+async fn every_waiter_waits_for_the_snapshot() {
+    // Two foreground Task calls run concurrently and each subagent waits for
+    // the turn's snapshot before its first edit. Only the first used to wait:
+    // the second found the slot empty and edited while the snapshot was still
+    // being taken, so rewind could keep that edit.
+    let dir = tmpdir("snapshot-waiters");
+    let env = make_env("http://127.0.0.1:1", &dir, Mode::Bypass, 32768);
+    let done = Arc::new(AtomicBool::new(false));
+    let flag = done.clone();
+    *env.pending_snapshot.lock().unwrap() =
+        Some(pending_snapshot(tokio::task::spawn_blocking(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            flag.store(true, Ordering::SeqCst);
+        })));
+    let waiter = |env: Arc<Env>, done: Arc<AtomicBool>| {
+        tokio::spawn(async move {
+            env.wait_snapshot().await;
+            done.load(Ordering::SeqCst)
+        })
+    };
+    let a = waiter(env.clone(), done.clone());
+    let b = waiter(env.clone(), done.clone());
+    assert!(a.await.unwrap(), "the first waiter saw the snapshot finish");
+    assert!(
+        b.await.unwrap(),
+        "the second waiter saw the snapshot finish"
+    );
+    // A finished snapshot doesn't hold up later callers.
+    let start = Instant::now();
+    env.wait_snapshot().await;
+    assert!(start.elapsed() < Duration::from_millis(500));
+}
