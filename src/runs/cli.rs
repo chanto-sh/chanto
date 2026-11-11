@@ -243,7 +243,18 @@ async fn start_daemon() -> Result<Client> {
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
-    let mut child = cmd.spawn().context("starting the chanto daemon")?;
+    let child = cmd.spawn().context("starting the chanto daemon")?;
+    await_daemon(child, &store, &home.join("daemon.log")).await
+}
+
+/// Wait for the daemon just started as `child` to answer, or for whichever
+/// process won the race to host runs when `child` exits because another got
+/// there first.
+async fn await_daemon(
+    mut child: std::process::Child,
+    store: &super::Store,
+    log: &std::path::Path,
+) -> Result<Client> {
     for _ in 0..150 {
         tokio::time::sleep(Duration::from_millis(100)).await;
         if let Some(c) = runs_host().await {
@@ -252,15 +263,12 @@ async fn start_daemon() -> Result<Client> {
         // It stops at once when another daemon got there first.
         if child.try_wait().ok().flatten().is_some() {
             if store.hosted_elsewhere() {
-                return wait_for_host(&store).await;
+                return wait_for_host(store).await;
             }
             break;
         }
     }
-    bail!(
-        "the chanto daemon didn't start; see {}",
-        home.join("daemon.log").display()
-    )
+    bail!("the chanto daemon didn't start; see {}", log.display())
 }
 
 /// Wait for the process holding the runs store to say where it listens.
