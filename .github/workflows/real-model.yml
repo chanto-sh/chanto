@@ -117,7 +117,18 @@ jobs:
             curl -fs http://127.0.0.1:11434/api/version > /dev/null && break
             sleep 1
           done
-          ollama/bin/ollama pull "$MODEL"
+          # The registry has brief outages (503 "upstream connect error"); a
+          # pull resumes what it already has, so retry with backoff before
+          # failing, as the curl downloads do.
+          for attempt in 1 2 3 4 5; do
+            ollama/bin/ollama pull "$MODEL" && break
+            if [ "$attempt" = 5 ]; then
+              echo "::error title=Ollama registry::couldn't pull $MODEL after 5 attempts"
+              exit 1
+            fi
+            echo "::warning title=Ollama registry::pull failed (attempt $attempt); retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
           # Ollama rewrites the manifest it stores, so check the weights instead:
           # the pulled manifest must name the pinned layer, whose file must match.
           grep -q "sha256:$MODEL_SHA256" "$HOME/.ollama/models/manifests/registry.ollama.ai/library/${MODEL%%:*}/${MODEL#*:}"
