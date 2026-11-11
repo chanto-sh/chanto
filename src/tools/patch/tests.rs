@@ -77,3 +77,51 @@ fn shell_heredoc() {
     );
     assert!(from_shell("apply_patches foo").is_none());
 }
+
+#[tokio::test]
+async fn add_file_refuses_an_existing_file_that_isnt_utf8() {
+    let dir = std::env::temp_dir().join(format!("chanto-patch-add-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let env = crate::agent::tests::make_env(
+        "http://localhost:1",
+        &dir,
+        crate::permissions::Mode::Default,
+        32768,
+    );
+    let ctx = Ctx {
+        env,
+        cancel: tokio_util::sync::CancellationToken::new(),
+        depth: 0,
+        call_id: None,
+        cwd_override: None,
+        reads: None,
+    };
+    for (name, bytes) in [
+        ("latin1.txt", b"caf\xe9\n".to_vec()),
+        ("utf16.txt", vec![0xFF, 0xFE, b'h', 0, b'i', 0]),
+        ("blob.bin", vec![0, 159, 146, 150, 255]),
+    ] {
+        let file = dir.join(name);
+        std::fs::write(&file, &bytes).unwrap();
+        let input = format!(
+            "*** Begin Patch\n*** Add File: {}\n+replaced\n*** End Patch",
+            file.display()
+        );
+        let out = ApplyPatch.run(json!({"input": input}), &ctx).await.unwrap();
+        assert!(
+            out.content.contains("already exists"),
+            "{name}: {}",
+            out.content
+        );
+        assert_eq!(std::fs::read(&file).unwrap(), bytes, "{name} is untouched");
+    }
+    // A new file is still created.
+    let new = dir.join("new.txt");
+    let input = format!(
+        "*** Begin Patch\n*** Add File: {}\n+hello\n*** End Patch",
+        new.display()
+    );
+    ApplyPatch.run(json!({"input": input}), &ctx).await.unwrap();
+    assert_eq!(std::fs::read_to_string(&new).unwrap(), "hello\n");
+    let _ = std::fs::remove_dir_all(&dir);
+}
