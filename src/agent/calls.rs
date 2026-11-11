@@ -508,13 +508,30 @@ impl Agent {
                 self.turn_untracked_writes = true;
                 return;
             }
-            ToolKind::External => true,
-            _ if call.name == "Task" => true,
+            ToolKind::External => {
+                self.may_have_changed_files();
+                return;
+            }
+            _ if call.name == "Task" => {
+                self.may_have_changed_files();
+                return;
+            }
             _ => return,
         };
         self.turn_mutations += 1;
         self.edit_seq += 1;
         self.turn_untracked_writes |= untracked;
+    }
+
+    /// A subagent or MCP tool may have changed files, out of this agent's
+    /// sight: an earlier run of the checks is no longer evidence (`edit_seq`),
+    /// and the turn may have changed things a checkpoint doesn't show. It
+    /// isn't counted as one of this agent's own edits (`turn_mutations`):
+    /// that would start the end-of-turn related-tests work after every
+    /// subagent, even one that only read.
+    fn may_have_changed_files(&mut self) {
+        self.edit_seq += 1;
+        self.turn_untracked_writes = true;
     }
 
     /// This agent in the spend ledger: the main agent, or the Task call that started it.
