@@ -25,10 +25,24 @@ pub fn apply_edit(
         }
         if let Some(m) = fuzzy_find(text, old) {
             let new = fit_to_match(text, &m, old, new)?;
+            // Deleting whole lines (old_string ends with a newline, nothing
+            // replaces it) takes the last line's ending too, as an exact
+            // match would, instead of leaving an empty line behind.
+            let end = if new.is_empty() && old.ends_with('\n') {
+                let rest = &text[m.end..];
+                m.end
+                    + if rest.starts_with("\r\n") {
+                        2
+                    } else {
+                        usize::from(rest.starts_with('\n'))
+                    }
+            } else {
+                m.end
+            };
             let mut out = String::with_capacity(text.len() + new.len());
             out.push_str(&text[..m.start]);
             out.push_str(&new);
-            out.push_str(&text[m.end..]);
+            out.push_str(&text[end..]);
             return Ok((out, 1));
         }
         return Err("old_string not found in file. Make sure it matches the file contents exactly, including whitespace and indentation (Read the file again if unsure).".into());
@@ -176,16 +190,16 @@ fn fit_to_match(
     }) {
         // Already in the file's indentation.
         Box::new(|_, n| Some(n.to_string()))
-    } else if let Some((o, f)) = shift(&pairs) {
+    } else if let Some(sh) = shift(&pairs) {
         // A uniform shift (another indent width or tabs for spaces).
-        Box::new(move |_, n| n.strip_prefix(o.as_str()).map(|rest| format!("{f}{rest}")))
-    } else if let (Some((o0, f0)), Some((o, f))) = (pairs.first().copied(), shift(&pairs[1..])) {
+        Box::new(move |_, n| sh.apply(n))
+    } else if let (Some((o0, f0)), Some(sh)) = (pairs.first().copied(), shift(&pairs[1..])) {
         // A uniform shift, except old_string dropped the first line's indent.
         Box::new(move |i, n| {
             if i == 0 && n == o0 {
                 Some(f0.to_string())
             } else {
-                n.strip_prefix(o.as_str()).map(|rest| format!("{f}{rest}"))
+                sh.apply(n)
             }
         })
     } else {
@@ -213,15 +227,51 @@ fn fit_to_match(
     })
 }
 
-/// The (old prefix, file prefix) every pair shares, when each old indent and
-/// its file indent differ only by those prefixes.
-fn shift(pairs: &[(&str, &str)]) -> Option<(String, String)> {
+/// How old_string's indentation maps onto the file's when it differs by a
+/// uniform shift: a common prefix swapped (`old` for `file`) and, when the
+/// file indents with tabs where old_string used four spaces, the rest of
+/// each indent converted too.
+struct Shift {
+    old: String,
+    file: String,
+    tabs: bool,
+}
+
+impl Shift {
+    /// The file's indentation for a new_string line indented `n`.
+    fn apply(&self, n: &str) -> Option<String> {
+        let rest = n.strip_prefix(self.old.as_str())?;
+        let rest = if self.tabs {
+            rest.replace("    ", "\t")
+        } else {
+            rest.to_string()
+        };
+        Some(format!("{}{rest}", self.file))
+    }
+}
+
+/// The [`Shift`] every pair agrees on, if there is one.
+fn shift(pairs: &[(&str, &str)]) -> Option<Shift> {
     let (o0, f0) = pairs.iter().min_by_key(|(o, _)| o.len())?;
-    let (o0, f0) = (o0.to_string(), f0.to_string());
-    pairs
-        .iter()
-        .all(|(o, f)| matches!((o.strip_prefix(o0.as_str()), f.strip_prefix(f0.as_str())), (Some(a), Some(b)) if a == b || a.replace("    ", "\t") == b || b.replace("    ", "\t") == a))
-        .then_some((o0, f0))
+    let mut tabs = false;
+    for (o, f) in pairs {
+        let (Some(a), Some(b)) = (o.strip_prefix(o0), f.strip_prefix(f0)) else {
+            return None;
+        };
+        if a == b {
+            continue;
+        }
+        if a.replace("    ", "\t") == b {
+            tabs = true;
+        } else {
+            return None;
+        }
+    }
+    Some(Shift {
+        old: o0.to_string(),
+        file: f0.to_string(),
+        tabs,
+    })
 }
 
 /// Lines added and removed between two versions of a file.

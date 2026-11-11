@@ -121,3 +121,35 @@ fn fuzzy_edit_refuses_indentation_it_cant_place() {
     );
     assert!(err.contains("    b"), "{err}");
 }
+
+#[test]
+fn fuzzy_edit_in_a_tab_file_indents_new_lines_with_tabs() {
+    // A deeper line added in spaces lands in tabs, and the lines it kept
+    // stay as they were.
+    let text = "x\n\tif a:\n\t\tb()\ny\n";
+    let (out, _) = apply_edit(
+        text,
+        "    if a:\n        b()",
+        "    if a:\n        b()\n            c()",
+        false,
+    )
+    .unwrap();
+    assert_eq!(out, "x\n\tif a:\n\t\tb()\n\t\t\tc()\ny\n");
+}
+
+#[test]
+fn fuzzy_delete_of_whole_lines_leaves_no_empty_line() {
+    let (out, _) = apply_edit("x\n    a  \n    b\ny\n", "a\nb\n", "", false).unwrap();
+    assert_eq!(out, "x\ny\n");
+    let (out, _) = apply_edit("x\r\n  a \r\n  b\r\ny\r\n", "a\nb\n", "", false).unwrap();
+    assert_eq!(out, "x\r\ny\r\n");
+    // Without a trailing newline in old_string, only the text goes.
+    let (out, _) = apply_edit("x\n    a  \n    b\ny\n", "a\nb", "", false).unwrap();
+    assert_eq!(out, "x\n\ny\n");
+}
+
+#[test]
+fn fuzzy_edit_at_the_end_of_a_file_without_a_newline() {
+    let (out, _) = apply_edit("x\n    a  \n    b", "a\nb", "A\nB", false).unwrap();
+    assert_eq!(out, "x\n    A\n    B");
+}
