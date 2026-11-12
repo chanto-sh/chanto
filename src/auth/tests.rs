@@ -69,6 +69,24 @@ fn keychain_keeps_secrets_out_of_the_file() {
         matches!(get("groq"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_secret")
     );
     assert!(remove("groq").unwrap() && get("groq").is_none());
+    // One login's key reads only its own keychain entry, not every saved
+    // login's: each read is a round trip to the keychain service.
+    for provider in ["groq", "openrouter", "deepseek"] {
+        let key = format!("{provider}_secret");
+        set(provider, Credential::ApiKey { key: key.into() }).unwrap();
+    }
+    let reads = || keychain::LOADS.load(std::sync::atomic::Ordering::Relaxed);
+    let before = reads();
+    assert!(
+        matches!(get("openrouter"), Some(Credential::ApiKey { key }) if key.expose() == "openrouter_secret")
+    );
+    assert_eq!(reads() - before, 1);
+    assert!(get("mistral").is_none());
+    assert_eq!(
+        reads() - before,
+        1,
+        "a provider with no login reads nothing"
+    );
     // SAFETY: test-only, serialized by TEST_HOME_LOCK.
     unsafe {
         match prev_home {

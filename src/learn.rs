@@ -511,13 +511,34 @@ pub fn add(root: &Path, text: &str, global: bool) -> anyhow::Result<Lesson> {
 
 /// Is this user message correcting the agent?
 pub fn is_correction(msg: &str) -> bool {
+    // Every alternative below starts with one of these, so a message that
+    // starts with none of them can't match, and the regex (compiled on first
+    // use, the costliest part) isn't needed. Case-insensitive matching folds
+    // `ſ` and the Kelvin sign into ASCII, which no ASCII comparison sees:
+    // text with either always goes to the regex.
+    const STARTS: &[&str] = &[
+        "no", "do", "stop", "instead", "actually", "wrong", "that", "please", "use", "why", "you",
+    ];
+    let head: String = msg
+        .trim_start()
+        .chars()
+        .take(8)
+        .collect::<String>()
+        .to_lowercase();
+    if !msg.contains(['\u{17f}', '\u{212a}']) && !STARTS.iter().any(|w| head.starts_with(w)) {
+        return false;
+    }
+    correction_regex().is_match(msg)
+}
+
+fn correction_regex() -> &'static regex::Regex {
     static RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
             r"(?i)^\s*(no\b|nope|don'?t\b|do not\b|stop\b|instead\b|actually\b|wrong\b|that'?s (not|wrong)|not like that|please don'?t|use .+ (instead|not)\b|why did you|you (should|shouldn'?t|forgot|missed))",
         )
         .unwrap()
     });
-    RE.is_match(msg)
+    &RE
 }
 
 /// Compact unified diff (for user-edit signals).
