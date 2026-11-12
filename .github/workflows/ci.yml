@@ -176,7 +176,7 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
-          tool: cargo-llvm-cov@0.6.21
+          tool: cargo-llvm-cov@0.9.1
       # chanto-core's own tests too: code that moved there is tested there.
       - run: cargo llvm-cov --locked --quiet -p chanto -p chanto-core --lcov --output-path lcov.info
         env:
@@ -219,8 +219,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      # Rust 1.99.1 and cargo-llvm-cov 0.6.21 for now: with Rust 1.100,
+      # cargo-llvm-cov (0.6.21 and 0.9.1 alike) maps almost none of the
+      # Windows test binaries' coverage, and Codecov rejects the near-empty
+      # report. Coverage only measures which lines the tests reach; every
+      # other job builds and tests with the current compiler.
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: "1.99.1"
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
