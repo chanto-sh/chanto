@@ -1555,6 +1555,9 @@ pub struct Agent {
     /// re-injected when the conversation is compacted.
     pub goal: Option<PathBuf>,
     message_redactor: crate::secrets::MessageRedactor,
+    /// The same, for the transcript each turn saves: only messages added or
+    /// changed since the last save are masked again.
+    session_redactor: crate::secrets::MessageRedactor,
     /// The `fallback_model` entry serving the rest of this turn, after the
     /// model was overloaded or unavailable (None: the session's model).
     turn_fallback: Option<usize>,
@@ -1661,6 +1664,7 @@ impl Agent {
             stats: Default::default(),
             goal: None,
             message_redactor: Default::default(),
+            session_redactor: Default::default(),
             turn_fallback: None,
             last_model: None,
             sub: Default::default(),

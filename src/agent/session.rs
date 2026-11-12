@@ -352,7 +352,7 @@ impl Agent {
             }
         }
         let mut msgs = self.messages.clone();
-        crate::secrets::redact_messages(&mut msgs);
+        self.session_redactor.redact(&mut msgs);
         Some((s.clone(), msgs))
     }
 
