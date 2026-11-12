@@ -1,0 +1,70 @@
+name: perf probe
+# A throwaway measurement, run on pushes to the perf/probe branch only:
+# musl's allocator against mimalloc on Linux, and where a Windows start
+# spends its CPU. Not for merging.
+on:
+  push:
+    branches: [perf/probe]
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Install cross
+        run: cargo install cross --version 0.2.5 --locked
+      - name: Build
+        run: |
+          set -eux
+          mkdir -p "$RUNNER_TEMP/bin"
+          cargo build --release --locked
+          cp target/release/chanto "$RUNNER_TEMP/bin/glibc"
+          cross build --release --locked --target x86_64-unknown-linux-musl
+          cp target/x86_64-unknown-linux-musl/release/chanto "$RUNNER_TEMP/bin/musl"
+          cross build --release --locked --target x86_64-unknown-linux-musl --features mimalloc
+          cp target/x86_64-unknown-linux-musl/release/chanto "$RUNNER_TEMP/bin/musl-mimalloc"
+          printf 'fn main() {}\n' > "$RUNNER_TEMP/empty.rs"
+          rustc -O -o "$RUNNER_TEMP/bin/empty" "$RUNNER_TEMP/empty.rs"
+          ls -la "$RUNNER_TEMP/bin"
+      - name: Measure
+        run: |
+          b="$RUNNER_TEMP/bin"
+          python3 tests/perf/probe.py glibc="$b/glibc" musl="$b/musl" musl-mimalloc="$b/musl-mimalloc" \
+            --floor "$b/empty" | tee -a "$GITHUB_STEP_SUMMARY"
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - name: Install NASM (aws-lc-sys)
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+      - name: Build
+        shell: bash
+        run: |
+          set -eux
+          mkdir -p "$RUNNER_TEMP/bin"
+          cargo build --release --locked
+          cp target/release/chanto.exe "$RUNNER_TEMP/bin/default.exe"
+          cargo build --release --locked --features mimalloc
+          cp target/release/chanto.exe "$RUNNER_TEMP/bin/mimalloc.exe"
+          printf 'fn main() {}\n' > "$RUNNER_TEMP/empty.rs"
+          rustc -O -o "$RUNNER_TEMP/bin/empty.exe" "$RUNNER_TEMP/empty.rs"
+          ls -la "$RUNNER_TEMP/bin"
+      - name: Measure
+        shell: bash
+        run: |
+          b="$RUNNER_TEMP/bin"
+          python tests/perf/probe.py default="$b/default.exe" mimalloc="$b/mimalloc.exe" \
+            --floor "$b/empty.exe" | tee -a "$GITHUB_STEP_SUMMARY"

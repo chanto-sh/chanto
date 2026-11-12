@@ -48,7 +48,33 @@ fn process_cpu_ms() -> f64 {
         let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
         ms(u.ru_utime) + ms(u.ru_stime)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::FILETIME;
+        use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
+        let zero = FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (zero, zero, zero, zero);
+        // SAFETY: GetProcessTimes only writes the four structs it is given,
+        // and the current-process pseudo-handle needs no closing.
+        let ok = unsafe {
+            GetProcessTimes(
+                GetCurrentProcess(),
+                &mut created,
+                &mut exited,
+                &mut kernel,
+                &mut user,
+            )
+        };
+        // FILETIMEs count 100 ns units.
+        let ms = |t: FILETIME| {
+            ((u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime)) as f64 / 10_000.0
+        };
+        if ok != 0 { ms(kernel) + ms(user) } else { 0.0 }
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         0.0
     }

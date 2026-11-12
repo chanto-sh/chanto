@@ -1,6 +1,11 @@
 //! The `chanto` command-line binary. All behaviour lives in the `chanto`
 //! library crate (`src/lib.rs`); this is just the async entry point, so the
 //! same core can be embedded by other programs.
+/// Optional allocator, to compare against the platform's (musl's is slow).
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 fn main() {
     // What it took to get here (loading the binary and its libraries) shows
     // as this checkpoint's CPU time.
