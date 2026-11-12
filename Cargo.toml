@@ -90,7 +90,6 @@ sha2 = "0.11.1"
 shell-words = "1.1.1"
 similar = "3.2.0"
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
-sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 tokio = { version = "1.53.2", features = ["full"] }
 tokio-tungstenite = "0.30.0"
 tokio-util = "0.7.20"
@@ -166,6 +165,12 @@ security-framework = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
+
+# Memory and process information (src/procs.rs). macOS asks the kernel
+# directly instead: sysinfo links IOKit and CoreFoundation, which macOS then
+# loads at every launch.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Isolation", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Console", "Win32_System_StationsAndDesktops", "Win32_Storage_FileSystem"] }
