@@ -176,7 +176,7 @@ jobs:
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
-          tool: cargo-llvm-cov@0.6.21
+          tool: cargo-llvm-cov@0.9.1
       # chanto-core's own tests too: code that moved there is tested there.
       - run: cargo llvm-cov --locked --quiet -p chanto -p chanto-core --lcov --output-path lcov.info
         env:
@@ -229,7 +229,7 @@ jobs:
       - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
       - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
         with:
-          tool: cargo-llvm-cov@0.6.21
+          tool: cargo-llvm-cov@0.9.1
       # chanto's tests only: chanto-core's own expect the `/` paths of their
       # in-memory project, and run on Linux and WASI. A failing test still gets
       # its report uploaded (the `windows` job is what judges the tests), so
