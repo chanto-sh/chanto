@@ -67,6 +67,7 @@ mod plain;
 mod plugin;
 mod presence;
 mod primer;
+mod procs;
 mod provenance;
 mod providers;
 mod quality;

@@ -175,52 +175,100 @@ enum Inhibitor {
     Assertion(u32),
 }
 
+/// IOKit's power assertions, loaded the first time one is taken rather than
+/// linked: a linked framework is loaded at every launch, and most runs end
+/// before the keep-awake delay is up.
 #[cfg(target_os = "macos")]
 mod iokit {
-    use std::ffi::c_void;
-    #[link(name = "IOKit", kind = "framework")]
-    unsafe extern "C" {
-        pub fn IOPMAssertionCreateWithName(
-            kind: *const c_void,
-            level: u32,
-            name: *const c_void,
-            id: *mut u32,
-        ) -> i32;
-        pub fn IOPMAssertionRelease(id: u32) -> i32;
+    use std::ffi::{CStr, c_void};
+    use std::sync::OnceLock;
+
+    type Create = unsafe extern "C" fn(*const c_void, u32, *const c_void, *mut u32) -> i32;
+    type Release = unsafe extern "C" fn(u32) -> i32;
+    type CfString = unsafe extern "C" fn(*const c_void, *const u8, isize, u32, u8) -> *const c_void;
+    type CfRelease = unsafe extern "C" fn(*const c_void);
+
+    pub struct Api {
+        pub create: Create,
+        pub release: Release,
+        string: CfString,
+        pub cf_release: CfRelease,
     }
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFStringCreateWithBytes(
-            alloc: *const c_void,
-            bytes: *const u8,
-            len: isize,
-            encoding: u32,
-            external: u8,
-        ) -> *const c_void;
-        pub fn CFRelease(cf: *const c_void);
+
+    impl Api {
+        /// A CFString the caller releases.
+        pub fn cfstr(&self, s: &str) -> *const c_void {
+            const UTF8: u32 = 0x0800_0100;
+            // SAFETY: the bytes and length describe `s`, valid for the call.
+            unsafe { (self.string)(std::ptr::null(), s.as_ptr(), s.len() as isize, UTF8, 0) }
+        }
     }
-    /// A CFString the caller releases.
-    pub fn cfstr(s: &str) -> *const c_void {
-        const UTF8: u32 = 0x0800_0100;
-        unsafe { CFStringCreateWithBytes(std::ptr::null(), s.as_ptr(), s.len() as isize, UTF8, 0) }
+
+    /// `None` if either framework or one of its functions can't be found.
+    pub fn api() -> Option<&'static Api> {
+        static API: OnceLock<Option<Api>> = OnceLock::new();
+        API.get_or_init(|| {
+            let iokit = open(c"/System/Library/Frameworks/IOKit.framework/IOKit")?;
+            let cf = open(c"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")?;
+            // SAFETY: each symbol is the system function with this signature.
+            unsafe {
+                Some(Api {
+                    create: std::mem::transmute::<*mut c_void, Create>(sym(
+                        iokit,
+                        c"IOPMAssertionCreateWithName",
+                    )?),
+                    release: std::mem::transmute::<*mut c_void, Release>(sym(
+                        iokit,
+                        c"IOPMAssertionRelease",
+                    )?),
+                    string: std::mem::transmute::<*mut c_void, CfString>(sym(
+                        cf,
+                        c"CFStringCreateWithBytes",
+                    )?),
+                    cf_release: std::mem::transmute::<*mut c_void, CfRelease>(sym(
+                        cf,
+                        c"CFRelease",
+                    )?),
+                })
+            }
+        })
+        .as_ref()
+    }
+
+    /// Kept open for the rest of the process: the functions are cached.
+    fn open(path: &CStr) -> Option<*mut c_void> {
+        // SAFETY: a valid C string; RTLD_LOCAL keeps its symbols to itself.
+        let h = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+        (!h.is_null()).then_some(h)
+    }
+
+    fn sym(handle: *mut c_void, name: &CStr) -> Option<*mut c_void> {
+        // SAFETY: an open handle and a valid C string.
+        let f = unsafe { libc::dlsym(handle, name.as_ptr()) };
+        (!f.is_null()).then_some(f)
     }
 }
 
 impl Inhibitor {
     #[cfg(target_os = "macos")]
     fn start() -> Option<Self> {
+        let api = iokit::api()?;
         // `kIOPMAssertionTypePreventUserIdleSystemSleep` at `kIOPMAssertionLevelOn`.
-        let kind = iokit::cfstr("PreventUserIdleSystemSleep");
-        let name = iokit::cfstr("chanto is working");
-        if kind.is_null() || name.is_null() {
-            return None;
-        }
+        let kind = api.cfstr("PreventUserIdleSystemSleep");
+        let name = api.cfstr("chanto is working");
         let mut id = 0u32;
-        let ok = unsafe { iokit::IOPMAssertionCreateWithName(kind, 255, name, &mut id) } == 0;
-        unsafe {
-            iokit::CFRelease(kind);
-            iokit::CFRelease(name);
-        }
+        // SAFETY: CFStrings just created (released once), and an out-pointer
+        // to a local.
+        let ok = unsafe {
+            let ok =
+                !kind.is_null() && !name.is_null() && (api.create)(kind, 255, name, &mut id) == 0;
+            for s in [kind, name] {
+                if !s.is_null() {
+                    (api.cf_release)(s);
+                }
+            }
+            ok
+        };
         ok.then_some(Self::Assertion(id))
     }
 
@@ -294,9 +342,13 @@ impl Drop for Inhibitor {
                 let _ = tx.send(());
             }
             #[cfg(target_os = "macos")]
-            Self::Assertion(id) => unsafe {
-                iokit::IOPMAssertionRelease(*id);
-            },
+            // Loaded: the assertion was taken through it.
+            Self::Assertion(id) => {
+                if let Some(api) = iokit::api() {
+                    // SAFETY: an assertion id IOKit gave us, released once.
+                    unsafe { (api.release)(*id) };
+                }
+            }
         }
     }
 }

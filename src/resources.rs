@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -57,18 +56,11 @@ static LIMITS: OnceLock<Limits> = OnceLock::new();
 /// Process groups the watchdog killed (so the tool result can say why).
 static KILLED: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
-/// The system's process and memory tables: `None` only on platforms sysinfo
-/// doesn't support, where each use falls back to what never blocks work or
-/// kills anything.
-pub(crate) fn system() -> Option<System> {
-    System::new().ok()
-}
+// Where memory or processes can't be read (crate::procs gives None), each
+// use below falls back to what never blocks work or kills anything.
 
 fn total_mb() -> u64 {
-    system().map_or(0, |mut s| {
-        s.refresh_memory();
-        s.total_memory() / 1_048_576
-    })
+    crate::procs::total_memory().map_or(0, |b| b / 1_048_576)
 }
 
 fn limits() -> &'static Limits {
@@ -106,21 +98,16 @@ pub fn max_background_agents() -> usize {
 
 /// Memory available for new work, in MB.
 pub fn available_mb() -> u64 {
-    system().map_or(u64::MAX, available_in)
-}
-
-fn available_in(mut s: System) -> u64 {
-    s.refresh_memory();
+    // On macOS, the kernel's own free percentage, which memory pressure is
+    // based on: a plain "available" count leaves out compressible and
+    // inactive memory and reads close to zero.
     #[cfg(target_os = "macos")]
-    {
-        // sysinfo's "available" is ~0 on macOS (it ignores compressible and
-        // inactive memory); the kernel's own free percentage is what memory
-        // pressure is based on.
-        if let Some(pct) = macos_free_percent() {
-            return s.total_memory() / 1_048_576 * pct / 100;
-        }
-    }
-    s.available_memory() / 1_048_576
+    return match (crate::procs::total_memory(), macos_free_percent()) {
+        (Some(total), Some(pct)) => total / 1_048_576 * pct / 100,
+        _ => u64::MAX,
+    };
+    #[cfg(not(target_os = "macos"))]
+    crate::procs::available_memory().map_or(u64::MAX, |b| b / 1_048_576)
 }
 
 #[cfg(target_os = "macos")]
@@ -212,27 +199,19 @@ pub fn was_killed(pgid: u32) -> bool {
 
 /// Whether a process is still running. Used to reap stale IDE bridge locks.
 pub fn pid_alive(pid: u32) -> bool {
-    let p = Pid::from_u32(pid);
-    system().is_none_or(|mut sys| {
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[p]),
-            true,
-            ProcessRefreshKind::nothing(),
-        );
-        sys.process(p).is_some()
-    })
+    crate::procs::state(pid).is_none_or(|s| s != crate::procs::State::Gone)
 }
 
 /// Memory a process really uses. On macOS resident size leaves out compressed
 /// and swapped pages, which is exactly where a runaway process's memory goes
 /// under pressure; the physical footprint (Activity Monitor's "Memory") doesn't.
-fn footprint(pid: Pid) -> Option<u64> {
+fn footprint(pid: u32) -> Option<u64> {
     #[cfg(target_os = "macos")]
     {
         let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
         let r = unsafe {
             libc::proc_pid_rusage(
-                pid.as_u32() as i32,
+                pid as i32,
                 libc::RUSAGE_INFO_V2,
                 &mut info as *mut _ as *mut libc::rusage_info_t,
             )
@@ -245,62 +224,94 @@ fn footprint(pid: Pid) -> Option<u64> {
     None
 }
 
+/// What the watchdog found on one look at the process table.
+#[derive(Debug, PartialEq)]
+struct Verdict {
+    /// Memory Chanto's descendants use, in bytes.
+    used: u64,
+    kids: usize,
+    /// The biggest descendant (pid, bytes, name), when they use too much:
+    /// `limit_pct` of `total` or more, or over 512 MB while the system is
+    /// nearly out (`critical`).
+    victim: Option<(u32, u64, String)>,
+}
+
+fn judge(
+    me: u32,
+    list: Vec<crate::procs::Proc>,
+    total: u64,
+    limit_pct: u64,
+    critical: bool,
+    memory: impl Fn(&crate::procs::Proc) -> u64,
+) -> Verdict {
+    let procs: std::collections::HashMap<u32, crate::procs::Proc> =
+        list.into_iter().map(|p| (p.pid, p)).collect();
+    // Up a parent chain to `me`; bounded, in case the table has a cycle.
+    let descends = |mut p: u32| {
+        for _ in 0..64 {
+            match procs.get(&p).and_then(|x| x.parent) {
+                Some(parent) if parent == me => return true,
+                Some(parent) => p = parent,
+                None => return false,
+            }
+        }
+        false
+    };
+    let kids: Vec<(u32, u64)> = procs
+        .iter()
+        .filter(|(pid, _)| **pid != me && descends(**pid))
+        .map(|(pid, p)| (*pid, memory(p)))
+        .collect();
+    let used: u64 = kids.iter().map(|(_, m)| m).sum();
+    let over = used * 100 / total.max(1) >= limit_pct;
+    let victim = (over || critical && used > 512 * 1_048_576)
+        .then(|| kids.iter().max_by_key(|(_, m)| *m).copied())
+        .flatten()
+        .map(|(pid, mem)| {
+            let name = procs.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
+            (pid, mem, name)
+        });
+    Verdict {
+        used,
+        kids: kids.len(),
+        victim,
+    }
+}
+
 /// Every few seconds: if Chanto's descendants use too much memory (or the
 /// system is nearly out), kill the biggest descendant's process group.
 async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
-    let me = Pid::from_u32(std::process::id());
-    let Some(mut sys) = system() else { return };
+    let me = std::process::id();
+    let Some(total) = crate::procs::total_memory() else {
+        return;
+    };
+    let total = total.max(1);
     loop {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        sys.refresh_memory();
-        let total = sys.total_memory().max(1);
         let critical = available_mb() < limits().min_free / 2;
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_memory(),
-        );
-        let procs = sys.processes();
-        let descends = |mut p: Pid| {
-            for _ in 0..64 {
-                match procs.get(&p).and_then(|x| x.parent()) {
-                    Some(parent) if parent == me => return true,
-                    Some(parent) => p = parent,
-                    None => return false,
-                }
-            }
-            false
+        let Some(list) = crate::procs::processes() else {
+            continue;
         };
-        let kids: Vec<(Pid, u64)> = procs
-            .iter()
-            .filter(|(pid, _)| **pid != me && descends(**pid))
-            .map(|(pid, p)| (*pid, footprint(*pid).unwrap_or(p.memory())))
-            .collect();
-        let used: u64 = kids.iter().map(|(_, m)| m).sum();
+        let seen = list.len();
+        let v = judge(me, list, total, limits().limit_pct, critical, |p| {
+            footprint(p.pid).unwrap_or(p.memory)
+        });
         if std::env::var_os("CHANTO_DEBUG_WATCHDOG").is_some() {
             eprintln!(
-                "[watchdog] procs={} kids={} used={}MB avail={}MB",
-                procs.len(),
-                kids.len(),
-                used / 1_048_576,
+                "[watchdog] procs={seen} kids={} used={}MB avail={}MB",
+                v.kids,
+                v.used / 1_048_576,
                 available_mb()
             );
         }
-        let over = used * 100 / total >= limits().limit_pct;
-        if !(over || critical && used > 512 * 1_048_576) {
-            continue;
-        }
-        let Some((pid, mem)) = kids.iter().max_by_key(|(_, m)| *m).copied() else {
+        let Some((pid, mem, name)) = v.victim else {
             continue;
         };
-        let name = procs
-            .get(&pid)
-            .map(|p| p.name().to_string_lossy().to_string())
-            .unwrap_or_default();
+        let used = v.used;
         #[cfg(unix)]
         {
             // Kill the whole process group (a build's compiler workers too).
-            let pgid = unsafe { libc::getpgid(pid.as_u32() as i32) };
+            let pgid = unsafe { libc::getpgid(pid as i32) };
             if pgid > 0 && pgid as u32 != std::process::id() && unsafe { libc::getpgid(0) } != pgid
             {
                 KILLED
@@ -310,13 +321,11 @@ async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
                     .insert(pgid as u32);
                 unsafe { libc::killpg(pgid, libc::SIGKILL) };
             } else {
-                unsafe { libc::kill(pid.as_u32() as i32, libc::SIGKILL) };
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
             }
         }
         #[cfg(not(unix))]
-        if let Some(p) = procs.get(&pid) {
-            p.kill();
-        }
+        crate::procs::kill(pid);
         on_kill(format!(
             "Memory watchdog killed `{name}` (pid {pid}, {} MB): Chanto's processes were using {}% of RAM{}.",
             mem / 1_048_576,

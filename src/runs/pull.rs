@@ -116,7 +116,7 @@ fn parse(args: &[String]) -> Result<Opts> {
         registration_token: std::env::var("CHANTO_RUNNER_REGISTRATION_TOKEN")
             .ok()
             .filter(|t| !t.is_empty()),
-        name: sysinfo::System::host_name().unwrap_or_else(|_| "chanto runner".into()),
+        name: crate::procs::host_name().unwrap_or_else(|| "chanto runner".into()),
         labels: vec![],
         mode: None,
         ephemeral: false,

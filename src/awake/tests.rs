@@ -73,3 +73,21 @@ fn holds_nest_and_the_last_release_lets_go() {
     drop(b);
     assert_eq!(count(), before);
 }
+
+#[cfg(target_os = "macos")]
+#[test]
+fn iokit_loads_on_demand_and_takes_a_real_assertion() {
+    let api = super::iokit::api().expect("IOKit and CoreFoundation load");
+    let kind = api.cfstr("PreventUserIdleSystemSleep");
+    let name = api.cfstr("chanto test");
+    assert!(!kind.is_null() && !name.is_null());
+    let mut id = 0u32;
+    // SAFETY: CFStrings just created, released below, and a local out-pointer.
+    unsafe {
+        assert_eq!((api.create)(kind, 255, name, &mut id), 0);
+        assert_ne!(id, 0);
+        assert_eq!((api.release)(id), 0);
+        (api.cf_release)(kind);
+        (api.cf_release)(name);
+    }
+}

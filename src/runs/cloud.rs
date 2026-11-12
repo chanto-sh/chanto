@@ -324,7 +324,7 @@ async fn sign_in_with(
     };
     let client_name = Some(format!(
         "chanto CLI on {}",
-        sysinfo::System::host_name().unwrap_or_else(|_| "this machine".into())
+        crate::procs::host_name().unwrap_or_else(|| "this machine".into())
     ));
     if p.browser {
         let started: BrowserStarted = c
