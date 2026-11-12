@@ -78,6 +78,10 @@ reedline = "0.52.1"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls", "gzip", "http2", "charset", "system-proxy", "query", "form"] }
 webpki-root-certs = "1"
+# The TLS settings every HTTP client shares (src/http.rs); the same versions
+# reqwest builds on, so there is one copy of each.
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls-platform-verifier = "0.7.1"
 scraper = "0.29.0"
 serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.152"

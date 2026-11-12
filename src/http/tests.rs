@@ -30,11 +30,46 @@ fn model_clients_are_shared_and_know_loopback() {
 }
 
 #[test]
-fn bundled_roots_build_a_client() {
+fn bundled_roots_build_a_verifier() {
     let roots = super::bundled_roots();
     assert!(roots.len() > 100, "{} roots", roots.len());
-    reqwest::Client::builder()
-        .tls_certs_only(roots)
-        .build()
-        .expect("client from bundled roots");
+    rustls::client::WebPkiServerVerifier::builder_with_provider(
+        std::sync::Arc::new(roots),
+        super::crypto_provider(),
+    )
+    .build()
+    .expect("verifier from bundled roots");
+}
+
+#[test]
+fn clients_share_tls_settings_like_reqwests_own() {
+    // Built once and shared: every client reuses the same settings rather
+    // than loading the certificate store again.
+    let config = super::tls_config();
+    assert!(std::ptr::eq(config, super::tls_config()));
+    // What reqwest offers for a default client.
+    assert_eq!(
+        config.alpn_protocols,
+        [b"h2".to_vec(), b"http/1.1".to_vec()]
+    );
+    assert!(config.enable_sni);
+    super::client();
+    // A local plain-HTTP model server, a local HTTPS one and a remote one
+    // each get a working client.
+    for url in [
+        "http://127.0.0.1:1/v1",
+        "https://localhost:1/v1",
+        "https://api.example.com/v1",
+    ] {
+        super::model_client(url);
+    }
+}
+
+#[test]
+fn the_plain_http_client_offers_the_same_protocols() {
+    let config = super::no_roots_tls();
+    assert_eq!(
+        config.alpn_protocols,
+        [b"h2".to_vec(), b"http/1.1".to_vec()]
+    );
 }

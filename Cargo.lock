@@ -484,6 +484,8 @@ dependencies = [
  "reedline",
  "regex",
  "reqwest",
+ "rustls",
+ "rustls-platform-verifier",
  "schemars",
  "scraper",
  "security-framework",
