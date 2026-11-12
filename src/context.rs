@@ -1150,12 +1150,15 @@ const MAX_INSTRUCTION_TOTAL: usize = 160_000;
 
 /// Instruction files in one directory (no recursion into subdirectories).
 fn dir_instruction_files(dir: &Path) -> Vec<PathBuf> {
-    let has_override = dir.join("AGENTS.override.md").is_file();
-    DIR_INSTRUCTION_FILES
+    let found: Vec<PathBuf> = DIR_INSTRUCTION_FILES
         .iter()
-        .filter(|n| !(has_override && **n == "AGENTS.md"))
         .map(|n| dir.join(n))
         .filter(|p| p.is_file())
+        .collect();
+    let has_override = found.iter().any(|p| p.ends_with("AGENTS.override.md"));
+    found
+        .into_iter()
+        .filter(|p| !(has_override && p.ends_with("AGENTS.md")))
         .collect()
 }
 
@@ -1335,7 +1338,10 @@ pub fn scoped_foreign_rules(cwd: &Path) -> Vec<(PathBuf, Vec<String>)> {
 }
 
 /// Read files, skipping duplicates (same file via symlink, or identical text).
-fn load_unique(paths: Vec<PathBuf>, project: &Path) -> Vec<(PathBuf, String)> {
+fn load_unique(mut paths: Vec<PathBuf>, project: &Path) -> Vec<(PathBuf, String)> {
+    // The usual places are passed whether or not anything is there; a `stat`
+    // drops the missing ones before each gets a `realpath`.
+    paths.retain(|p| p.exists());
     // Most tool calls find no new instruction files: skip the trust lookup.
     if paths.is_empty() {
         return Vec::new();
