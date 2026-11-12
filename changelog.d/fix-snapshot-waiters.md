@@ -1,1 +1,0 @@
-- **Rewind undoes parallel subagents' edits.** When the model started two subagents at once, the second could edit files before the turn's snapshot was taken, so `/rewind`, `/undo` and `/edit-prompt` reported success but kept its changes. Every subagent now waits for the snapshot before its first edit.
