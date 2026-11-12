@@ -1525,16 +1525,14 @@ mod profile_tests;
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 fn test_sandbox_available() -> bool {
-    if !sandbox_available() {
-        return false;
-    }
     #[cfg(target_os = "macos")]
-    return std::process::Command::new("/usr/bin/sandbox-exec")
-        .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-        .output()
-        .is_ok_and(|o| o.status.success());
+    return sandbox_available()
+        && std::process::Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+            .output()
+            .is_ok_and(|o| o.status.success());
     #[cfg(not(target_os = "macos"))]
-    true
+    sandbox_available()
 }
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]

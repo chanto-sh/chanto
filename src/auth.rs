@@ -58,22 +58,47 @@ fn path() -> PathBuf {
     crate::config::home_dir().join("auth.json")
 }
 
-fn load_all() -> BTreeMap<String, Credential> {
-    let mut all: BTreeMap<String, Credential> = std::fs::read(path())
+/// `auth.json` as stored: keychain entries are still placeholders.
+fn load_file() -> BTreeMap<String, Credential> {
+    std::fs::read(path())
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
-    // A placeholder is resolved from the keychain; one that can't be resolved
-    // (keychain wiped, or a copy on another machine) is treated as absent.
-    for (key, cred) in all.iter_mut() {
-        if matches!(cred, Credential::Keychain)
-            && let Some(real) = keychain::load(key).and_then(|b| serde_json::from_slice(&b).ok())
-        {
-            *cred = real;
+        .unwrap_or_default()
+}
+
+/// The real credential for `key`: a placeholder is resolved from the
+/// keychain, and one that can't be (keychain wiped, or a copy on another
+/// machine) is treated as absent.
+fn resolve(key: &str, cred: Credential) -> Option<Credential> {
+    match cred {
+        Credential::Keychain => keychain::load(key).and_then(|b| serde_json::from_slice(&b).ok()),
+        c => Some(c),
+    }
+}
+
+/// Every saved credential, resolved.
+fn load_all() -> BTreeMap<String, Credential> {
+    load_file()
+        .into_iter()
+        .filter_map(|(k, c)| resolve(&k, c).map(|c| (k, c)))
+        .collect()
+}
+
+/// `provider`'s login in use and the key it's saved under: the chosen named
+/// account when it's saved, else the default one. Only that entry is read
+/// from the keychain; each read is a round trip to the system's keychain
+/// service, and other logins don't matter here.
+fn active(provider: &str) -> Option<(String, Credential)> {
+    let mut file = load_file();
+    if let Some(a) = chosen_account(provider).filter(|a| a != DEFAULT_ACCOUNT) {
+        let key = account_key(provider, Some(&a));
+        if let Some(c) = file.remove(&key).and_then(|c| resolve(&key, c)) {
+            return Some((key, c));
         }
     }
-    all.retain(|_, c| !matches!(c, Credential::Keychain));
-    all
+    let key = provider.to_string();
+    let c = file.remove(&key).and_then(|c| resolve(&key, c))?;
+    Some((key, c))
 }
 
 fn save_all(all: &BTreeMap<String, Credential>) -> Result<()> {
@@ -273,9 +298,7 @@ pub fn accounts_table() -> String {
 }
 
 pub fn get(provider: &str) -> Option<Credential> {
-    let mut all = load_all();
-    let key = active_key(&all, provider);
-    all.remove(&key)
+    active(provider).map(|(_, c)| c)
 }
 
 /// Save a login as `provider`'s default, or as a named account.
@@ -438,8 +461,11 @@ pub async fn token(provider: &str) -> Result<String> {
 async fn token_inner(provider: &str) -> Result<String> {
     static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _g = LOCK.lock().await;
-    let key = active_key(&load_all(), provider);
-    match load_all().remove(&key) {
+    let (key, cred) = match active(provider) {
+        Some((key, cred)) => (key, Some(cred)),
+        None => (provider.to_string(), None),
+    };
+    match cred {
         Some(Credential::ApiKey { key }) => Ok(key.expose().to_string()),
         Some(Credential::Oauth {
             access, expires, ..

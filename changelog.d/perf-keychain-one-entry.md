@@ -1,0 +1,1 @@
+- **One keychain read per login.** With logins saved in the macOS keychain, looking up any one of them read every saved login's keychain entry, and refreshing a sign-in read them all twice. Chanto now reads only the entry it needs, which is quicker and asks macOS for fewer keychain items, so fewer access prompts after an upgrade.

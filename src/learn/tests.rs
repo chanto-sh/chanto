@@ -108,3 +108,71 @@ fn undo_reports_the_change_when_memory_migration_fails() {
     assert_eq!(lessons(&root).len(), 1);
     TEST_HOME.with(|t| *t.borrow_mut() = None);
 }
+
+#[test]
+fn the_first_word_check_changes_no_correction_verdict() {
+    // Every alternative, near misses, leading whitespace, mixed case and
+    // the two characters case-insensitive matching folds into ASCII.
+    let cases = [
+        "no",
+        "No, use pytest",
+        "nope",
+        "Nope.",
+        "nobody asked",
+        "nothing to add",
+        "don't do that",
+        "dont",
+        "do not touch it",
+        "do the next one",
+        "doing it",
+        "stop",
+        "Stop!",
+        "stopwatch",
+        "instead, run it",
+        "insteadof",
+        "actually it's fine",
+        "wrong file",
+        "wrongly",
+        "that's not it",
+        "thats wrong",
+        "that is fine",
+        "not like that",
+        "note this",
+        "please don't",
+        "please do",
+        "use uv instead",
+        "use uv not pip",
+        "use uv",
+        "user error",
+        "why did you delete it",
+        "why not",
+        "you should test first",
+        "you shouldn't",
+        "you forgot the test",
+        "you missed one",
+        "you are right",
+        "   no, wait",
+        "\tSTOP",
+        "\u{a0}actually no",
+        "Read each file",
+        "fix the bug",
+        "",
+        "   ",
+        "\u{17f}top",
+        "\u{17f}TOP that",
+        "ma\u{212a}e it so",
+        "\u{212a}eep going",
+        "é no",
+        "yes",
+        "noted, thanks",
+    ];
+    for c in cases {
+        assert_eq!(
+            super::is_correction(c),
+            super::correction_regex().is_match(c),
+            "{c:?}"
+        );
+    }
+    assert!(super::is_correction("No, use pytest"));
+    assert!(!super::is_correction("Read each file"));
+}
