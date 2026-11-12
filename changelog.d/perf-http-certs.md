@@ -1,1 +1,0 @@
-- **Faster start on Linux.** Chanto read and parsed the system's whole certificate store each time it set up an HTTP client, and twice before the first model request. It now does that at most once per run, and not at all for a model server on this machine over plain HTTP (Ollama, LM Studio, llama.cpp), where no certificate is used.
