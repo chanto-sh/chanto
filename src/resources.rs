@@ -57,10 +57,18 @@ static LIMITS: OnceLock<Limits> = OnceLock::new();
 /// Process groups the watchdog killed (so the tool result can say why).
 static KILLED: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
+/// The system's process and memory tables: `None` only on platforms sysinfo
+/// doesn't support, where each use falls back to what never blocks work or
+/// kills anything.
+pub(crate) fn system() -> Option<System> {
+    System::new().ok()
+}
+
 fn total_mb() -> u64 {
-    let mut s = System::new();
-    s.refresh_memory();
-    s.total_memory() / 1_048_576
+    system().map_or(0, |mut s| {
+        s.refresh_memory();
+        s.total_memory() / 1_048_576
+    })
 }
 
 fn limits() -> &'static Limits {
@@ -98,7 +106,10 @@ pub fn max_background_agents() -> usize {
 
 /// Memory available for new work, in MB.
 pub fn available_mb() -> u64 {
-    let mut s = System::new();
+    system().map_or(u64::MAX, available_in)
+}
+
+fn available_in(mut s: System) -> u64 {
     s.refresh_memory();
     #[cfg(target_os = "macos")]
     {
@@ -202,13 +213,14 @@ pub fn was_killed(pgid: u32) -> bool {
 /// Whether a process is still running. Used to reap stale IDE bridge locks.
 pub fn pid_alive(pid: u32) -> bool {
     let p = Pid::from_u32(pid);
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[p]),
-        true,
-        ProcessRefreshKind::nothing(),
-    );
-    sys.process(p).is_some()
+    system().is_none_or(|mut sys| {
+        sys.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[p]),
+            true,
+            ProcessRefreshKind::nothing(),
+        );
+        sys.process(p).is_some()
+    })
 }
 
 /// Memory a process really uses. On macOS resident size leaves out compressed
@@ -237,7 +249,7 @@ fn footprint(pid: Pid) -> Option<u64> {
 /// system is nearly out), kill the biggest descendant's process group.
 async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
     let me = Pid::from_u32(std::process::id());
-    let mut sys = System::new();
+    let Some(mut sys) = system() else { return };
     loop {
         tokio::time::sleep(Duration::from_secs(3)).await;
         sys.refresh_memory();

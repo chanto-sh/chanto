@@ -1481,27 +1481,30 @@ fn spawn_guard(journal: &Path) -> Option<std::process::Child> {
 /// journal goes away the run finished normally; when `pid` dies first, put
 /// the agent's changes back. Returns whether it put anything back.
 pub fn guard(journal: &Path, pid: u32) -> bool {
-    use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
+    use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate};
     let p = Pid::from_u32(pid);
-    let mut sys = System::new();
-    loop {
-        if !journal.exists() {
-            return false;
+    // Without a process table there is no telling whether `pid` died, and
+    // putting files back under a live run would undo its work.
+    crate::resources::system().is_some_and(|mut sys| {
+        loop {
+            if !journal.exists() {
+                return false;
+            }
+            sys.refresh_processes_specifics(
+                ProcessesToUpdate::Some(&[p]),
+                true,
+                ProcessRefreshKind::nothing(),
+            );
+            // A killed process stays a zombie until reaped; it's dead all the same.
+            if sys
+                .process(p)
+                .is_none_or(|x| x.status() == ProcessStatus::Zombie)
+            {
+                return !recover_put_back(journal).is_empty();
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::Some(&[p]),
-            true,
-            ProcessRefreshKind::nothing(),
-        );
-        // A killed process stays a zombie until reaped; it's dead all the same.
-        if sys
-            .process(p)
-            .is_none_or(|x| x.status() == ProcessStatus::Zombie)
-        {
-            return !recover_put_back(journal).is_empty();
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
+    })
 }
 
 /// Run every check once, before the agent changes anything.
