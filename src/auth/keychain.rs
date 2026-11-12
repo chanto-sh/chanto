@@ -108,9 +108,14 @@ struct TestBackend;
 #[cfg(test)]
 static MEM: std::sync::Mutex<Option<BTreeMap<String, Vec<u8>>>> = std::sync::Mutex::new(None);
 
+/// Reads from the test keychain since the last [`reset`].
+#[cfg(test)]
+pub static LOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 #[cfg(test)]
 impl Backend for TestBackend {
     fn load(&self, account: &str) -> Option<Vec<u8>> {
+        LOADS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         MEM.lock()
             .unwrap_or_else(|e| e.into_inner())
             .as_ref()?
@@ -135,5 +140,6 @@ impl Backend for TestBackend {
 /// Empty the in-memory test keychain.
 #[cfg(test)]
 pub fn reset() {
+    LOADS.store(0, std::sync::atomic::Ordering::Relaxed);
     *MEM.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
