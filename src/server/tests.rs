@@ -16,7 +16,8 @@ fn private_server_leaves_the_users_server_file_alone() {
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "the user's server");
 
     // A normal server replaces the file, then removes it on shutdown.
-    write_server_file(&path, &json!({"url": "normal"}), false).unwrap();
+    let normal = json!({"url": "normal", "pid": std::process::id()});
+    write_server_file(&path, &normal, false).unwrap();
     let written: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
     assert_eq!(written["url"], "normal");
@@ -28,6 +29,41 @@ fn private_server_leaves_the_users_server_file_alone() {
     }
     remove_server_file(&path, false);
     assert!(!path.exists());
+
+    // One another server wrote since (the daemon) stays.
+    let daemon = json!({"url": "daemon", "pid": std::process::id() + 1});
+    write_server_file(&path, &daemon, false).unwrap();
+    remove_server_file(&path, false);
+    assert!(path.exists());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn only_one_server_hosts_the_runs_store() {
+    let dir = std::env::temp_dir().join(format!("chanto-host-lock-{}", uuid::Uuid::new_v4()));
+    let store = crate::runs::Store::new(dir.clone());
+    assert!(runs_lock(&store, false, false).unwrap().is_none());
+    assert!(!store.hosted_elsewhere());
+
+    let first = runs_lock(&store, true, false).unwrap();
+    assert!(first.is_some());
+    assert!(store.hosted_elsewhere());
+    // A plain loopback server serves without runs; one started with --runs
+    // refuses to start.
+    assert!(runs_lock(&store, true, false).unwrap().is_none());
+    let e = runs_lock(&store, true, true).unwrap_err().to_string();
+    assert!(e.contains("already hosts background runs"), "{e}");
+
+    // Released with the first host: the next one takes over. On Linux a
+    // child process another test forks at this moment shares the lock file
+    // until it execs, so give the release a moment to be seen.
+    drop(first);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while store.hosted_elsewhere() && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(!store.hosted_elsewhere());
+    assert!(runs_lock(&store, true, true).unwrap().is_some());
     std::fs::remove_dir_all(&dir).unwrap();
 }
 

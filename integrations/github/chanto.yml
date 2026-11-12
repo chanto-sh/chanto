@@ -33,7 +33,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: chanto-sh/chanto/action@eda3f9288afccb98be7b889a0fc50deac5402f1b # v0.1.13
+      - uses: chanto-sh/chanto-action@b5d7d206eeed246dabaed3a5f7ff24f849568b79 # v1.0.1
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           # provider_config: ${{ secrets.CHANTO_PROVIDERS }}   # [providers.<name>] tables; select <name>/<model> in .chanto/review.toml

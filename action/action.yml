@@ -1,6 +1,6 @@
-name: Chanto
-description: Run the Chanto coding agent from issue and PR comments, review pull requests, or run a prompt.
-author: dphang
+name: Chanto Agent
+description: Check pull requests against your repository's quality profile, review them, or run the Chanto coding agent from comments.
+author: chanto-sh
 branding:
   icon: terminal
   color: orange
@@ -70,6 +70,22 @@ inputs:
     description: Token used to comment, push and open pull requests
     required: false
     default: ${{ github.token }}
+  quality:
+    description: "Run `chanto quality check` against the repository's .chanto/quality.toml (from `chanto prime`) instead of the agent: rules, the secrets scan and, with quality_checks, the profile's checks. Needs no model or API key."
+    required: false
+    default: "false"
+  quality_checks:
+    description: In quality mode, also run the profile's `when = "turn"` checks (tests, linters)
+    required: false
+    default: "true"
+  quality_scope:
+    description: "In quality mode, what to check: `changes` (what the event changes: a pull request's commits, a push's) or `all` (every file, e.g. for a nightly run)"
+    required: false
+    default: changes
+  working_directory:
+    description: In quality mode, the project to check, relative to the repository root (for a monorepo, or a project in a subfolder)
+    required: false
+    default: "."
   cloud_agent:
     description: "Run this Chanto cloud agent instead of Chanto on this machine: the work happens on a cloud runner, and this step waits for the result (see cloud_token)"
     required: false
@@ -91,6 +107,14 @@ inputs:
     required: false
     default: ""
 
+outputs:
+  findings:
+    description: In quality mode, how many rule and secrets findings were annotated
+    value: ${{ steps.quality.outputs.findings }}
+  passed:
+    description: In quality mode, "true" when the check passed (rules, secrets scan and checks)
+    value: ${{ steps.quality.outputs.passed }}
+
 runs:
   using: composite
   steps:
@@ -107,8 +131,21 @@ runs:
         echo "$dest/bin" >> "$GITHUB_PATH"
         "$dest/bin/chanto" --version
 
+    - name: Check the quality profile
+      id: quality
+      if: ${{ inputs.quality == 'true' }}
+      shell: bash
+      env:
+        INPUT_QUALITY_CHECKS: ${{ inputs.quality_checks }}
+        INPUT_QUALITY_SCOPE: ${{ inputs.quality_scope }}
+        INPUT_WORKING_DIRECTORY: ${{ inputs.working_directory }}
+      run: |
+        set -euo pipefail
+        export CHANTO_HOME="$RUNNER_TEMP/chanto-home"
+        python3 "$GITHUB_ACTION_PATH/quality.py"
+
     - name: Run the agent in Chanto cloud
-      if: ${{ inputs.cloud_agent != '' }}
+      if: ${{ inputs.quality != 'true' && inputs.cloud_agent != '' }}
       shell: bash
       env:
         CHANTO_CLOUD_TOKEN: ${{ inputs.cloud_token }}
@@ -126,7 +163,7 @@ runs:
         chanto cloud run "${args[@]}"
 
     - name: Run Chanto
-      if: ${{ inputs.cloud_agent == '' }}
+      if: ${{ inputs.quality != 'true' && inputs.cloud_agent == '' }}
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github_token }}

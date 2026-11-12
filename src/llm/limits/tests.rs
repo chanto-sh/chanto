@@ -217,7 +217,7 @@ async fn usage_headers_are_read_from_a_real_response() {
         200,
         sse(&[(
             "response.completed",
-            json!({"response": {"usage": {"input_tokens": 1, "output_tokens": 1}}}),
+            json!({"type": "response.completed", "response": {"usage": {"input_tokens": 1, "output_tokens": 1}}}),
         )]),
     )])
     .await;

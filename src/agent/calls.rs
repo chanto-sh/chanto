@@ -30,6 +30,9 @@ impl Agent {
         // hook context to fold into that call's result.
         let mut plan: Vec<PlannedCall> = Vec::new();
         let mut call_seq: HashMap<String, u64> = HashMap::new();
+        // The directory each shell command started in: a check run from a
+        // subdirectory only stands for that part of the project.
+        let mut run_dir: HashMap<String, PathBuf> = HashMap::new();
         // Where each approved call's paths pointed when it was approved.
         let mut approved: HashMap<String, Vec<(String, PathBuf)>> = HashMap::new();
         // For approved shell commands: whether the static rules allowed them
@@ -48,18 +51,31 @@ impl Agent {
                 .and_then(|o| o.remove(llm::REPAIRED))
                 .is_some();
             let mut call = codex_call(call);
-            if repaired
-                && self
-                    .lookup_tool(&call.name)
-                    .is_some_and(|t| t.kind() == ToolKind::Edit)
-            {
-                // Broken JSON in a file write was most likely cut off: running
-                // the repaired version would leave a truncated file.
-                plan.push((call.clone(), None, Err(format!(
-                    "This {} call was not run: its arguments weren't valid JSON (they look cut off), and writing a repaired guess could leave a truncated file. \
-                     Resend it in smaller pieces: e.g. Write a short first part, then add the rest with several Edit calls.",
-                    call.name
-                )), None));
+            // Broken JSON was most likely cut off: a repaired guess may be a
+            // truncated file or command (`rm -rf build/ca`). Only a tool
+            // without side effects runs with one.
+            let repaired_kind = repaired
+                .then(|| self.lookup_tool(&call.name))
+                .flatten()
+                .map(|t| t.kind())
+                .filter(|k| !matches!(k, ToolKind::ReadOnly));
+            if let Some(kind) = repaired_kind {
+                let why = if kind == ToolKind::Edit {
+                    "writing a repaired guess could leave a truncated file. \
+                     Resend it in smaller pieces: e.g. Write a short first part, then add the rest with several Edit calls."
+                } else {
+                    "running a repaired guess could do something other than intended (a truncated command or input). \
+                     Resend the call with its complete arguments."
+                };
+                plan.push((
+                    call.clone(),
+                    None,
+                    Err(format!(
+                        "This {} call was not run: its arguments weren't valid JSON (they look cut off), and {why}",
+                        call.name
+                    )),
+                    None,
+                ));
                 continue;
             }
             let tool_cwd = self.cwd_override.clone().filter(|_| {
@@ -175,30 +191,16 @@ impl Agent {
                         ));
                         continue;
                     }
-                    match tool.kind_for(&call.arguments) {
-                        ToolKind::Edit => {
-                            self.turn_mutations += 1;
-                            self.edit_seq += 1;
-                        }
-                        ToolKind::Execute
-                            if !permissions::is_safe_command(
-                                call.arguments["command"].as_str().unwrap_or(""),
-                            ) =>
-                        {
-                            self.turn_mutations += 1;
-                            self.edit_seq += 1;
-                            self.turn_untracked_writes = true;
-                        }
-                        ToolKind::External => self.turn_untracked_writes = true,
-                        _ if call.name == "Task" => self.turn_untracked_writes = true,
-                        _ => {}
-                    }
+                    self.note_mutation(&call, tool.as_ref());
                     call_seq.insert(call.id.clone(), self.edit_seq);
                     let ctx = self.hook_context.take();
                     plan.push((call, Some(tool), Ok(()), ctx))
                 }
                 Auth::AllowWith(c, note) => {
                     let t = self.lookup_tool(&c.name);
+                    if let Some(t) = &t {
+                        self.note_mutation(&c, t.as_ref());
+                    }
                     let ok = if t.is_some() {
                         Ok(())
                     } else {
@@ -303,6 +305,7 @@ impl Agent {
                 if crate::util::timing_on() {
                     crate::util::timing(&format!("tool {} start", call.name));
                 }
+                run_dir.insert(call.id.clone(), base.clone());
                 let out =
                     run_tool_with(tool.as_ref(), call, &ctx, self.parent.clone(), before).await;
                 if crate::util::timing_on() {
@@ -402,12 +405,14 @@ impl Agent {
                 }
                 let cmd = call.arguments["command"].as_str().unwrap_or("");
                 let safe = permissions::is_safe_command(cmd);
-                if let Some(seq) = call_seq.get(&call.id) {
+                if let Some(seq) = call_seq.get(&call.id)
+                    && let Some(dir) = run_dir.get(&call.id).cloned()
+                {
                     if out.is_error
                         && safe
                         && let Some(secs) = timed_out_after(&out.content)
                     {
-                        self.check_timeouts.push((cmd.to_string(), *seq, secs));
+                        self.check_timeouts.push((cmd.to_string(), *seq, secs, dir));
                     } else if crate::guardrails::failing_tests(&out.content).is_some() {
                         // A run that named failing tests is evidence it failed,
                         // even when a pipeline (`pytest ... | tail`) reported
@@ -417,10 +422,11 @@ impl Agent {
                             *seq,
                             false,
                             crate::util::truncate_middle(&out.content, 8_000),
+                            dir,
                         ));
                     } else if !out.is_error && safe {
                         self.check_runs
-                            .push((cmd.to_string(), *seq, true, String::new()));
+                            .push((cmd.to_string(), *seq, true, String::new(), dir));
                     }
                 }
             } else if call.name == "BashOutput" {
@@ -438,6 +444,7 @@ impl Agent {
                         *seq,
                         false,
                         crate::util::truncate_middle(&out.content, 8_000),
+                        sh.cwd.clone(),
                     ));
                 }
             }
@@ -492,6 +499,52 @@ impl Agent {
             self.messages.push(m);
         }
         Ok(stop || cancel.is_cancelled())
+    }
+
+    /// Count a call about to run that may change files. Bumping `edit_seq`
+    /// makes the agent's earlier check runs stale, so the verify gate runs the
+    /// checks again instead of vouching with a result from before the change.
+    /// Subagents and external tools write where the checkpoint can't see, so
+    /// they count as well as edits and non-read-only commands.
+    fn note_mutation(&mut self, call: &ToolCall, tool: &dyn Tool) {
+        let untracked = match tool.kind_for(&call.arguments) {
+            ToolKind::Edit => false,
+            ToolKind::Execute
+                if !permissions::is_safe_command(
+                    call.arguments["command"].as_str().unwrap_or(""),
+                ) =>
+            {
+                true
+            }
+            ToolKind::External if tool.read_only_hint() => {
+                // Says it only reads: not a change, but still outside the checkpoint.
+                self.turn_untracked_writes = true;
+                return;
+            }
+            ToolKind::External => {
+                self.may_have_changed_files();
+                return;
+            }
+            _ if call.name == "Task" => {
+                self.may_have_changed_files();
+                return;
+            }
+            _ => return,
+        };
+        self.turn_mutations += 1;
+        self.edit_seq += 1;
+        self.turn_untracked_writes |= untracked;
+    }
+
+    /// A subagent or MCP tool may have changed files, out of this agent's
+    /// sight: an earlier run of the checks is no longer evidence (`edit_seq`),
+    /// and the turn may have changed things a checkpoint doesn't show. It
+    /// isn't counted as one of this agent's own edits (`turn_mutations`):
+    /// that would start the end-of-turn related-tests work after every
+    /// subagent, even one that only read.
+    fn may_have_changed_files(&mut self) {
+        self.edit_seq += 1;
+        self.turn_untracked_writes = true;
     }
 
     /// This agent in the spend ledger: the main agent, or the Task call that started it.

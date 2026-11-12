@@ -256,3 +256,125 @@ async fn an_unchanged_file_is_not_sent_twice() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+fn three_cell_notebook() -> String {
+    json!({
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {},
+        "cells": [
+            {"cell_type": "code", "metadata": {}, "source": ["a = 1\n"], "outputs": [{"output_type": "stream", "name": "stdout", "text": ["1\n"]}], "execution_count": 3},
+            {"cell_type": "markdown", "metadata": {}, "source": ["# B\n"]},
+            {"cell_type": "code", "metadata": {}, "source": ["c = 3\n"], "outputs": [], "execution_count": null}
+        ]
+    })
+    .to_string()
+}
+
+#[test]
+fn a_bad_cell_index_is_refused_rather_than_editing_cell_zero() {
+    let nb = three_cell_notebook();
+    for (args, want) in [
+        (
+            json!({"edit_mode": "delete", "cell_index": -1}),
+            "use 0 to 2",
+        ),
+        (
+            json!({"edit_mode": "replace", "cell_index": -1, "new_source": "x"}),
+            "isn't a cell number",
+        ),
+        (
+            json!({"edit_mode": "insert", "cell_index": -1, "new_source": "x"}),
+            "use 0 to 3",
+        ),
+        (
+            json!({"edit_mode": "delete", "cell_index": 1.5}),
+            "isn't a cell number",
+        ),
+        (
+            json!({"edit_mode": "delete", "cell_index": "last"}),
+            "isn't a cell number",
+        ),
+        (json!({"edit_mode": "delete"}), "cell_index is required"),
+        (json!({"new_source": "x"}), "cell_index is required"),
+        (
+            json!({"edit_mode": "insert", "new_source": "x"}),
+            "cell_index is required",
+        ),
+        (
+            json!({"edit_mode": "delete", "cell_index": 3}),
+            "out of range",
+        ),
+        (
+            json!({"edit_mode": "insert", "cell_index": 4, "new_source": "x"}),
+            "out of range",
+        ),
+    ] {
+        let err = notebook_preview(&nb, &args).unwrap_err().to_string();
+        assert!(err.contains(want), "{args}: {err}");
+        assert!(err.contains("3 cell(s)"), "{args}: {err}");
+    }
+    let empty = json!({"cells": []}).to_string();
+    let err = notebook_preview(&empty, &json!({"edit_mode": "delete", "cell_index": 0}))
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("no cells"), "{err}");
+}
+
+#[test]
+fn a_valid_cell_index_still_works_in_every_form() {
+    let nb = three_cell_notebook();
+    let cells = |s: String| serde_json::from_str::<Value>(&s).unwrap()["cells"].clone();
+    // Deleting the last cell by its real index.
+    let out =
+        cells(notebook_preview(&nb, &json!({"edit_mode": "delete", "cell_index": 2})).unwrap());
+    assert_eq!(out.as_array().unwrap().len(), 2);
+    assert_eq!(out[0]["source"][0], "a = 1\n");
+    // Models sometimes send `2.0` or `"2"`.
+    for idx in [json!(2.0), json!("2")] {
+        let out =
+            cells(notebook_preview(&nb, &json!({"cell_index": idx, "new_source": "z"})).unwrap());
+        assert_eq!(out[2]["source"][0], "z");
+        assert_eq!(out[0]["source"][0], "a = 1\n");
+    }
+    // Insert at the cell count appends.
+    let out = cells(
+        notebook_preview(
+            &nb,
+            &json!({"edit_mode": "insert", "cell_index": 3, "new_source": "end"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(out[3]["source"][0], "end");
+}
+
+#[test]
+fn changing_a_cells_type_keeps_it_valid_nbformat() {
+    let nb = three_cell_notebook();
+    let cells = |s: String| serde_json::from_str::<Value>(&s).unwrap()["cells"].clone();
+    // Code to markdown drops the code-only keys.
+    let out = cells(
+        notebook_preview(
+            &nb,
+            &json!({"cell_index": 0, "cell_type": "markdown", "new_source": "# A"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(out[0]["cell_type"], "markdown");
+    let keys = out[0].as_object().unwrap();
+    assert!(
+        !keys.contains_key("outputs") && !keys.contains_key("execution_count"),
+        "{keys:?}"
+    );
+    // Markdown to code gains them, empty.
+    let out = cells(
+        notebook_preview(
+            &nb,
+            &json!({"cell_index": 1, "cell_type": "code", "new_source": "b = 2"}),
+        )
+        .unwrap(),
+    );
+    assert_eq!(out[1]["outputs"], json!([]));
+    assert!(out[1].as_object().unwrap().contains_key("execution_count"));
+    assert_eq!(out[1]["execution_count"], Value::Null);
+}

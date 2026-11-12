@@ -224,3 +224,143 @@ async fn stopping_a_team_stops_its_running_subtasks() {
         "No team is running in this session."
     );
 }
+
+/// A lead stopped while it waits for a sub-task it re-delegated after a
+/// conflict: `team resume` must not merge that run until it has finished,
+/// and must not merge it at all if it didn't finish.
+#[tokio::test]
+async fn resume_does_not_merge_a_redelegated_run_that_has_not_finished() {
+    let home = TestHome::new("team-resume-redelegated");
+    let repo = make_repo(&home);
+    let (base, _) = mock_server_routed(vec![
+        (
+            "Team mode, step 1",
+            vec![plan(&[
+                ("t1", "One", "ONE-TASK: write one into shared.txt", "shared.txt"),
+                ("t2", "Two", "TWO-TASK: write two into shared.txt", "shared.txt"),
+            ])],
+        ),
+        (
+            "Team review",
+            vec![json!({"content": "ACCEPT"}), json!({"content": "ACCEPT"})],
+        ),
+        // The re-delegated attempt writes half its work, then waits for input.
+        (
+            "conflicted with the work merged before it",
+            vec![
+                json!({"tool_calls": tc("Write", json!({"file_path": "shared.txt", "content": "one\nhalf\n"}))}),
+                json!({"tool_calls": tc("Bash", json!({"command": "make finish-two"}))}),
+            ],
+        ),
+        ("ONE-TASK", write("shared.txt", "one\n", "Wrote one.")),
+        ("TWO-TASK", write("shared.txt", "two\n", "Wrote two.")),
+    ])
+    .await;
+    let m = home.manager();
+    let env = make_env_with(&base, &repo, Mode::AcceptEdits, 32768, |c| {
+        c.guardrails.checks = vec!["true".into()]
+    });
+    let mut lead = Agent::new(env.clone());
+    let shared_on_team_branch = |team: &Team| {
+        crate::runs::tests::sh(&repo, &["show", &format!("{}:shared.txt", team.branch)])
+    };
+
+    // 1. Stop the lead while it waits for the re-delegated run.
+    let cancel = CancellationToken::new();
+    let run = start(
+        &mut lead,
+        "write one and two",
+        opts(&base),
+        &m,
+        cancel.clone(),
+    );
+    let stop_lead = async {
+        let rid = tokio::time::timeout(Duration::from_secs(60), async {
+            loop {
+                let redelegated = list()
+                    .first()
+                    .and_then(|t| t.subtasks.get(1).and_then(|s| s.runs.get(1).cloned()));
+                if let Some(rid) = redelegated
+                    && crate::runs::manager::Manager::get(&m, &rid)
+                        .is_ok_and(|r| r.state == RunState::NeedsInput)
+                {
+                    return rid;
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+        })
+        .await
+        .expect("t2 was never re-delegated");
+        cancel.cancel();
+        rid
+    };
+    let (first, rid) = tokio::join!(run, stop_lead);
+    assert!(first.unwrap().contains("Interrupted"));
+    let team = list().into_iter().next().unwrap();
+    assert_eq!(team.state, TeamState::Interrupted);
+    assert_eq!(team.subtasks[0].state, SubState::Merged);
+    assert_eq!(
+        team.subtasks[1].state,
+        SubState::Running,
+        "{:?}",
+        team.subtasks[1]
+    );
+
+    // 2. Resume while that run still waits: it is not merged.
+    let cancel = CancellationToken::new();
+    let c2 = cancel.clone();
+    let (second, ()) = tokio::join!(resume(&env, &team.id, &m, cancel), async {
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        c2.cancel();
+    });
+    assert!(second.unwrap().contains("Interrupted"));
+    let team = list().into_iter().next().unwrap();
+    assert_eq!(
+        team.subtasks[1].state,
+        SubState::Running,
+        "{:?}",
+        team.subtasks[1]
+    );
+    assert_eq!(shared_on_team_branch(&team), "one", "half-done work merged");
+    let live = crate::runs::manager::Manager::get(&m, &rid).unwrap();
+    assert!(live.state.is_active(), "{live:?}");
+
+    // A record from before this was fixed has the sub-task Accepted with its
+    // run still going: resuming waits for that run instead of merging it.
+    let mut old = team.clone();
+    old.subtasks[1].state = SubState::Accepted;
+    old.state = TeamState::Interrupted;
+    old.save().unwrap();
+    let cancel = CancellationToken::new();
+    let c2 = cancel.clone();
+    let (again, ()) = tokio::join!(resume(&env, &team.id, &m, cancel), async {
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        c2.cancel();
+    });
+    assert!(again.unwrap().contains("Interrupted"));
+    let team = list().into_iter().next().unwrap();
+    assert_eq!(
+        team.subtasks[1].state,
+        SubState::Running,
+        "{:?}",
+        team.subtasks[1]
+    );
+    assert_eq!(shared_on_team_branch(&team), "one", "half-done work merged");
+
+    // 3. The run is stopped unfinished: resuming reports the sub-task failed.
+    crate::runs::manager::Manager::stop(&m, &rid).unwrap();
+    crate::runs::tests::wait_for(&m, &rid, "stopped", |r| !r.state.is_active()).await;
+    let third = resume(&env, &team.id, &m, CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(third.contains("1/2 sub-task(s) merged"), "{third}");
+    let team = list().into_iter().next().unwrap();
+    assert_eq!(team.state, TeamState::Done);
+    assert_eq!(
+        team.subtasks[1].state,
+        SubState::Failed,
+        "{:?}",
+        team.subtasks[1]
+    );
+    assert_eq!(shared_on_team_branch(&team), "one");
+}

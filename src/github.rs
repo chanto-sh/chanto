@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
-const WORKFLOWS: [(&str, &str); 2] = [
+const WORKFLOWS: [(&str, &str); 3] = [
     (
         ".github/workflows/chanto-review.yml",
         include_str!("../integrations/github/review.yml"),
@@ -12,6 +12,10 @@ const WORKFLOWS: [(&str, &str); 2] = [
     (
         ".github/workflows/chanto.yml",
         include_str!("../integrations/github/chanto.yml"),
+    ),
+    (
+        ".github/workflows/chanto-quality.yml",
+        include_str!("../integrations/github/quality.yml"),
     ),
 ];
 const POLICY: (&str, &str) = (
@@ -61,8 +65,9 @@ pub fn install(root: &Path) -> Result<String> {
          \n\
          Next:\n\
          \x20 - Commit these files to the default branch; review policy is read from each PR's base commit.\n\
-         \x20 - Pin chanto-sh/chanto/action@main to a reviewed commit.\n\
+         \x20 - The workflows pin chanto-sh/chanto-action to a release commit; update the pin to upgrade.\n\
          \x20 - Set `checks` in .chanto/review.toml if your project checks aren't detected; fixes need passing checks.\n\
+         \x20 - chanto-quality.yml needs no secret: run `chanto prime` and commit .chanto/quality.toml, and it checks every PR against it.\n\
          \x20 - Fork PRs are not reviewed (no secrets on `pull_request` from forks); see docs/reference.md, \"GitHub review bot\".",
     );
     Ok(out)

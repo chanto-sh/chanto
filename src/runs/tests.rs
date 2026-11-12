@@ -77,7 +77,10 @@ impl Drop for TestHome {
 }
 
 pub(crate) fn sh(dir: &Path, args: &[&str]) -> String {
+    // As Chanto's own git calls do: temp paths plus object paths can pass
+    // Windows' 260-character limit.
     let o = Command::new("git")
+        .args(["-c", "core.longpaths=true"])
         .args(args)
         .current_dir(dir)
         .output()
@@ -1134,7 +1137,7 @@ async fn container_isolation_runs_commands_in_docker() {
         // Killing a background shell stops its processes in the container,
         // not just the host's `docker exec` client.
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 321", "run_in_background": true}))}),
-        json!({"tool_calls": tc("KillShell", json!({"shell_id": "bash_1"}))}),
+        json!({"tool_calls": tc("KillShell", json!({"shell_id": "sleep-321"}))}),
         bash("sleep 2; ps -o args | grep -c '^sleep 321' || true"),
         json!({"content": "Done."}),
     ])
@@ -1177,7 +1180,7 @@ async fn container_isolation_runs_commands_in_docker() {
         "{out}"
     );
     assert!(
-        out.contains("Killed bash_1") && out.trim_end().ends_with("\n0"),
+        out.contains("Killed sleep-321") && out.trim_end().ends_with("\n0"),
         "{out}"
     );
     assert_eq!(

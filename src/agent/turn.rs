@@ -655,31 +655,35 @@ impl Agent {
                     scope,
                     fast_full,
                 );
-                let vouched: Vec<String> = plan
-                    .runs
-                    .iter()
-                    .filter(|r| {
-                        self.check_runs.iter().any(|(cmd, seq, ok, _)| {
-                            *ok && *seq == self.edit_seq
-                                && (crate::guardrails::covers(cmd, &r.command)
-                                    || crate::guardrails::covers(cmd, &r.full))
+                let vouched: Vec<String> =
+                    plan.runs
+                        .iter()
+                        .filter(|r| {
+                            self.check_runs.iter().any(|(cmd, seq, ok, _, dir)| {
+                                *ok && *seq == self.edit_seq
+                                    && crate::guardrails::at_root(cmd, dir, &verify_root)
+                                        .is_some_and(|cmd| {
+                                            crate::guardrails::covers(&cmd, &r.command)
+                                                || crate::guardrails::covers(&cmd, &r.full)
+                                        })
+                            })
                         })
-                    })
-                    .map(|r| r.command.clone())
-                    .collect();
+                        .map(|r| r.command.clone())
+                        .collect();
                 // A check the agent ran itself this turn that failed: reuse its
                 // output rather than repeating a suite that can take minutes.
                 // Stale once anything was edited since, so those are dropped.
                 let mut reuse: Vec<crate::guardrails::CheckResult> = Vec::new();
                 for r in &plan.runs {
-                    for (cmd, seq, ok, out) in &self.check_runs {
+                    for (cmd, seq, ok, out, dir) in &self.check_runs {
                         if !*ok
                             && *seq == self.edit_seq
-                            && (crate::guardrails::covers(cmd, &r.command)
-                                || crate::guardrails::covers(cmd, &r.full))
+                            && let Some(cmd) = crate::guardrails::at_root(cmd, dir, &verify_root)
+                            && (crate::guardrails::covers(&cmd, &r.command)
+                                || crate::guardrails::covers(&cmd, &r.full))
                         {
                             reuse.push(crate::guardrails::CheckResult {
-                                command: cmd.clone(),
+                                command: cmd,
                                 ok: false,
                                 output: out.clone(),
                                 secs: 0.0,
@@ -693,13 +697,17 @@ impl Agent {
                 let hung = plan.runs.iter().find_map(|r| {
                     self.check_timeouts
                         .iter()
-                        .find(|(cmd, seq, secs)| {
+                        .find(|(cmd, seq, secs, dir)| {
                             *seq == self.edit_seq
                                 && *secs >= timeout.as_secs().min(300)
-                                && (crate::guardrails::covers(&r.command, cmd)
-                                    || crate::guardrails::covers(cmd, &r.command))
+                                && crate::guardrails::at_root(cmd, dir, &verify_root).is_some_and(
+                                    |cmd| {
+                                        crate::guardrails::covers(&r.command, &cmd)
+                                            || crate::guardrails::covers(&cmd, &r.command)
+                                    },
+                                )
                         })
-                        .map(|(_, _, secs)| crate::guardrails::CheckResult {
+                        .map(|(_, _, secs, _)| crate::guardrails::CheckResult {
                             command: r.command.clone(),
                             ok: false,
                             output: format!("timed out after {secs}s (your own run)"),
@@ -974,9 +982,10 @@ impl Agent {
                         .filter(|r| r.command != r.full)
                         .map(|r| r.command.as_str())
                         .filter(|cmd| {
-                            !self.check_runs.iter().any(|(run, seq, ok, _)| {
+                            !self.check_runs.iter().any(|(run, seq, ok, _, dir)| {
                                 *ok && *seq == self.edit_seq
-                                    && (crate::guardrails::covers(run, cmd)
+                                    && (crate::guardrails::at_root(run, dir, &verify_root)
+                                        .is_some_and(|run| crate::guardrails::covers(&run, cmd))
                                         || !scoped_to_tests(run))
                             })
                         })

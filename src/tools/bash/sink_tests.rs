@@ -4,6 +4,7 @@ fn shell() -> Arc<BgShell> {
     Arc::new(BgShell {
         id: "bash_1".into(),
         command: "true".into(),
+        cwd: "/".into(),
         description: None,
         monitor: None,
         output: Mutex::new(String::new()),

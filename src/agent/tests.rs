@@ -2073,18 +2073,38 @@ async fn a_pipe_does_not_hide_a_failing_check_from_the_finish_guard() {
 #[test]
 fn only_the_latest_check_after_an_edit_counts() {
     let runs = vec![
-        ("a".to_string(), 0, false, "FAILED t".to_string()),
-        ("b".to_string(), 0, true, String::new()),
+        (
+            "a".to_string(),
+            0,
+            false,
+            "FAILED t".to_string(),
+            PathBuf::new(),
+        ),
+        ("b".to_string(), 0, true, String::new(), PathBuf::new()),
     ];
     assert_eq!(last_failed_check(&runs, 0), None, "a later pass clears it");
     assert_eq!(last_failed_check(&runs, 1), None, "an edit makes it stale");
-    let only_fail = vec![("a".to_string(), 2, false, "FAILED t".to_string())];
+    let only_fail = vec![(
+        "a".to_string(),
+        2,
+        false,
+        "FAILED t".to_string(),
+        PathBuf::new(),
+    )];
     assert_eq!(last_failed_check(&only_fail, 2), Some(("a", "FAILED t")));
 }
 
 #[test]
 fn a_failure_only_re_run_on_a_narrower_scope_stays_unverified() {
-    let run = |cmd: &str, ok: bool, out: &str| (cmd.to_string(), 0u64, ok, out.to_string());
+    let run = |cmd: &str, ok: bool, out: &str| {
+        (
+            cmd.to_string(),
+            0u64,
+            ok,
+            out.to_string(),
+            PathBuf::from("/p"),
+        )
+    };
     let fail = run(
         "pytest tests/ -q",
         false,
@@ -2929,6 +2949,105 @@ async fn gate_trusts_the_agents_own_passing_run() {
     assert!(text.contains("your run, no edits since"), "{text}");
 }
 
+/// An external (MCP-style) tool that rewrites `calc.py` with a bug.
+struct BreakCalc;
+
+#[async_trait]
+impl crate::tools::Tool for BreakCalc {
+    fn name(&self) -> String {
+        "mcp__fs__write".into()
+    }
+    fn description(&self) -> String {
+        "Write a file.".into()
+    }
+    fn schema(&self) -> Value {
+        json!({"type": "object", "properties": {}})
+    }
+    fn kind(&self) -> ToolKind {
+        ToolKind::External
+    }
+    async fn run(&self, _args: Value, ctx: &Ctx) -> Result<ToolOutput> {
+        std::fs::write(
+            ctx.cwd().join("calc.py"),
+            "def add(a, b):\n    return a - b  # broken later\n",
+        )?;
+        Ok(ToolOutput::ok("written"))
+    }
+}
+
+/// Runs the "fix, test, then something else changes the file" turn and
+/// returns the final answer and every model request. The late change makes
+/// calc.py a different size from the fixed one: written in the same second
+/// at the same size, Python would reuse the earlier run's cached bytecode.
+async fn finish_after_a_late_change(name: &str, late: Value, sub: &[Value]) -> (String, String) {
+    let dir = tmpdir(name);
+    std::fs::write(
+        dir.join("calc.py"),
+        "def add(a, b):\n    return a - b  # broken later\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("test_calc.py"), "import unittest\nfrom calc import add\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n").unwrap();
+    let fixed = "def add(a, b):\n    return a + b\n";
+    let mut script = vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "calc.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": fixed}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q"}))}),
+        json!({"tool_calls": late}),
+    ];
+    script.extend(sub.iter().cloned());
+    script.extend([
+        json!({"content": "Fixed."}),
+        // Sent back with the failure: fix it again.
+        json!({"tool_calls": tc("Read", json!({"file_path": "calc.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": fixed}))}),
+        json!({"content": "Fixed again."}),
+    ]);
+    let (base, seen) = mock_server(script).await;
+    let mut env = verified_env(&base, &dir, "python3 -m unittest -q");
+    Arc::get_mut(&mut env)
+        .unwrap()
+        .tools
+        .tools
+        .push(Arc::new(BreakCalc));
+    let mut agent = Agent::new(env);
+    let TurnEnd::Done(text) = agent
+        .run_turn("fix add", vec![], CancellationToken::new())
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let reqs = serde_json::to_string(&*seen.lock().unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    (text, reqs)
+}
+
+#[tokio::test]
+async fn an_external_tool_change_makes_the_agents_run_stale() {
+    let (text, reqs) =
+        finish_after_a_late_change("vouch-external", tc("mcp__fs__write", json!({})), &[]).await;
+    assert!(!text.contains("no edits since"), "{text}");
+    assert!(reqs.contains("AssertionError"), "the gate ran the tests");
+}
+
+#[tokio::test]
+async fn a_subagent_change_makes_the_agents_run_stale() {
+    let (text, reqs) = finish_after_a_late_change(
+        "vouch-task",
+        tc(
+            "Task",
+            json!({"description": "d", "prompt": "tidy calc.py"}),
+        ),
+        &[
+            json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": "def add(a, b):\n    return a - b  # broken later\n"}))}),
+            json!({"content": "sub done"}),
+        ],
+    )
+    .await;
+    assert!(!text.contains("no edits since"), "{text}");
+    assert!(reqs.contains("AssertionError"), "the gate ran the tests");
+}
+
 fn slow_tests(name: &str) -> PathBuf {
     let dir = tmpdir(name);
     std::fs::write(dir.join("calc.py"), "def add(a, b):\n    return a - b\n").unwrap();
@@ -3006,7 +3125,7 @@ async fn bash_output_waits_and_foreground_sleep_is_refused() {
     let dir = tmpdir("bg-wait");
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 1; echo ready", "run_in_background": true}))}),
-        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20}))}),
+        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "sleep-1", "wait_secs": 20}))}),
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 30 && echo done"}))}),
         json!({"content": "Done."}),
     ])
@@ -3047,7 +3166,7 @@ async fn a_failure_from_a_background_run_still_bounces_the_finish() {
         json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_x", "run_in_background": true}))}),
         // Output can arrive in several chunks. Wait for the complete failure
         // line instead of treating the first separator or traceback as final.
-        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20, "filter": r"^FAIL: test_f \([^)]+\)$"}))}),
+        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "python3-m-unittest", "wait_secs": 20, "filter": r"^FAIL: test_f \([^)]+\)$"}))}),
         json!({"content": "Done."}),
         json!({"content": "The existing test is failing, so the work is not done."}),
     ])
@@ -4235,13 +4354,16 @@ async fn messages_reach_a_background_agent_queued_or_resumed() {
 }
 
 #[tokio::test]
-async fn a_write_with_repaired_arguments_is_not_run() {
+async fn a_call_with_repaired_arguments_runs_only_if_read_only() {
     let dir = tmpdir("repaired-write");
+    std::fs::write(dir.join("r.txt"), "readable").unwrap();
     let cut = |name: &str, args: &str| json!([{"index": 0, "id": "c1", "type": "function", "function": {"name": name, "arguments": args}}]);
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": cut("Write", "{\"file_path\": \"a.txt\", \"content\": \"line one\\nline tw")}),
-        // Other tools still run with repaired arguments.
+        // A cut-off shell command isn't run either.
         json!({"tool_calls": cut("Bash", "{\"command\": \"echo ran > b.txt")}),
+        // A read-only tool still runs with repaired arguments.
+        json!({"tool_calls": cut("Read", "{\"file_path\": \"r.txt")}),
         json!({"content": "done"}),
     ])
     .await;
@@ -4255,15 +4377,24 @@ async fn a_write_with_repaired_arguments_is_not_run() {
         !dir.join("a.txt").exists(),
         "the truncated Write was not run"
     );
-    assert!(dir.join("b.txt").exists(), "the Bash call ran");
+    assert!(
+        !dir.join("b.txt").exists(),
+        "the truncated Bash was not run"
+    );
     let seen = seen.lock().unwrap();
     let second = seen[1].to_string();
     assert!(
         second.contains("was not run") && second.contains("smaller pieces"),
         "{second}"
     );
+    let third = seen[2].to_string();
     assert!(
-        !seen[2].to_string().contains(llm::REPAIRED),
+        third.contains("was not run") && third.contains("complete arguments"),
+        "{third}"
+    );
+    assert!(seen[3].to_string().contains("readable"), "the Read ran");
+    assert!(
+        !seen[3].to_string().contains(llm::REPAIRED),
         "the marker never reaches the model"
     );
 }
@@ -4348,7 +4479,7 @@ async fn monitor_lines_reach_the_model_and_the_run_waits_for_them() {
     assert_eq!(crate::tools::monitor::active(&env), 0);
     let all = seen.lock().unwrap().last().unwrap()["messages"].to_string();
     assert!(
-        all.contains("Monitor monitor_1 (test watch) output"),
+        all.contains("Monitor test-watch (test watch) output"),
         "{all}"
     );
     assert!(
@@ -4361,7 +4492,7 @@ async fn monitor_lines_reach_the_model_and_the_run_waits_for_them() {
         env.shells
             .lock()
             .unwrap()
-            .get("monitor_1")
+            .get("test-watch")
             .is_some_and(|s| s.monitor.as_deref() == Some("test watch"))
     );
 }
@@ -6803,4 +6934,38 @@ fn nesting_is_capped_and_gives_its_room_back() {
     assert!(crate::resources::nested_agent().is_none());
     drop(held);
     assert!(crate::resources::nested_agent().is_some());
+}
+
+#[tokio::test]
+async fn every_waiter_waits_for_the_snapshot() {
+    // Two foreground Task calls run concurrently and each subagent waits for
+    // the turn's snapshot before its first edit. Only the first used to wait:
+    // the second found the slot empty and edited while the snapshot was still
+    // being taken, so rewind could keep that edit.
+    let dir = tmpdir("snapshot-waiters");
+    let env = make_env("http://127.0.0.1:1", &dir, Mode::Bypass, 32768);
+    let done = Arc::new(AtomicBool::new(false));
+    let flag = done.clone();
+    *env.pending_snapshot.lock().unwrap() =
+        Some(pending_snapshot(tokio::task::spawn_blocking(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            flag.store(true, Ordering::SeqCst);
+        })));
+    let waiter = |env: Arc<Env>, done: Arc<AtomicBool>| {
+        tokio::spawn(async move {
+            env.wait_snapshot().await;
+            done.load(Ordering::SeqCst)
+        })
+    };
+    let a = waiter(env.clone(), done.clone());
+    let b = waiter(env.clone(), done.clone());
+    assert!(a.await.unwrap(), "the first waiter saw the snapshot finish");
+    assert!(
+        b.await.unwrap(),
+        "the second waiter saw the snapshot finish"
+    );
+    // A finished snapshot doesn't hold up later callers.
+    let start = Instant::now();
+    env.wait_snapshot().await;
+    assert!(start.elapsed() < Duration::from_millis(500));
 }

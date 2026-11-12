@@ -32,6 +32,8 @@ fn append_bounded(buf: &mut Vec<u8>, data: &[u8]) {
 pub struct BgShell {
     pub id: String,
     pub command: String,
+    /// The directory the command started in.
+    pub cwd: std::path::PathBuf,
     /// The originating Bash call's short description, for human-facing status.
     pub description: Option<String>,
     /// Set for a Monitor watch: its description.
@@ -750,10 +752,13 @@ independent calls in parallel."
             // switch is atomic with that snapshot.
             let mut guard = sink.lock().unwrap();
             let text = strip_ansi(&String::from_utf8_lossy(&buf.lock().unwrap()));
-            let id = format!("bash_{}", ctx.env.next_shell_id());
+            let id = ctx
+                .env
+                .issue_shell_id(&readable_id(description.as_deref(), &command, "bash"));
             let shell = Arc::new(BgShell {
                 id: id.clone(),
                 command: command.clone(),
+                cwd: cwd.clone(),
                 description,
                 monitor: None,
                 output: Mutex::new(text.clone()),
@@ -1056,6 +1061,50 @@ fn apply_env_vars(
     }
 }
 
+/// Longest readable id, before any `-2` suffix.
+const MAX_ID: usize = 24;
+
+/// A readable base for a background shell's id: its description, or failing
+/// that its command's first few words (after any `cd`), as a lowercase slug
+/// (`Build release binary` → `build-release-binary`, `npm run dev` →
+/// `npm-run-dev`). The model refers to shells by id, and repeats it to the
+/// user, so it should say what the shell is. `fallback` when nothing is left.
+pub(crate) fn readable_id(description: Option<&str>, command: &str, fallback: &str) -> String {
+    let words = match description.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None => command
+            .split(['\n', ';', '|', '&', '('])
+            .map(str::trim)
+            .find(|part| !part.is_empty() && part.split_whitespace().next() != Some("cd"))
+            .unwrap_or("")
+            .split_whitespace()
+            .filter(|w| !w.contains('='))
+            .take(3)
+            .map(|w| w.rsplit('/').next().unwrap_or(w))
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    let mut slug = String::new();
+    for c in words.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let mut slug = slug.trim_matches('-').to_string();
+    if slug.len() > MAX_ID {
+        let cut = slug[..=MAX_ID].rfind('-').unwrap_or(MAX_ID);
+        slug.truncate(cut);
+        slug = slug.trim_end_matches('-').to_string();
+    }
+    if slug.is_empty() {
+        fallback.to_string()
+    } else {
+        slug
+    }
+}
+
 async fn start_background(
     ctx: &Ctx,
     command: &str,
@@ -1068,12 +1117,24 @@ async fn start_background(
     {
         return Ok(ToolOutput::err(e));
     }
-    let id = format!("bash_{}", ctx.env.next_shell_id());
+    let id = ctx
+        .env
+        .issue_shell_id(&readable_id(description.as_deref(), command, "bash"));
     let shell = spawn_background(ctx, &id, command, cwd, unsandboxed, None, description)?;
     Ok(ToolOutput::ok(format!(
         "Started background shell {id}. Use BashOutput with bash_id=\"{id}\" to read its output, KillShell to stop it."
     ))
-    .display(format!("Started in background · {id}\n{}", shell.title())))
+    .display(started_line(&id, &shell.title())))
+}
+
+/// The line shown when a background shell starts: its id, and its title too
+/// unless the id already says it.
+fn started_line(id: &str, title: &str) -> String {
+    if id.starts_with(&readable_id(Some(title), "", "")) {
+        format!("Started in background · {title} ({id})")
+    } else {
+        format!("Started in background · {id}\n{title}")
+    }
 }
 
 /// Start `command` as background shell `id` (registered in `env.shells`, so
@@ -1111,6 +1172,7 @@ pub(crate) fn spawn_background(
     let shell = Arc::new(BgShell {
         id: id.clone(),
         command: command.to_string(),
+        cwd: cwd.to_path_buf(),
         description,
         monitor,
         output: Mutex::new(String::new()),

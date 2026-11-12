@@ -820,13 +820,68 @@ fn superset(fam: &str, a: &Parsed, c: &Parsed, a_name: &str, c_name: &str) -> bo
     }
 }
 
+/// The agent's command as run from `root`, given the directory `cwd` it ran
+/// in: its `cd` steps are resolved and dropped, and every other step must run
+/// in `root` itself. `None` when a step runs elsewhere (a subdirectory's run
+/// only stands for that part of the project) or a `cd` can't be resolved.
+pub fn at_root(agent_cmd: &str, cwd: &Path, root: &Path) -> Option<String> {
+    let mut dir = cwd.to_path_buf();
+    let mut kept = Vec::new();
+    for seg in agent_cmd.split("&&") {
+        let words = shell_words::split(seg.trim()).ok()?;
+        if words.first().map(String::as_str) == Some("cd") {
+            let [_, to] = words.as_slice() else {
+                return None;
+            };
+            if to.starts_with(['~', '-']) || to.contains('$') {
+                return None;
+            }
+            dir = lexical(&dir.join(to));
+            continue;
+        }
+        if !same_dir(&dir, root) {
+            return None;
+        }
+        kept.push(seg.trim());
+    }
+    (!kept.is_empty()).then(|| kept.join(" && "))
+}
+
+/// `p` with `.` and `..` resolved without touching the file system.
+fn lexical(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+fn same_dir(a: &Path, b: &Path) -> bool {
+    lexical(a) == lexical(b)
+        || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+}
+
 /// Does a passing run of `agent_cmd` prove that `check` passes? Only a plain run
 /// of the same test runner over at least the same scope counts: no pipes
 /// (`| tail` hides the exit status), no `||`, no backgrounding, no filters to
 /// part of the suite. A run of more files or packages than `check` names
-/// counts; a run of fewer doesn't.
+/// counts; a run of fewer doesn't. A `cd` can't be resolved here, so a command
+/// that has one doesn't count: [`at_root`] resolves it against the directory
+/// the command ran in first.
 pub fn covers(agent_cmd: &str, check: &str) -> bool {
     if agent_cmd.contains('|') || agent_cmd.contains('`') || agent_cmd.contains("$(") {
+        return false;
+    }
+    if agent_cmd
+        .split("&&")
+        .any(|seg| seg.split_whitespace().next() == Some("cd"))
+    {
         return false;
     }
     let segments = |c: &str| -> Option<Vec<Vec<String>>> {

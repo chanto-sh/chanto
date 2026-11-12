@@ -199,6 +199,10 @@ jobs:
           cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-base"
       # A warm run has nothing to compare: the head measures only against the
       # fixed ceilings, and that is what the pull request's own run does.
+      # Shared runners have noisy moments: a batch of samples can look
+      # significantly slower with nothing changed (macOS most of all). A
+      # failure is measured once more from scratch, and only a second
+      # failure fails the job; a real regression fails both times.
       - name: Measure
         if: ${{ env.MEASURE == 'true' && (github.event_name != 'push') }}
         run: |
@@ -206,11 +210,17 @@ jobs:
           if [ -f "$BENCH_TEMP/chanto-base" ]; then
             base=(--base "$BENCH_TEMP/chanto-base")
           fi
-          $PYTHON tests/perf/gate.py \
-            --head "$BENCH_TEMP/chanto-head" "${base[@]}" \
-            ${{ matrix.extra_args }} \
-            --json "$BENCH_TEMP/perf.json" \
-            --summary-md "$BENCH_TEMP/perf.md"
+          measure() {
+            $PYTHON tests/perf/gate.py \
+              --head "$BENCH_TEMP/chanto-head" "${base[@]}" \
+              ${{ matrix.extra_args }} \
+              --json "$BENCH_TEMP/perf.json" \
+              --summary-md "$BENCH_TEMP/perf.md"
+          }
+          if ! measure; then
+            echo "::notice title=Performance::Measuring again: a single failed comparison can be runner noise."
+            measure
+          fi
       # Instruction counts and the prompt's size (tests/perf/exact.py): small
       # changes that CPU time on a shared runner can't show. Linux only, since
       # that's where valgrind runs.
@@ -222,7 +232,13 @@ jobs:
           if [ -f "$BENCH_TEMP/chanto-base" ]; then
             base=(--base "$BENCH_TEMP/chanto-base")
           fi
-          $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"
+          # Instruction counts move about a percent between runs (thread
+          # scheduling, hash seeds), past the 0.5% tolerance: as with Measure,
+          # a failure is measured again before it fails the job.
+          if ! $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"; then
+            echo "::notice title=Exact costs::Measuring again: instruction counts vary a little between runs."
+            $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"
+          fi
       - name: Responsiveness
         if: ${{ env.MEASURE == 'true' && github.event_name != 'push' }}
         run: $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"
@@ -239,8 +255,16 @@ jobs:
           else
             brew install ripgrep >/dev/null
           fi
-          $PYTHON tests/perf/stress.py --bin "$BENCH_TEMP/chanto-head" \
-            --json "$BENCH_TEMP/stress.json" --summary-md "$BENCH_TEMP/stress.md"
+          stress() {
+            $PYTHON tests/perf/stress.py --bin "$BENCH_TEMP/chanto-head" \
+              --json "$BENCH_TEMP/stress.json" --summary-md "$BENCH_TEMP/stress.md"
+          }
+          # Its checks sample processes by timing; as with Measure, one
+          # failure is run again before it fails the job.
+          if ! stress; then
+            echo "::notice title=Stress::Running again: a single failed run can be runner timing."
+            stress
+          fi
       - if: ${{ env.MEASURE == 'true' && !cancelled() && github.event_name != 'push' && runner.os != 'Windows' }}
         run: |
           if [ -f "$BENCH_TEMP/stress.md" ]; then cat "$BENCH_TEMP/stress.md" >> "$GITHUB_STEP_SUMMARY"; fi

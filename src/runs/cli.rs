@@ -187,10 +187,22 @@ pub async fn connect(start: bool) -> Result<Client> {
     start_daemon().await
 }
 
-/// Start the daemon (`chanto web --runs`) detached from this terminal.
+/// The server hosting background runs, as server.json names it, once it answers.
+async fn runs_host() -> Option<Client> {
+    let c = Client::from_file()?;
+    (c.health().await?["runs"] == true).then_some(c)
+}
+
+/// Start the daemon (`chanto web --runs`) detached from this terminal. When
+/// another process already hosts runs (one starting at the same moment),
+/// use that one instead of starting a second.
 async fn start_daemon() -> Result<Client> {
     let home = crate::config::home_dir();
     std::fs::create_dir_all(&home)?;
+    let store = super::Store::new(super::Store::default_dir());
+    if store.hosted_elsewhere() {
+        return wait_for_host(&store).await;
+    }
     let mut opts = std::fs::OpenOptions::new();
     opts.create(true).append(true);
     // Owner-only: the server prints its bearer token at startup.
@@ -232,18 +244,48 @@ async fn start_daemon() -> Result<Client> {
         cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
     }
     let child = cmd.spawn().context("starting the chanto daemon")?;
-    let pid = child.id();
+    await_daemon(child, &store, &home.join("daemon.log")).await
+}
+
+/// Wait for the daemon just started as `child` to answer, or for whichever
+/// process won the race to host runs when `child` exits because another got
+/// there first.
+async fn await_daemon(
+    mut child: std::process::Child,
+    store: &super::Store,
+    log: &std::path::Path,
+) -> Result<Client> {
     for _ in 0..150 {
         tokio::time::sleep(Duration::from_millis(100)).await;
-        if let Some(c) = Client::from_file().filter(|c| c.pid == Some(pid))
-            && c.health().await.is_some()
-        {
+        if let Some(c) = runs_host().await {
             return Ok(c);
         }
+        // It stops at once when another daemon got there first.
+        if child.try_wait().ok().flatten().is_some() {
+            if store.hosted_elsewhere() {
+                return wait_for_host(store).await;
+            }
+            break;
+        }
+    }
+    bail!("the chanto daemon didn't start; see {}", log.display())
+}
+
+/// Wait for the process holding the runs store to say where it listens.
+async fn wait_for_host(store: &super::Store) -> Result<Client> {
+    for _ in 0..150 {
+        if let Some(c) = runs_host().await {
+            return Ok(c);
+        }
+        if !store.hosted_elsewhere() {
+            // It went away before it was up; start one ourselves.
+            return Box::pin(start_daemon()).await;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
     bail!(
-        "the chanto daemon didn't start; see {}",
-        home.join("daemon.log").display()
+        "Another chanto process hosts background runs but hasn't said where it listens \
+         (perhaps a program using the Chanto SDK). Stop it and try again."
     )
 }
 

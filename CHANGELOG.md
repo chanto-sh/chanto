@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## v0.1.17 (November 10, 2026)
+
+- **Fewer git prompts in repositories with hooks.** A repository with `core.hooksPath` set (husky, or `git config core.hooksPath .githooks`) made every git command ask, `git log` included, in every permission mode. Now a command asks only if it can run a hook that's actually in that directory: with just a `pre-commit` hook, `git commit` still asks, but `git log`, `show`, `status`, `diff`, `push` and listing tags or branches don't. On this repository's own sessions that cut the git commands asking in auto mode from 131 of 153 to 31. Diff and filter drivers, pagers and fsmonitor still make every git command ask.
+- **Readable background command names.** A background command or monitor is named after its description, or its command when it has none (`build-release-binary`, `npm-run-dev`), instead of `bash_2` or `monitor_3`. That's the name the model uses when it tells you what's running, and the one `/bashes` lists. A name is never reused within a session: a second `npm run dev` is `npm-run-dev-2`. The start line reads `Started in background · Build release binary (build-release-binary)`.
+- **GitHub Action: projects in subfolders and full scans.** Quality mode takes `working_directory` (check a project inside the repository, for monorepos) and `quality_scope: all` (check every file, e.g. on a schedule, instead of the event's changes), and reports `passed` and `findings` as outputs for later steps.
+- **`chanto doctor` paths on Windows.** The report shortened every absolute path to `~/…` on Windows, where `HOME` isn't set, so it showed paths that don't exist. It now finds the profile folder the way the rest of Chanto does, shortens only paths that are really inside it (with either separator), and leaves the rest as they are.
+
+## v0.1.16 (November 10, 2026)
+
+- **A failed voice recording says why more reliably.** When the recorder stopped with an error, such as a busy or missing microphone, the message could read "no audio was captured" instead of the recorder's own reason. Chanto now waits briefly for the recorder's last output before reporting the failure.
+- **Quality profile.** `chanto prime` finds a project's checks (tests, lint, format, typecheck), runs each once, and writes `.chanto/quality.toml`, which turns verified mode on with those checks: ones that fail now are written turned off, and slow ones are kept for nightly CI. The profile can also hold pattern rules (a regex, the paths it covers, and whether only new lines count); `chanto quality check` reports the lines that break them and the gate runs it, so a convention fails a change instead of being a suggestion. It also scans the lines a change adds for keys, tokens and passwords (`[secrets] exclude` for fixtures), and `chanto prime --hook` installs a pre-push hook that runs all of it before each push. `[review] no_touch` paths can't be edited. It only applies in trusted folders.
+- **Quality checks in CI.** The GitHub Action's `quality: "true"` mode runs `chanto quality check --checks` on what a pull request, push or merge group changes, without a model or API key, so pull requests from forks are checked too. Findings are annotated on their lines (secrets masked) and summarized in the job summary. `chanto github install` now also writes `.github/workflows/chanto-quality.yml`, and the action has a README covering every mode.
+
 ## v0.1.15 (November 2, 2026)
 
 - **Security: approving an `.mcp.json` server now covers that server as it was.** A project server that's added or changed later, including by a pull, no longer starts until you approve it with `/mcp enable`, even in a trusted folder. Upgrade recommended.

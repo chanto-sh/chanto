@@ -24,6 +24,18 @@ fn install_and_preserve_existing_workflows() {
     assert!(
         commands.contains("author_association") && commands.contains("persist-credentials: false")
     );
+    let quality =
+        std::fs::read_to_string(tmp.join(".github/workflows/chanto-quality.yml")).unwrap();
+    assert!(quality.contains("quality: \"true\"") && quality.contains("contents: read"));
+    assert!(
+        !quality.contains("secrets."),
+        "quality mode needs no secrets"
+    );
+    assert!(!quality.contains("pull_request_target"));
+    assert!(
+        out.contains("Created .github/workflows/chanto-quality.yml"),
+        "{out}"
+    );
     assert!(install(&tmp).is_err());
     assert_eq!(std::fs::read_to_string(path).unwrap(), before);
     std::fs::remove_dir_all(tmp).unwrap();

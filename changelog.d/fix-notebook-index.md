@@ -1,0 +1,3 @@
+- **Notebook edits no longer hit the wrong cell.** A `NotebookEdit` with a negative, fractional or missing `cell_index` used to act on the first cell, so asking to delete cell `-1` deleted cell 0. It is now refused with the valid range and the number of cells.
+- **Valid notebooks after changing a cell's type.** Turning a code cell into markdown now drops its outputs and execution count, which nbformat allows only on code cells.
+- **`apply_patch` won't overwrite a file that isn't UTF-8.** `*** Add File:` refused to replace an existing text file but silently overwrote a Latin-1, UTF-16 or binary one. Any existing file is now refused.

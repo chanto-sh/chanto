@@ -90,7 +90,11 @@ ends when the command exits or at timeout_ms (default 300000, max 1800000); you 
         {
             return Ok(ToolOutput::err(e));
         }
-        let id = format!("monitor_{}", ctx.env.next_shell_id());
+        let id = ctx.env.issue_shell_id(&crate::tools::bash::readable_id(
+            Some(&description),
+            &command,
+            "monitor",
+        ));
         // `stdbuf` would be nicer, but isn't everywhere; most watch commands
         // (tail -f, loops with echo) flush per line anyway.
         crate::shell::snapshot::ensure(&ctx.env).await;

@@ -7,8 +7,10 @@
 //!   arrived.
 //! - The installer (install.sh / install.ps1): download the release archive for
 //!   this platform, check it against the release's `SHA256SUMS`, make sure the
-//!   new binary runs, and swap it in (remove, then move into place: macOS kills
-//!   a binary whose file is rewritten in place). Only after confirmation.
+//!   new binary runs, and swap it in by renaming a staged copy over it. The
+//!   rename gives the path a new file instead of rewriting the old one in place
+//!   (which macOS punishes by killing the binary), and the old binary stays
+//!   until the new one has taken its name. Only after confirmation.
 //! - cargo, a source checkout, or anything else: say what to run.
 //!
 //! Nothing is ever replaced without a prompt or `--yes`.
@@ -162,47 +164,98 @@ fn extract(archive: &Path, dir: &Path, top: &str) -> Result<PathBuf> {
     Ok(bin)
 }
 
-/// Swap `new` in for `dest`. The new file is staged next to `dest` first, so
-/// a failure leaves the old binary in place; then the old file is removed (on
-/// Windows, where a running executable can't be removed, renamed aside to
-/// `.old`) and the staged one moved into its place.
+/// Swap `new` in for `dest`. The new file is staged next to `dest` and
+/// flushed to disk first, so a failure leaves the old binary in place. On
+/// Unix the staged file is then renamed over `dest`, which replaces the name
+/// in one step: there is never a moment without a binary, and the running
+/// process keeps its own (now unnamed) file. On Windows, where a running
+/// executable can't be replaced, the old file is renamed aside to `.old`
+/// first, and renamed back if the new one can't take its place.
 pub fn replace_binary(new: &Path, dest: &Path) -> Result<()> {
+    replace_binary_with(new, dest, cfg!(windows), &|from, to| {
+        std::fs::rename(from, to)
+    })
+}
+
+/// `replace_binary`, with the platform's swap (`aside`: move the old binary
+/// out of the way first, as Windows needs) and the rename it uses passed in,
+/// so tests can make a rename fail.
+fn replace_binary_with(
+    new: &Path,
+    dest: &Path,
+    aside: bool,
+    rename: &dyn Fn(&Path, &Path) -> std::io::Result<()>,
+) -> Result<()> {
     let dir = dest
         .parent()
         .context("the binary has no parent directory")?;
     let staged = dir.join(format!(".{}.upgrade-{}", binary_name(), std::process::id()));
-    std::fs::copy(new, &staged).with_context(|| {
-        format!(
-            "writing to {} (permission denied? rerun with the rights to change it)",
-            dir.display()
-        )
-    })?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
-    }
-    let swap = || -> Result<()> {
-        if cfg!(windows) {
-            let old = dest.with_extension("old");
-            let _ = std::fs::remove_file(&old);
-            if dest.exists() {
-                std::fs::rename(dest, &old)
-                    .with_context(|| format!("moving {} aside", dest.display()))?;
-            }
-        } else {
-            match std::fs::remove_file(dest) {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
-                    return Err(e).with_context(|| format!("removing {}", dest.display()));
-                }
-                _ => {}
-            }
+    let stage = || -> Result<()> {
+        std::fs::copy(new, &staged).with_context(|| {
+            format!(
+                "writing to {} (permission denied? rerun with the rights to change it)",
+                dir.display()
+            )
+        })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
         }
-        std::fs::rename(&staged, dest).with_context(|| format!("installing {}", dest.display()))
+        // On disk before it takes the binary's name, so a crash right after
+        // can't leave an empty file there.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&staged)
+            .and_then(|f| f.sync_all())
+            .with_context(|| format!("saving {}", staged.display()))
     };
-    let r = swap();
-    let _ = std::fs::remove_file(&staged);
-    r
+    if let Err(e) = stage() {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
+    }
+    if !aside {
+        if let Err(e) = rename(&staged, dest) {
+            // The rename didn't happen, so the old binary is untouched.
+            let _ = std::fs::remove_file(&staged);
+            return Err(e).with_context(|| format!("installing {}", dest.display()));
+        }
+        // Make the new name durable too (best effort: not every filesystem
+        // can sync a directory).
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+        }
+        return Ok(());
+    }
+    let old = dest.with_extension("old");
+    let _ = std::fs::remove_file(&old);
+    let moved = dest.exists();
+    if moved && let Err(e) = rename(dest, &old) {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e).with_context(|| format!("moving {} aside", dest.display()));
+    }
+    let Err(e) = rename(&staged, dest) else {
+        return Ok(());
+    };
+    let e = anyhow::Error::from(e).context(format!("installing {}", dest.display()));
+    if !moved {
+        let _ = std::fs::remove_file(&staged);
+        return Err(e);
+    }
+    // Put the old binary back. Only once it is back is the staged copy
+    // removed; until then it may be the only copy left.
+    match rename(&old, dest) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&staged);
+            Err(e)
+        }
+        Err(_) => Err(e.context(format!(
+            "the old binary is at {} and the new one at {}; move either to {}",
+            old.display(),
+            staged.display(),
+            dest.display()
+        ))),
+    }
 }
 
 fn http() -> reqwest::Client {
