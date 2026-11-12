@@ -3,6 +3,15 @@ use super::*;
 thread_local! {
     /// Every pattern runs, as before the literal check: the reference.
     pub(super) static UNFILTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Patterns keep Unicode word boundaries, as before ASCII ones.
+    pub(super) static UNICODE_BOUNDARIES: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn unicode_boundaries<T>(f: impl FnOnce() -> T) -> T {
+    UNICODE_BOUNDARIES.with(|u| u.set(true));
+    let r = unfiltered(f);
+    UNICODE_BOUNDARIES.with(|u| u.set(false));
+    r
 }
 
 fn unfiltered<T>(f: impl FnOnce() -> T) -> T {
@@ -60,6 +69,18 @@ fn the_literal_check_changes_no_redaction() {
         "plain words, é and ü, nothing secret",
         "\n",
         " ",
+        // What the structural checks look for after a keyword or `://`.
+        concat!("token  :  ", "Zx8kQ2vN7pL4mR9tW3yB6cF1"),
+        concat!("SECRET\"=", "Zx8kQ2vN7pL4mR9tW3yB6cF1"),
+        concat!("password\u{a0}=\u{a0}", "Zx8kQ2vN7pL4mR9tW3yB6cF1"),
+        "the token is in the secret store",
+        "x://a:bc@",
+        "x://a:bcd@",
+        "x://:pass@",
+        "x://a:b c@",
+        // Non-ASCII letters next to tokens: word boundaries differ there.
+        "é",
+        concat!("ghp_", "0123456789abcdefghijABCDEFGHIJ012345é"),
     ];
     let mut seed = 0x9e3779b97f4a7c15u64;
     let mut next = |n: usize| {
@@ -81,6 +102,12 @@ fn the_literal_check_changes_no_redaction() {
             unfiltered(|| contains_secret(&text)),
             "{text:?}"
         );
+        // ASCII and Unicode word boundaries only differ next to a
+        // non-ASCII letter.
+        if !text.contains('é') {
+            let before = unicode_boundaries(|| redact_always_with_labels(&text));
+            assert_eq!(filtered, before, "{text:?}");
+        }
         redacted += usize::from(filtered.0.contains("[REDACTED"));
     }
     assert!(redacted > 1000, "the corpus barely has secrets: {redacted}");

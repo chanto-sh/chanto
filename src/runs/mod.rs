@@ -389,11 +389,31 @@ pub fn split_worktree_path(p: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
     split_in_store(p).map(|(_, wt, inner)| (wt, inner))
 }
 
+/// `dir` resolved through symlinks, or `None` while it doesn't exist. This is
+/// asked for every path checked (permissions, config layers), so a directory
+/// that exists is resolved once; one that doesn't, as for anyone who has never
+/// started a background run, costs a single `stat` rather than a `realpath`.
+fn canonical_store_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    static RESOLVED: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, c)) = RESOLVED.lock().unwrap().iter().find(|(d, _)| d == dir) {
+        return Some(c.clone());
+    }
+    if !dir.is_dir() {
+        return None;
+    }
+    let c = dir.canonical().ok()?;
+    RESOLVED
+        .lock()
+        .unwrap()
+        .push((dir.to_path_buf(), c.clone()));
+    Some(c)
+}
+
 /// The run store holding `p`'s worktree, that worktree, and the path within it.
 fn split_in_store(p: &std::path::Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     run_stores().into_iter().find_map(|store| {
         let root = store.join("worktrees");
-        let canon = root.canonical().ok();
+        let canon = canonical_store_dir(&root);
         let rest = p
             .strip_prefix(&root)
             .ok()
