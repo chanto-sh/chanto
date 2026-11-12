@@ -82,13 +82,42 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// Names of variables (and `.env` keys) that hold secrets.
+/// Names of variables (and `.env` keys) that hold secrets: any of these
+/// words anywhere in the name, ignoring case. Plain substring checks rather
+/// than a regex, since this runs for every environment variable at startup
+/// and compiling a case-insensitive Unicode regex costs more than all of them.
 fn strong_secret_name(name: &str) -> bool {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)(secret|token|passw(or)?d|passwd|pwd|api_?key|access_?key|private_?key|credential|auth|cookie|session_?key|signing_?key|client_?secret|webhook|dsn|database_url|conn(ection)?_?str)").unwrap()
-    });
-    re.is_match(name)
+    const WORDS: &[&str] = &[
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "pwd",
+        "api_key",
+        "apikey",
+        "access_key",
+        "accesskey",
+        "private_key",
+        "privatekey",
+        "credential",
+        "auth",
+        "cookie",
+        "session_key",
+        "sessionkey",
+        "signing_key",
+        "signingkey",
+        "webhook",
+        "dsn",
+        "database_url",
+        "conn_str",
+        "connstr",
+        "connection_str",
+        "connectionstr",
+    ];
+    // Case-insensitive matching folds the long s and the Kelvin sign to `s`
+    // and `k`; fold them the same way so neither slips a name past.
+    let lower = name.to_lowercase().replace('\u{17f}', "s");
+    WORDS.iter().any(|w| lower.contains(w))
 }
 
 pub fn is_secret_name(name: &str) -> bool {
@@ -647,10 +676,36 @@ const PATTERNS: [(&str, &str, usize, &[&str]); 20] = [
 const TOKENS: usize = 19;
 const ASSIGNMENT: usize = TOKENS;
 
-/// Pattern `i`, compiled the first time it's needed.
-fn pattern(i: usize) -> &'static Regex {
-    static RE: [OnceLock<Regex>; PATTERNS.len()] = [const { OnceLock::new() }; PATTERNS.len()];
-    RE[i].get_or_init(|| Regex::new(PATTERNS[i].1).unwrap())
+/// Pattern `i`, compiled the first time it's needed. Unless `text` holds a
+/// character that case-insensitive matching folds into ASCII (`ſ`, the Kelvin
+/// sign), its word boundaries are ASCII ones. Every `\b` in `PATTERNS` sits
+/// next to an ASCII word character, where an ASCII boundary is found wherever
+/// a Unicode one is, and also between it and a non-ASCII letter (so a token
+/// glued to `é` is masked too); on ASCII text the two are identical. A
+/// Unicode `\b` also stops the regex's DFAs on any non-ASCII text (a single
+/// em dash), leaving the slowest engine to scan the whole message.
+fn pattern(i: usize, text: &str) -> &'static Regex {
+    static ASCII: [OnceLock<Regex>; PATTERNS.len()] = [const { OnceLock::new() }; PATTERNS.len()];
+    static UNICODE: [OnceLock<Regex>; PATTERNS.len()] = [const { OnceLock::new() }; PATTERNS.len()];
+    #[cfg(test)]
+    let text = if tests::UNICODE_BOUNDARIES.with(|u| u.get()) {
+        "\u{17f}"
+    } else {
+        text
+    };
+    if folds_to_ascii(text) {
+        UNICODE[i].get_or_init(|| Regex::new(PATTERNS[i].1).unwrap())
+    } else {
+        ASCII[i].get_or_init(|| Regex::new(&PATTERNS[i].1.replace(r"\b", r"(?-u:\b)")).unwrap())
+    }
+}
+
+/// Whether `s` has a character that case-insensitive matching folds into
+/// ASCII: `ſ` (to `s`) or the Kelvin sign (to `k`). Substring searches, which
+/// skip through the text, rather than a scan that decodes every character:
+/// this runs for each pattern on every message.
+fn folds_to_ascii(s: &str) -> bool {
+    s.contains('\u{17f}') || s.contains('\u{212a}')
 }
 
 /// Which of `PATTERNS` could match `s`: those whose literals appear in it.
@@ -678,13 +733,45 @@ fn candidates(s: &str) -> [bool; PATTERNS.len()] {
     }
     // Case-insensitive regexes fold `ſ` to `s` and the Kelvin sign to `k`,
     // which no ASCII comparison sees: text with either runs every pattern.
-    if s.contains(['\u{17f}', '\u{212a}']) {
+    if folds_to_ascii(s) {
         return [true; PATTERNS.len()];
     }
     for m in ac.find_overlapping_iter(s) {
-        hit[owner[m.pattern().as_usize()]] = true;
+        let i = owner[m.pattern().as_usize()];
+        // A keyword or `://` alone is common in prose (the system prompt
+        // talks about secrets and tokens); these patterns also need what
+        // must follow it, checked here so their regexes, which are the
+        // costliest to compile, aren't built for text they can't match.
+        hit[i] |= match PATTERNS[i].0 {
+            "AWS_SECRET" | "ASSIGNMENT" => assignment_follows(&s[m.end()..]),
+            "URL_PASSWORD" => password_follows(&s[m.end()..]),
+            _ => true,
+        };
     }
     hit
+}
+
+/// Whether `rest`, just after a credential keyword, can go on as
+/// `ASSIGNMENT` and `AWS_SECRET` require: more of the name, an optional
+/// quote, then `=` or `:`.
+fn assignment_follows(rest: &str) -> bool {
+    let rest = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    let rest = rest.strip_prefix(['"', '\'']).unwrap_or(rest);
+    rest.trim_start().starts_with(['=', ':'])
+}
+
+/// Whether `rest`, just after `://`, starts with `user:password@` as
+/// `URL_PASSWORD` requires.
+fn password_follows(rest: &str) -> bool {
+    let user_end = rest.find(|c: char| c.is_whitespace() || matches!(c, ':' | '/' | '@'));
+    let Some(pw) = user_end
+        .filter(|&i| i > 0 && rest[i..].starts_with(':'))
+        .map(|i| &rest[i + 1..])
+    else {
+        return false;
+    };
+    pw.find(|c: char| c.is_whitespace() || matches!(c, '@' | '/'))
+        .is_some_and(|j| pw[j..].starts_with('@') && pw[..j].chars().count() >= 3)
 }
 
 /// Mask secrets in `s`. Returns the text and the labels of what was masked.
@@ -728,7 +815,7 @@ fn redact_impl(s: &str) -> (Cow<'_, str>, Vec<String>) {
         if !hit[i] {
             continue;
         }
-        let re = pattern(i);
+        let re = pattern(i, out.as_ref());
         if re.is_match(out.as_ref()) {
             let replaced = re
                 .replace_all(out.as_ref(), |c: &regex::Captures| {
@@ -748,8 +835,10 @@ fn redact_impl(s: &str) -> (Cow<'_, str>, Vec<String>) {
             hit = candidates(out.as_ref());
         }
     }
-    let re = pattern(ASSIGNMENT);
-    if hit[ASSIGNMENT] && re.is_match(out.as_ref()) {
+    // Fetched only when it could match: compiling it is the costliest step.
+    let re = || pattern(ASSIGNMENT, out.as_ref());
+    if hit[ASSIGNMENT] && re().is_match(out.as_ref()) {
+        let re = re();
         let replaced = re
             .replace_all(out.as_ref(), |c: &regex::Captures| {
                 let whole = c.get(0).unwrap().as_str();
@@ -779,9 +868,9 @@ pub fn contains_secret(s: &str) -> bool {
     let r = state().read().unwrap().clone();
     let hit = candidates(s);
     r.ac.as_ref().is_some_and(|ac| ac.is_match(s))
-        || (0..TOKENS).any(|i| hit[i] && pattern(i).is_match(s))
+        || (0..TOKENS).any(|i| hit[i] && pattern(i, s).is_match(s))
         || (hit[ASSIGNMENT]
-            && pattern(ASSIGNMENT)
+            && pattern(ASSIGNMENT, s)
                 .captures_iter(s)
                 .any(|c| high_entropy(&c[2])))
 }

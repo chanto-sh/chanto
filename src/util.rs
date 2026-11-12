@@ -26,9 +26,31 @@ pub fn timing(label: &str) {
     let (on, t0) = timing_state();
     if *on {
         eprintln!(
-            "[timing] {:>7.1} ms  {label}",
-            t0.elapsed().as_secs_f64() * 1000.0
+            "[timing] {:>7.1} ms  {label}  (cpu {:.2} ms)",
+            t0.elapsed().as_secs_f64() * 1000.0,
+            process_cpu_ms()
         );
+    }
+}
+
+/// CPU time (user and system, every thread) this process has used so far,
+/// in milliseconds; what startup work actually costs, unlike wall time, which
+/// includes waiting on the model server. Zero where it isn't measured.
+fn process_cpu_ms() -> f64 {
+    #[cfg(unix)]
+    {
+        // SAFETY: getrusage only writes the struct it is given.
+        let u = unsafe {
+            let mut u: libc::rusage = std::mem::zeroed();
+            libc::getrusage(libc::RUSAGE_SELF, &mut u);
+            u
+        };
+        let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
+        ms(u.ru_utime) + ms(u.ru_stime)
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
     }
 }
 

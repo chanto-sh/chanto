@@ -37,6 +37,9 @@ mod batch;
 pub mod fuzzing;
 mod github;
 mod goal;
+/// `CHANTO_TIMING` checkpoints, for the binary's entry point; not public API.
+#[doc(hidden)]
+pub use util::timing;
 mod guardrails;
 mod history;
 mod hooks;
