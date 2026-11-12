@@ -224,6 +224,60 @@ fn footprint(pid: u32) -> Option<u64> {
     None
 }
 
+/// What the watchdog found on one look at the process table.
+#[derive(Debug, PartialEq)]
+struct Verdict {
+    /// Memory Chanto's descendants use, in bytes.
+    used: u64,
+    kids: usize,
+    /// The biggest descendant (pid, bytes, name), when they use too much:
+    /// `limit_pct` of `total` or more, or over 512 MB while the system is
+    /// nearly out (`critical`).
+    victim: Option<(u32, u64, String)>,
+}
+
+fn judge(
+    me: u32,
+    list: Vec<crate::procs::Proc>,
+    total: u64,
+    limit_pct: u64,
+    critical: bool,
+    memory: impl Fn(&crate::procs::Proc) -> u64,
+) -> Verdict {
+    let procs: std::collections::HashMap<u32, crate::procs::Proc> =
+        list.into_iter().map(|p| (p.pid, p)).collect();
+    // Up a parent chain to `me`; bounded, in case the table has a cycle.
+    let descends = |mut p: u32| {
+        for _ in 0..64 {
+            match procs.get(&p).and_then(|x| x.parent) {
+                Some(parent) if parent == me => return true,
+                Some(parent) => p = parent,
+                None => return false,
+            }
+        }
+        false
+    };
+    let kids: Vec<(u32, u64)> = procs
+        .iter()
+        .filter(|(pid, _)| **pid != me && descends(**pid))
+        .map(|(pid, p)| (*pid, memory(p)))
+        .collect();
+    let used: u64 = kids.iter().map(|(_, m)| m).sum();
+    let over = used * 100 / total.max(1) >= limit_pct;
+    let victim = (over || critical && used > 512 * 1_048_576)
+        .then(|| kids.iter().max_by_key(|(_, m)| *m).copied())
+        .flatten()
+        .map(|(pid, mem)| {
+            let name = procs.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
+            (pid, mem, name)
+        });
+    Verdict {
+        used,
+        kids: kids.len(),
+        victim,
+    }
+}
+
 /// Every few seconds: if Chanto's descendants use too much memory (or the
 /// system is nearly out), kill the biggest descendant's process group.
 async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
@@ -238,41 +292,22 @@ async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
         let Some(list) = crate::procs::processes() else {
             continue;
         };
-        let procs: std::collections::HashMap<u32, crate::procs::Proc> =
-            list.into_iter().map(|p| (p.pid, p)).collect();
-        let descends = |mut p: u32| {
-            for _ in 0..64 {
-                match procs.get(&p).and_then(|x| x.parent) {
-                    Some(parent) if parent == me => return true,
-                    Some(parent) => p = parent,
-                    None => return false,
-                }
-            }
-            false
-        };
-        let kids: Vec<(u32, u64)> = procs
-            .iter()
-            .filter(|(pid, _)| **pid != me && descends(**pid))
-            .map(|(pid, p)| (*pid, footprint(*pid).unwrap_or(p.memory)))
-            .collect();
-        let used: u64 = kids.iter().map(|(_, m)| m).sum();
+        let seen = list.len();
+        let v = judge(me, list, total, limits().limit_pct, critical, |p| {
+            footprint(p.pid).unwrap_or(p.memory)
+        });
         if std::env::var_os("CHANTO_DEBUG_WATCHDOG").is_some() {
             eprintln!(
-                "[watchdog] procs={} kids={} used={}MB avail={}MB",
-                procs.len(),
-                kids.len(),
-                used / 1_048_576,
+                "[watchdog] procs={seen} kids={} used={}MB avail={}MB",
+                v.kids,
+                v.used / 1_048_576,
                 available_mb()
             );
         }
-        let over = used * 100 / total >= limits().limit_pct;
-        if !(over || critical && used > 512 * 1_048_576) {
-            continue;
-        }
-        let Some((pid, mem)) = kids.iter().max_by_key(|(_, m)| *m).copied() else {
+        let Some((pid, mem, name)) = v.victim else {
             continue;
         };
-        let name = procs.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
+        let used = v.used;
         #[cfg(unix)]
         {
             // Kill the whole process group (a build's compiler workers too).

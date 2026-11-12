@@ -49,3 +49,23 @@ fn sees_a_child_through_its_life() {
 fn this_process_is_running() {
     assert_eq!(state(std::process::id()), Some(State::Running));
 }
+
+#[cfg(windows)]
+#[test]
+fn kill_ends_a_process() {
+    let mut child = std::process::Command::new("cmd")
+        .args(["/c", "ping -n 30 127.0.0.1 > NUL"])
+        .spawn()
+        .expect("cmd");
+    let pid = child.id();
+    assert_eq!(state(pid), Some(State::Running));
+    kill(pid);
+    child.wait().expect("reap");
+    // Closing the last handle lets Windows retire the process.
+    drop(child);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while state(pid) != Some(State::Gone) && std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert_eq!(state(pid), Some(State::Gone));
+}
