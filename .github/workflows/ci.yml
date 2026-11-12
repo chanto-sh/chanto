@@ -166,7 +166,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -204,13 +203,12 @@ jobs:
             tail -n 1 coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+      # The `codecov` job sends this with the Windows report as one upload.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          files: lcov.info
-          # Only the lcov report; the uploader would also pick up coverage.txt.
-          disable_search: true
-          use_oidc: true
-          fail_ci_if_error: false
+          name: coverage-linux
+          path: lcov.info
+          retention-days: 1
       # After the upload, so a drop is still reported. OpenSSF silver asks
       # for 80% line coverage.
       - name: Coverage floor
@@ -219,7 +217,7 @@ jobs:
             --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' \
             --fail-under-lines 83 > /dev/null
   # The lines only Windows compiles count toward Codecov's patch check too;
-  # Codecov merges this report with the Linux one (codecov.yml waits for both).
+  # the `codecov` job sends this report with the Linux one.
   coverage-windows:
     runs-on: windows-latest
     # Over rust-toolchain.toml's pin, which would otherwise pick 1.100.
@@ -227,7 +225,6 @@ jobs:
       RUSTUP_TOOLCHAIN: "1.99.1"
     permissions:
       contents: read
-      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -250,18 +247,51 @@ jobs:
         with:
           tool: cargo-llvm-cov@0.6.21
       # chanto's tests only: chanto-core's own expect the `/` paths of their
-      # in-memory project, and run on Linux and WASI. A failing test still gets
-      # its report uploaded (the `windows` job is what judges the tests), so
+      # in-memory project, and run on Linux and WASI. A failing test still
+      # gets its report saved (the `windows` job is what judges the tests), so
       # Codecov's status isn't left waiting.
       - run: cargo llvm-cov --locked --quiet --ignore-run-fail -p chanto --lcov --output-path lcov.info
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
-      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() }}
         with:
-          files: lcov.info
-          flags: windows
+          name: coverage-windows
+          path: lcov.info
+          retention-days: 1
+  # Both coverage reports go to Codecov as one upload, so it has one report
+  # to process and post. Two separate uploads, with Codecov told to wait for
+  # both, now and then left its pull request status pending for good.
+  codecov:
+    needs: [coverage, coverage-windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # The uploader lists the repository's files to map the reports' paths
+      # (Windows ones included) onto it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/coverage
+      - name: Reports
+        id: reports
+        env:
+          DIR: ${{ runner.temp }}/coverage
+        run: |
+          files=$(find "$DIR" -name lcov.info | sort | paste -sd, -)
+          echo "found: $files"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        if: ${{ steps.reports.outputs.files != '' }}
+        with:
+          files: ${{ steps.reports.outputs.files }}
           disable_search: true
           use_oidc: true
           fail_ci_if_error: false
