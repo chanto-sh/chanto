@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.1.19 (November 12, 2026)
+
+- **Faster start on Linux.** Chanto read and parsed the system's whole certificate store each time it set up an HTTP client, and twice before the first model request. It now does that at most once per run, and not at all for a model server on this machine over plain HTTP (Ollama, LM Studio, llama.cpp), where no certificate is used.
+- **One keychain read per login.** With logins saved in the macOS keychain, looking up any one of them read every saved login's keychain entry, and refreshing a sign-in read them all twice. Chanto now reads only the entry it needs, which is quicker and asks macOS for fewer keychain items, so fewer access prompts after an upgrade.
+
 ## v0.1.18 (November 11, 2026)
 
 - **Rewind undoes parallel subagents' edits.** When the model started two subagents at once, the second could edit files before the turn's snapshot was taken, so `/rewind`, `/undo` and `/edit-prompt` reported success but kept its changes. Every subagent now waits for the snapshot before its first edit.

@@ -6,7 +6,7 @@ expression: snapshot(buffer)
 --- screen ---
  ╭─────────────────────────────────────╮
  │                                     │
- │  ❖ chanto v0.1.18                   │
+ │  ❖ chanto v0.1.19                   │
  │    model  mock                      │
  │    cwd    /workspace/demo           │
  │    /help for commands               │
