@@ -1318,9 +1318,17 @@ fn write_server_file(
     Ok(())
 }
 
-/// Remove the file on shutdown, unless a private server never wrote it.
+/// Remove the file on shutdown, unless a private server never wrote it or
+/// another server has since replaced it with its own.
 fn remove_server_file(path: &std::path::Path, private: bool) {
-    if !private {
+    if private {
+        return;
+    }
+    let ours = std::fs::read(path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .is_some_and(|v| v["pid"].as_u64() == Some(u64::from(std::process::id())));
+    if ours {
         let _ = std::fs::remove_file(path);
     }
 }
@@ -1409,6 +1417,34 @@ fn hosts_runs(cli: &Cli, bind_host: &str) -> bool {
         || bind_host == "localhost"
 }
 
+/// The store's host lock when this server should host runs (`wanted`).
+/// Without it, a server asked for runs with `--runs` (`explicit`) fails, and
+/// any other serves sessions only.
+fn runs_lock(
+    store: &crate::runs::Store,
+    wanted: bool,
+    explicit: bool,
+) -> Result<Option<crate::runs::HostLock>> {
+    if !wanted {
+        return Ok(None);
+    }
+    let lock = store.lock_host()?;
+    if lock.is_none() {
+        if explicit {
+            anyhow::bail!(
+                "Another chanto process already hosts background runs and scheduled jobs \
+                 (`chanto daemon status` shows it). Stop it with `chanto daemon stop`, \
+                 or start this server without --runs."
+            );
+        }
+        eprintln!(
+            "Background runs and scheduled jobs stay with the chanto daemon that's already running \
+             (`chanto daemon status`); this server serves sessions only."
+        );
+    }
+    Ok(lock)
+}
+
 /// The pinned bearer token: `CHANTO_SERVER_TOKEN`, or the contents of the file
 /// named by `CHANTO_SERVER_TOKEN_FILE` (for systemd `LoadCredential=` and
 /// Docker/Compose secrets, so the token never sits in the environment).
@@ -1441,6 +1477,11 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
     let bind_host = tailnet_ip
         .map(|ip| ip.to_string())
         .unwrap_or_else(|| host.to_string());
+    // One process hosts the runs store at a time: two would each start
+    // queued runs, mark the other's live runs interrupted and fire every
+    // scheduled job twice.
+    let store = crate::runs::Store::new(crate::runs::Store::default_dir());
+    let host_lock = runs_lock(&store, hosts_runs(&cli, &bind_host), cli.runs)?;
     let listener = tokio::net::TcpListener::bind((bind_host.as_str(), port)).await?;
     let addr = listener.local_addr()?;
     let url = format!("http://{addr}");
@@ -1453,7 +1494,10 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
     });
     std::fs::create_dir_all(crate::config::home_dir())?;
     let path = server_file();
-    let private = std::env::var_os("CHANTO_PRIVATE_SERVER").is_some();
+    // While another process hosts runs, server.json is how clients find
+    // it: leave the file alone.
+    let private = std::env::var_os("CHANTO_PRIVATE_SERVER").is_some()
+        || (host_lock.is_none() && store.hosted_elsewhere());
     write_server_file(&path, &info, private)?;
     eprintln!(
         "chanto server listening on {url}\ntoken: {token}\n(connection details written to {})",
@@ -1468,14 +1512,14 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
     }
     let sessions: Arc<Mutex<HashMap<String, Arc<Session>>>> = Default::default();
     let no_open = cli.no_open;
-    let runs = hosts_runs(&cli, &bind_host).then(|| {
+    let runs = host_lock.is_some().then(|| {
         let exe = std::env::current_exe().unwrap_or_else(|_| "chanto".into());
         let home = crate::config::home_dir();
         let cfg = crate::config::Config::load(&home, false)
             .map(|(c, _)| c)
             .unwrap_or_default();
         let m = crate::runs::manager::Manager::open(
-            crate::runs::Store::new(crate::runs::Store::default_dir()),
+            store.clone(),
             crate::runs::manager::Launcher::Process(exe),
             cfg.background.max_parallel.unwrap_or(2),
         );
@@ -1541,6 +1585,8 @@ pub async fn run(mut cli: Cli, host: &str, port: u16, web: bool, tailscale: bool
         close_session(&s).await;
     }
     remove_server_file(&path, private);
+    // Held until the runs are closed and the file is gone.
+    drop(host_lock);
     r?;
     Ok(())
 }
