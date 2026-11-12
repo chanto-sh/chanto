@@ -22,17 +22,14 @@ pub fn is_exec(p: &Path) -> bool {
     let Ok(md) = p.metadata() else {
         return false;
     };
-    if !md.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        md.permissions().mode() & 0o111 != 0
+        md.is_file() && md.permissions().mode() & 0o111 != 0
     }
     #[cfg(windows)]
     {
-        true
+        md.is_file()
     }
 }
 
