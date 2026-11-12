@@ -1483,7 +1483,11 @@ fn spawn_guard(journal: &Path) -> Option<std::process::Child> {
 pub fn guard(journal: &Path, pid: u32) -> bool {
     use sysinfo::{Pid, ProcessRefreshKind, ProcessStatus, ProcessesToUpdate, System};
     let p = Pid::from_u32(pid);
-    let mut sys = System::new();
+    // Without a process table there is no telling whether `pid` died, and
+    // putting files back under a live run would undo its work.
+    let Ok(mut sys) = System::new() else {
+        return false;
+    };
     loop {
         if !journal.exists() {
             return false;

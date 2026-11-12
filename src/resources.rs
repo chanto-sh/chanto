@@ -57,8 +57,13 @@ static LIMITS: OnceLock<Limits> = OnceLock::new();
 /// Process groups the watchdog killed (so the tool result can say why).
 static KILLED: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
+// `System::new` only fails on platforms sysinfo doesn't support; each use
+// below falls back to whatever never blocks work or kills anything.
+
 fn total_mb() -> u64 {
-    let mut s = System::new();
+    let Ok(mut s) = System::new() else {
+        return 0;
+    };
     s.refresh_memory();
     s.total_memory() / 1_048_576
 }
@@ -98,7 +103,9 @@ pub fn max_background_agents() -> usize {
 
 /// Memory available for new work, in MB.
 pub fn available_mb() -> u64 {
-    let mut s = System::new();
+    let Ok(mut s) = System::new() else {
+        return u64::MAX;
+    };
     s.refresh_memory();
     #[cfg(target_os = "macos")]
     {
@@ -202,7 +209,9 @@ pub fn was_killed(pgid: u32) -> bool {
 /// Whether a process is still running. Used to reap stale IDE bridge locks.
 pub fn pid_alive(pid: u32) -> bool {
     let p = Pid::from_u32(pid);
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else {
+        return true;
+    };
     sys.refresh_processes_specifics(
         ProcessesToUpdate::Some(&[p]),
         true,
@@ -237,7 +246,9 @@ fn footprint(pid: Pid) -> Option<u64> {
 /// system is nearly out), kill the biggest descendant's process group.
 async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
     let me = Pid::from_u32(std::process::id());
-    let mut sys = System::new();
+    let Ok(mut sys) = System::new() else {
+        return;
+    };
     loop {
         tokio::time::sleep(Duration::from_secs(3)).await;
         sys.refresh_memory();
