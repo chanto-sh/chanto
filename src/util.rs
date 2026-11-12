@@ -26,7 +26,7 @@ pub fn timing(label: &str) {
     let (on, t0) = timing_state();
     if *on {
         eprintln!(
-            "[timing] {:>7.1} ms  cpu {:>6.2} ms  {label}",
+            "[timing] {:>7.1} ms  {label}  (cpu {:.2} ms)",
             t0.elapsed().as_secs_f64() * 1000.0,
             process_cpu_ms()
         );
