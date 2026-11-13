@@ -983,64 +983,31 @@ pub fn redact_messages(msgs: &mut [crate::llm::Message]) {
     }
 }
 
-/// Reuse redaction for unchanged messages. A message counts as unchanged
-/// only when its length and a GMAC tag of its content match: a keyed MAC
-/// (AES-256-GCM over the content as associated data, under a random key that
-/// never leaves the process), so no input can be crafted to look unchanged,
-/// and the chance of two different messages matching is under 2^-100 even
-/// for megabytes of text. That keeps a 16-byte tag per message instead of a
-/// copy of the whole conversation. Tool-call arguments are small, so they're
-/// compared with their exact originals.
+/// Reuse redaction for unchanged messages. Each entry holds a reference to
+/// the content it was made from (an `Arc`, not a copy). While it does, that
+/// text can't change: an edit makes a new allocation, or copies one that's
+/// shared. So a message whose content is the same allocation is unchanged,
+/// at no cost per turn, and no input can be crafted to look unchanged; a
+/// different allocation counts as unchanged only when its text is equal.
+/// Tool-call arguments are small, so they're compared with their exact
+/// originals.
 #[derive(Default)]
 pub struct MessageRedactor {
     state: Option<Arc<Redactor>>,
     contents: Vec<Redacted>,
 }
 
-/// One message as last sent: what identifies its content, and its content
-/// and tool-call arguments redacted, when that differs.
+/// One message as last sent: its content, and its content and tool-call
+/// arguments redacted, when that differs.
 struct Redacted {
-    content: Seen,
-    redacted: Option<String>,
+    content: Arc<String>,
+    redacted: Option<Arc<String>>,
     arguments: Vec<(serde_json::Value, Option<serde_json::Value>)>,
 }
 
-#[derive(PartialEq)]
-enum Seen {
-    Tag(usize, [u8; 16]),
-    /// No key could be made: the content itself, compared exactly.
-    Exact(String),
-}
-
-impl Seen {
-    fn of(content: &str) -> Self {
-        use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
-        static KEY: std::sync::OnceLock<Option<LessSafeKey>> = std::sync::OnceLock::new();
-        let key = KEY.get_or_init(|| {
-            // Straight from the OS: aws-lc's own generator spends ~30 ms of
-            // CPU seeding itself on first use, which a plain-HTTP session
-            // otherwise never pays.
-            let mut k = [0u8; 32];
-            getrandom::fill(&mut k).ok()?;
-            Some(LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &k).ok()?))
-        });
-        // The fixed nonce is safe here: a GCM nonce must not repeat when
-        // tags are seen by someone who could forge one, and these tags never
-        // leave this process.
-        key.as_ref()
-            .and_then(|key| {
-                key.seal_in_place_separate_tag(
-                    Nonce::assume_unique_for_key([0; 12]),
-                    Aad::from(content.as_bytes()),
-                    &mut [],
-                )
-                .ok()
-            })
-            .and_then(|tag| tag.as_ref().try_into().ok())
-            .map_or_else(
-                || Seen::Exact(content.to_owned()),
-                |t| Seen::Tag(content.len(), t),
-            )
+impl Redacted {
+    fn holds(&self, content: &Arc<String>) -> bool {
+        Arc::ptr_eq(&self.content, content) || self.content == *content
     }
 }
 
@@ -1062,14 +1029,13 @@ impl MessageRedactor {
         }
         self.contents.truncate(msgs.len());
         for (i, m) in msgs.iter_mut().enumerate() {
-            let seen = Seen::of(&m.content);
-            if i >= self.contents.len() || self.contents[i].content != seen {
+            if self.contents.get(i).is_none_or(|e| !e.holds(&m.content)) {
                 let redacted = match redact(&m.content) {
-                    Cow::Owned(s) => Some(s),
+                    Cow::Owned(s) => Some(Arc::new(s)),
                     Cow::Borrowed(_) => None,
                 };
                 let entry = Redacted {
-                    content: seen,
+                    content: m.content.clone(),
                     redacted,
                     arguments: Vec::new(),
                 };
@@ -1081,7 +1047,7 @@ impl MessageRedactor {
             }
             let entry = &mut self.contents[i];
             if let Some(s) = &entry.redacted {
-                m.set_content(s.clone());
+                m.content = s.clone();
             }
             entry.arguments.truncate(m.tool_calls.len());
             for (j, c) in m.tool_calls.iter_mut().enumerate() {

@@ -301,12 +301,23 @@ fn message_cache_tracks_edits_and_secret_changes() {
 
 #[test]
 fn a_message_counts_as_unchanged_only_with_the_same_content() {
-    let a = Seen::of("token = abc123");
-    assert!(matches!(a, Seen::Tag(14, _)));
-    assert!(a == Seen::of("token = abc123"));
+    let entry = |s: &str| Redacted {
+        content: Arc::new(s.to_string()),
+        redacted: None,
+        arguments: Vec::new(),
+    };
+    let a = entry("token = abc123");
+    // The same allocation, and an equal copy of it.
+    assert!(a.holds(&a.content.clone()));
+    assert!(a.holds(&Arc::new("token = abc123".to_string())));
     // Same length, one byte different.
-    assert!(a != Seen::of("token = abc124"));
-    assert!(Seen::of("") != Seen::of("\0"));
+    assert!(!a.holds(&Arc::new("token = abc124".to_string())));
+    assert!(!entry("").holds(&Arc::new("\0".to_string())));
+    // An edit in place while the cache holds the text copies it first, so it
+    // can't pass as the allocation the cache saw.
+    let mut held = a.content.clone();
+    std::sync::Arc::make_mut(&mut held).replace_range(..5, "TOKEN");
+    assert!(!a.holds(&held));
     // A same-length edit to an earlier message is scanned again.
     let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     with_values(&[("KEY", "secret-value-1")]);
