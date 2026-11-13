@@ -1,0 +1,1 @@
+- **No leftover files after a crash mid-save.** A Chanto process killed while saving a session left a temporary file next to it for good. The session's next save now removes temporary files whose writer is no longer running.

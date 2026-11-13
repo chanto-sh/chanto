@@ -458,3 +458,101 @@ fn save_clears_an_existing_transcript() {
     }
     let _ = std::fs::remove_dir_all(&home);
 }
+
+#[test]
+fn a_save_removes_what_a_crashed_save_left_behind() {
+    let _g = crate::compat::TEST_HOME_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = std::env::temp_dir().join(format!("chanto-tmp-{}", uuid::Uuid::new_v4()));
+    unsafe {
+        std::env::set_var("CHANTO_HOME", &home);
+    }
+    let cwd = home.join("proj");
+    let mut s = Session::new(&cwd, "model");
+    s.save(vec![Message::user("hi")]).unwrap();
+    let p = s.path();
+    let dir = p.parent().unwrap().to_path_buf();
+    let name = p.file_name().unwrap().to_str().unwrap().to_string();
+    let leftover = |mid: &str| dir.join(format!("{name}.{mid}.tmp"));
+    // A process that has exited: its save was cut off.
+    let mut dead = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
+        .args(if cfg!(windows) {
+            &["/c", "exit"][..]
+        } else {
+            &[][..]
+        })
+        .spawn()
+        .unwrap();
+    let dead_pid = dead.id();
+    dead.wait().unwrap();
+    // One still running may be mid-save.
+    let mut live = std::process::Command::new(if cfg!(windows) { "cmd" } else { "sleep" })
+        .args(if cfg!(windows) {
+            &["/c", "ping -n 30 127.0.0.1 > NUL"][..]
+        } else {
+            &["30"][..]
+        })
+        .spawn()
+        .unwrap();
+    let files = [
+        (leftover(&format!("{dead_pid}.aaaa")), false),
+        (leftover(&format!("{}.bbbb", live.id())), true),
+        (leftover(&format!("{}.cccc", std::process::id())), true),
+        // Without a process id (older saves): kept until a minute old.
+        (leftover("dddd"), true),
+        (leftover("eeee"), false),
+        // Another session's leftover isn't this save's business.
+        (dir.join(format!("other.json.{dead_pid}.ffff.tmp")), true),
+    ];
+    for (f, _) in &files {
+        std::fs::write(f, "{").unwrap();
+    }
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(120);
+    std::fs::File::options()
+        .write(true)
+        .open(leftover("eeee"))
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    // The session's first save in this process already cleaned up, so run
+    // the cleanup itself.
+    super::remove_crashed_saves_for_test(&p);
+    for (f, kept) in &files {
+        assert_eq!(f.exists(), *kept, "{}", f.display());
+    }
+    let _ = live.kill();
+    let _ = live.wait();
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_first_save_after_a_crash_cleans_up() {
+    let _g = crate::compat::TEST_HOME_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let home = std::env::temp_dir().join(format!("chanto-crash-{}", uuid::Uuid::new_v4()));
+    unsafe {
+        std::env::set_var("CHANTO_HOME", &home);
+    }
+    let mut s = Session::new(&home.join("proj"), "model");
+    let p = s.path();
+    std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+    // What a process killed mid-save leaves: its id, then the temp file.
+    let mut dead = std::process::Command::new(if cfg!(windows) { "cmd" } else { "true" })
+        .args(if cfg!(windows) {
+            &["/c", "exit"][..]
+        } else {
+            &[][..]
+        })
+        .spawn()
+        .unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    let left = p.with_extension(format!("json.{pid}.0123.tmp"));
+    std::fs::write(&left, "{\"meta\":").unwrap();
+    s.save(vec![Message::user("hi")]).unwrap();
+    assert!(!left.exists());
+    assert!(p.exists());
+    let _ = std::fs::remove_dir_all(&home);
+}
