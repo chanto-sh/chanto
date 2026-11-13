@@ -209,3 +209,33 @@ async fn balances_are_only_reported_from_known_shapes() {
     );
     assert_eq!(keyed.balance().await, None, "not a provider with a balance");
 }
+
+#[tokio::test]
+async fn a_request_with_tools_sends_them() {
+    let bodies: Arc<Mutex<Vec<serde_json::Value>>> = Default::default();
+    let b2 = bodies.clone();
+    let app = Router::new().route(
+        "/api/chat",
+        post(move |Json(v): Json<serde_json::Value>| {
+            let bodies = b2.clone();
+            async move {
+                bodies.lock().unwrap().push(v);
+                "{\"message\":{\"content\":\"ok\"},\"done\":true}\n"
+            }
+        }),
+    );
+    let base = serve(app).await;
+    let mut req = request(None);
+    let spec = ToolSpec {
+        name: "Read".into(),
+        description: "Read a file.".into(),
+        parameters: serde_json::json!({"type": "object"}),
+    };
+    req.tools = vec![spec.clone()];
+    provider(&base).chat(&req, &mut |_| {}).await.unwrap();
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(
+        bodies[0]["tools"],
+        serde_json::json!([{"type": "function", "function": spec}])
+    );
+}

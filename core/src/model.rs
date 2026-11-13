@@ -558,16 +558,50 @@ pub fn estimate_tokens(msgs: &[Message]) -> u64 {
 /// A `/chat/completions` body: the request's own fields, then its messages.
 pub struct OpenaiBody<'a> {
     pub fields: &'a Value,
+    /// Tool definitions, each written as `{"type": "function", "function":
+    /// …}` straight from its spec: wrapping them in a `Value` copied every
+    /// schema on every request. None when empty.
+    pub tools: &'a [ToolSpec],
     pub messages: OpenaiMessages<'a>,
 }
 
 impl Serialize for OpenaiBody<'_> {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
+        use serde::ser::{SerializeMap, SerializeSeq};
+        struct Function<'a>(&'a ToolSpec);
+        impl Serialize for Function<'_> {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                s: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                let mut map = s.serialize_map(Some(2))?;
+                map.serialize_entry("type", "function")?;
+                map.serialize_entry("function", self.0)?;
+                map.end()
+            }
+        }
+        struct Tools<'a>(&'a [ToolSpec]);
+        impl Serialize for Tools<'_> {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                s: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                let mut seq = s.serialize_seq(Some(self.0.len()))?;
+                for t in self.0 {
+                    seq.serialize_element(&Function(t))?;
+                }
+                seq.end()
+            }
+        }
         let fields = self.fields.as_object();
-        let mut map = s.serialize_map(Some(fields.map_or(0, |f| f.len()) + 1))?;
+        let tools = !self.tools.is_empty();
+        let mut map =
+            s.serialize_map(Some(fields.map_or(0, |f| f.len()) + 1 + usize::from(tools)))?;
         for (k, v) in fields.into_iter().flatten() {
             map.serialize_entry(k, v)?;
+        }
+        if tools {
+            map.serialize_entry("tools", &Tools(self.tools))?;
         }
         map.serialize_entry("messages", &self.messages)?;
         map.end()

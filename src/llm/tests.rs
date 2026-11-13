@@ -79,14 +79,36 @@ fn openai_messages_serialize_as_the_value_tree_did() {
         other_model,
         Message::assistant("done"),
     ];
-    for model in ["m", "other"] {
-        let fields = json!({"model": model, "stream": true, "max_tokens": 10});
-        let mut expected = fields.clone();
-        expected["messages"] = Value::Array(reference_openai_messages(&msgs, model));
-        let body = Provider::openai_body(&fields, &msgs, model);
-        assert_eq!(serde_json::to_value(&body).unwrap(), expected);
-        let text = serde_json::to_string(&body).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+    let specs = [
+        ToolSpec {
+            name: "Read".into(),
+            description: "Read a file.".into(),
+            parameters: json!({"type": "object", "properties": {"file_path": {"type": "string"}}}),
+        },
+        ToolSpec {
+            name: "Bash".into(),
+            description: "Run a command.".into(),
+            parameters: json!({"type": "object", "properties": {}}),
+        },
+    ];
+    for tools in [&specs[..], &[]] {
+        for model in ["m", "other"] {
+            let fields = json!({"model": model, "stream": true, "max_tokens": 10});
+            let mut expected = fields.clone();
+            // The tools as the request wrapped them before `OpenaiBody`
+            // wrote them itself; none at all when there are none.
+            if !tools.is_empty() {
+                expected["tools"] = tools
+                    .iter()
+                    .map(|t| json!({"type":"function","function": t}))
+                    .collect();
+            }
+            expected["messages"] = Value::Array(reference_openai_messages(&msgs, model));
+            let body = Provider::openai_body(&fields, tools, &msgs, model);
+            assert_eq!(serde_json::to_value(&body).unwrap(), expected);
+            let text = serde_json::to_string(&body).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+        }
     }
 }
 
@@ -301,4 +323,50 @@ fn stream_idle_timeout_config() {
     assert_eq!(c.stream_idle(), None);
     c.stream_idle_timeout = Some(30.0);
     assert_eq!(c.stream_idle(), Some(Duration::from_secs(30)));
+}
+
+#[tokio::test]
+async fn an_openai_request_with_tools_sends_them() {
+    use axum::{Json, Router, routing::post};
+    use std::sync::{Arc, Mutex};
+    let bodies: Arc<Mutex<Vec<Value>>> = Default::default();
+    let b2 = bodies.clone();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |Json(v): Json<Value>| {
+            let bodies = b2.clone();
+            async move {
+                bodies.lock().unwrap().push(v);
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let spec = ToolSpec {
+        name: "Read".into(),
+        description: "Read a file.".into(),
+        parameters: json!({"type": "object"}),
+    };
+    let req = ChatRequest {
+        model: "m".into(),
+        messages: vec![Message::user("hi")],
+        tools: vec![spec.clone()],
+        think: None,
+        effort: None,
+        temperature: None,
+        max_tokens: None,
+        json: false,
+    };
+    let r = Provider::new(ProviderKind::Openai, &base, None, 4096)
+        .chat(&req, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(r.text, "ok");
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(
+        bodies[0]["tools"],
+        json!([{"type": "function", "function": spec}])
+    );
 }

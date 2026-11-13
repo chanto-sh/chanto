@@ -6,7 +6,7 @@
 //! The CLI keeps its own, fuller loop (permissions, hooks, checkpoints,
 //! compaction, shells); this one shares its wire format, decoder and tools.
 
-use crate::message::{ChatRequest, Delta, Message};
+use crate::message::{ChatRequest, Delta, Message, ToolSpec};
 use crate::model::{OpenaiBody, OpenaiDecoder, OpenaiMessages, extract_text_tool_calls};
 use crate::protocol::{normalize_args, to_text_protocol};
 use crate::tools::{Workspace, specs};
@@ -159,15 +159,12 @@ impl Agent {
             fields["stop"] = json!(["<tool_response"]);
             &text_msgs
         } else {
-            fields["tools"] = req
-                .tools
-                .iter()
-                .map(|t| json!({"type": "function", "function": t}))
-                .collect();
             &self.messages
         };
+        let tools: &[ToolSpec] = if self.text_tools { &[] } else { &req.tools };
         let body = serde_json::to_vec(&OpenaiBody {
             fields: &fields,
+            tools,
             messages: OpenaiMessages {
                 msgs,
                 model: &req.model,
