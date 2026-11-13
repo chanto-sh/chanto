@@ -79,14 +79,36 @@ fn openai_messages_serialize_as_the_value_tree_did() {
         other_model,
         Message::assistant("done"),
     ];
-    for model in ["m", "other"] {
-        let fields = json!({"model": model, "stream": true, "max_tokens": 10});
-        let mut expected = fields.clone();
-        expected["messages"] = Value::Array(reference_openai_messages(&msgs, model));
-        let body = Provider::openai_body(&fields, &msgs, model);
-        assert_eq!(serde_json::to_value(&body).unwrap(), expected);
-        let text = serde_json::to_string(&body).unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+    let specs = [
+        ToolSpec {
+            name: "Read".into(),
+            description: "Read a file.".into(),
+            parameters: json!({"type": "object", "properties": {"file_path": {"type": "string"}}}),
+        },
+        ToolSpec {
+            name: "Bash".into(),
+            description: "Run a command.".into(),
+            parameters: json!({"type": "object", "properties": {}}),
+        },
+    ];
+    for tools in [&specs[..], &[]] {
+        for model in ["m", "other"] {
+            let fields = json!({"model": model, "stream": true, "max_tokens": 10});
+            let mut expected = fields.clone();
+            // The tools as the request wrapped them before `OpenaiBody`
+            // wrote them itself; none at all when there are none.
+            if !tools.is_empty() {
+                expected["tools"] = tools
+                    .iter()
+                    .map(|t| json!({"type":"function","function": t}))
+                    .collect();
+            }
+            expected["messages"] = Value::Array(reference_openai_messages(&msgs, model));
+            let body = Provider::openai_body(&fields, tools, &msgs, model);
+            assert_eq!(serde_json::to_value(&body).unwrap(), expected);
+            let text = serde_json::to_string(&body).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&text).unwrap(), expected);
+        }
     }
 }
 

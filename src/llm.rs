@@ -670,7 +670,12 @@ impl Provider {
             body["thinking"] = json!({"type": "disabled"});
         }
         let resp = self
-            .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+            .post_openai(&Self::openai_body(
+                &body,
+                &req.tools,
+                &req.messages,
+                &req.model,
+            ))
             .await
             .ok()?;
         if !resp.status().is_success() {
@@ -1049,14 +1054,6 @@ impl Provider {
             "stream": true,
             "options": options,
         });
-        if !req.tools.is_empty() {
-            body["tools"] = Value::Array(
-                req.tools
-                    .iter()
-                    .map(|t| json!({"type":"function","function": t}))
-                    .collect(),
-            );
-        }
         if let Some(t) = req.think {
             // gpt-oss takes a level; other models reject one, and the retry below drops `think`.
             body["think"] = match effort_for(req, "high") {
@@ -1190,9 +1187,15 @@ impl Provider {
     /// messages) and the messages, written straight from the conversation.
     /// Building them as a `Value` first copied the whole history into a tree
     /// on every call only to serialize and drop it.
-    fn openai_body<'a>(fields: &'a Value, msgs: &'a [Message], model: &'a str) -> OpenaiBody<'a> {
+    fn openai_body<'a>(
+        fields: &'a Value,
+        tools: &'a [ToolSpec],
+        msgs: &'a [Message],
+        model: &'a str,
+    ) -> OpenaiBody<'a> {
         OpenaiBody {
             fields,
+            tools,
             messages: OpenaiMessages { msgs, model },
         }
     }
@@ -1281,14 +1284,6 @@ impl Provider {
             "stream": true,
             "stream_options": {"include_usage": true},
         });
-        if !req.tools.is_empty() {
-            body["tools"] = Value::Array(
-                req.tools
-                    .iter()
-                    .map(|t| json!({"type":"function","function": t}))
-                    .collect(),
-            );
-        }
         if let Some(t) = req.temperature {
             body["temperature"] = json!(t);
         }
@@ -1319,7 +1314,12 @@ impl Provider {
             body["reasoning_split"] = json!(true);
         }
         let mut resp = self
-            .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+            .post_openai(&Self::openai_body(
+                &body,
+                &req.tools,
+                &req.messages,
+                &req.model,
+            ))
             .await?;
         // A server that rejects an optional parameter (a thinking switch, a
         // sampling setting a reasoning model doesn't take) gets the request
@@ -1356,7 +1356,12 @@ impl Provider {
                 body["thinking"] = json!({"type": "disabled"});
                 body.as_object_mut().unwrap().remove("reasoning_effort");
                 resp = self
-                    .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+                    .post_openai(&Self::openai_body(
+                        &body,
+                        &req.tools,
+                        &req.messages,
+                        &req.model,
+                    ))
                     .await?;
                 continue;
             }
@@ -1379,7 +1384,12 @@ impl Provider {
             };
             body.as_object_mut().unwrap().remove(*param);
             resp = self
-                .post_openai(&Self::openai_body(&body, &req.messages, &req.model))
+                .post_openai(&Self::openai_body(
+                    &body,
+                    &req.tools,
+                    &req.messages,
+                    &req.model,
+                ))
                 .await?;
         }
         if !resp.status().is_success() {
