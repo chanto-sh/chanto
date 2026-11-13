@@ -670,12 +670,7 @@ impl Provider {
             body["thinking"] = json!({"type": "disabled"});
         }
         let resp = self
-            .post_openai(&Self::openai_body(
-                &body,
-                &req.tools,
-                &req.messages,
-                &req.model,
-            ))
+            .post_openai(&Self::openai_body(&body, &[], &req.messages, &req.model))
             .await
             .ok()?;
         if !resp.status().is_success() {
@@ -1054,6 +1049,14 @@ impl Provider {
             "stream": true,
             "options": options,
         });
+        if !req.tools.is_empty() {
+            body["tools"] = Value::Array(
+                req.tools
+                    .iter()
+                    .map(|t| json!({"type":"function","function": t}))
+                    .collect(),
+            );
+        }
         if let Some(t) = req.think {
             // gpt-oss takes a level; other models reject one, and the retry below drops `think`.
             body["think"] = match effort_for(req, "high") {

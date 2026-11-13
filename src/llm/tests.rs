@@ -324,3 +324,49 @@ fn stream_idle_timeout_config() {
     c.stream_idle_timeout = Some(30.0);
     assert_eq!(c.stream_idle(), Some(Duration::from_secs(30)));
 }
+
+#[tokio::test]
+async fn an_openai_request_with_tools_sends_them() {
+    use axum::{Json, Router, routing::post};
+    use std::sync::{Arc, Mutex};
+    let bodies: Arc<Mutex<Vec<Value>>> = Default::default();
+    let b2 = bodies.clone();
+    let app = Router::new().route(
+        "/v1/chat/completions",
+        post(move |Json(v): Json<Value>| {
+            let bodies = b2.clone();
+            async move {
+                bodies.lock().unwrap().push(v);
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/v1", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    let spec = ToolSpec {
+        name: "Read".into(),
+        description: "Read a file.".into(),
+        parameters: json!({"type": "object"}),
+    };
+    let req = ChatRequest {
+        model: "m".into(),
+        messages: vec![Message::user("hi")],
+        tools: vec![spec.clone()],
+        think: None,
+        effort: None,
+        temperature: None,
+        max_tokens: None,
+        json: false,
+    };
+    let r = Provider::new(ProviderKind::Openai, &base, None, 4096)
+        .chat(&req, &mut |_| {})
+        .await
+        .unwrap();
+    assert_eq!(r.text, "ok");
+    let bodies = bodies.lock().unwrap();
+    assert_eq!(
+        bodies[0]["tools"],
+        json!([{"type": "function", "function": spec}])
+    );
+}
