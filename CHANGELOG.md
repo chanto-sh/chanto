@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.1.20 (November 12, 2026)
+
+- **Less CPU per turn.** Two changes each cut the CPU of a model request on the benchmarks' 40-turn session (by about 4% and 5%, measured separately), and by more in longer sessions: unchanged messages are recognised without re-hashing the whole conversation for secret masking, and tool definitions are written into OpenAI-style requests directly instead of being copied first.
+
 ## v0.1.19 (November 12, 2026)
 
 - **Faster start on Linux.** Chanto read and parsed the system's whole certificate store each time it set up an HTTP client, and twice before the first model request. It now does that at most once per run, and not at all for a model server on this machine over plain HTTP (Ollama, LM Studio, llama.cpp), where no certificate is used.
