@@ -346,7 +346,13 @@ impl Session {
                 m.images.clear();
             }
         }
-        let tmp = p.with_extension(format!("json.{}.tmp", uuid::Uuid::new_v4().simple()));
+        // The writer's process id is in the name, so a later save can tell a
+        // crashed save's leftover from one still being written.
+        let tmp = p.with_extension(format!(
+            "json.{}.{}.tmp",
+            std::process::id(),
+            uuid::Uuid::new_v4().simple()
+        ));
         // Transcripts hold source code, tool output and prompts: keep them
         // readable only by the user. Create at 0600 (not chmod-after-write) so
         // there is no window where the file is world-readable.
@@ -373,6 +379,8 @@ impl Session {
         // A full disk left a temp file behind on every save.
         if written.is_err() {
             let _ = std::fs::remove_file(&tmp);
+        } else {
+            remove_crashed_saves(&p);
         }
         Ok(written?)
     }
@@ -773,6 +781,63 @@ pub fn pull_request_urls(text: &str) -> Vec<String> {
     let mut out: Vec<String> = re.find_iter(text).map(|m| m.as_str().to_string()).collect();
     out.dedup();
     out
+}
+
+/// Remove temp files a crashed save of the session at `path` left behind: a
+/// process killed between writing its temp file and renaming it over the
+/// session leaves one there for good. A file whose writer is still running is
+/// kept (it may be mid-save); one without a process id in its name (written
+/// before they had one) only once it's a minute old. Done once per session
+/// per process, so a save costs a directory listing only the first time.
+fn remove_crashed_saves(path: &Path) {
+    static DONE: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+    {
+        let mut done = DONE.lock().unwrap_or_else(|e| e.into_inner());
+        if done.iter().any(|d| d == path) {
+            return;
+        }
+        done.push(path.to_path_buf());
+    }
+    remove_crashed_saves_now(path);
+}
+
+/// The cleanup itself, every time (tests call it after their first save).
+#[cfg(test)]
+pub(crate) fn remove_crashed_saves_for_test(path: &Path) {
+    remove_crashed_saves_now(path);
+}
+
+fn remove_crashed_saves_now(path: &Path) {
+    let (Some(dir), Some(name)) = (path.parent(), path.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
+    let prefix = format!("{name}.");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file = entry.file_name();
+        let Some(file) = file.to_str() else { continue };
+        let Some(middle) = file
+            .strip_prefix(&prefix)
+            .and_then(|f| f.strip_suffix(".tmp"))
+        else {
+            continue;
+        };
+        let crashed = match middle
+            .split_once('.')
+            .and_then(|(pid, _)| pid.parse::<u32>().ok())
+        {
+            Some(pid) => pid != std::process::id() && !crate::resources::pid_alive(pid),
+            None => entry.metadata().and_then(|m| m.modified()).is_ok_and(|t| {
+                t.elapsed()
+                    .is_ok_and(|age| age > std::time::Duration::from_secs(60))
+            }),
+        };
+        if crashed {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 #[cfg(test)]
