@@ -526,6 +526,62 @@ fn safe_commands() {
 }
 
 #[test]
+fn gh_polling_is_safe_but_writing_and_tokens_are_not() {
+    // Polling GitHub is routine, so `gh`'s read subcommands run without
+    // asking. The ones that write, run a command or print a credential must
+    // never match the list: a prefix match is all it takes.
+    for cmd in [
+        "gh pr view 206",
+        "gh pr checks 206 --watch",
+        "gh pr diff",
+        "gh pr list --limit 5",
+        "gh pr status",
+        "gh issue view 12",
+        "gh issue status",
+        "gh run view 123 --log-failed",
+        "gh run list --limit 3",
+        "gh workflow view ci.yml",
+        "gh workflow list",
+        "gh repo view --json name",
+        "gh repo list",
+        "gh release view v0.1.14",
+        "gh release list",
+        "gh search prs --repo chanto-sh/chanto upgrade",
+        "gh auth status",
+        "git status && gh pr checks 206",
+    ] {
+        assert!(is_safe_command(cmd), "{cmd:?}");
+    }
+    // Anything that writes, runs code or prints a credential stays with the
+    // classifier.
+    for cmd in [
+        "gh api repos/x/y",
+        "gh api -X DELETE repos/x/y",
+        "gh api repos/x/y -f name=z",
+        "gh auth token",
+        "gh auth login",
+        "gh alias set co 'pr checkout'",
+        "gh extension install cli/gh-x",
+        "gh pr checkout 12",
+        "gh pr merge 12",
+        "gh pr comment 12 -b hi",
+        "gh pr review 12 --approve",
+        "gh repo clone x/y",
+        "gh release download v1",
+        "gh release create v1",
+        "gh workflow run ci.yml",
+        "gh secret set X",
+        "gh variable set X",
+        "gh gist create file",
+        "gh pr checks 206 > out.txt",
+        "gh pr view $(rm -rf x)",
+        "gh pr checks 206 && rm -rf ~",
+    ] {
+        assert!(!is_safe_command(cmd), "{cmd:?}");
+    }
+}
+
+#[test]
 fn auto_safe() {
     assert!(auto_safe_command("mkdir -p src/x && touch src/x/a.rs"));
     assert!(auto_safe_command("python3 report.py"));

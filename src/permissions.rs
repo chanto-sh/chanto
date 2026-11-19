@@ -1003,15 +1003,34 @@ const SAFE_SUBCOMMANDS: &[(&str, &[&str])] = &[
     (
         "gh",
         &[
+            // Everything here is a GET with the token `gh` already holds.
+            // `gh api`, `gh alias`, `gh extension`, `gh auth token`,
+            // `gh pr checkout`, `gh repo clone`, `gh release download|create`,
+            // `gh pr merge|comment|review`, `gh workflow run` and
+            // `gh secret|variable` are deliberately absent: they write, run
+            // code or print a credential, so they go to the classifier.
             "pr view",
             "pr list",
             "pr diff",
             "pr checks",
+            "pr status",
             "issue view",
             "issue list",
+            "issue status",
             "run list",
             "run view",
+            "workflow list",
+            "workflow view",
             "repo view",
+            "repo list",
+            "release view",
+            "release list",
+            "search repos",
+            "search prs",
+            "search issues",
+            "search code",
+            "search commits",
+            "auth status",
         ],
     ),
 ];
