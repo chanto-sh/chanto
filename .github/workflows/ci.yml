@@ -86,6 +86,9 @@ jobs:
   # same GTK/WebKit packages as `desktop-linux` to build on Linux.
   clippy:
     runs-on: ubuntu-22.04
+    # Clippy takes a couple of minutes cold; this is a backstop for a step that
+    # hangs anyway, well under GitHub's 360-minute default.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -97,7 +100,9 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+      # A boot-time apt lock or a flaky mirror can hang this step for the whole
+      # job; wait a bounded time for the lock and retry the index fetches.
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
   # chanto-core is what the WebAssembly build shares with the CLI: it must keep
   # building for the browser target, with no OS-only dependency creeping in.
@@ -143,7 +148,7 @@ jobs:
           node-version: 22
       # bubblewrap for the Linux sandbox; ripgrep for Grep. Ubuntu 24.04
       # restricts the unprivileged user namespaces bubblewrap needs.
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       # The extension's server is also exercised by the Rust IDE tests.
       - run: npm ci && npm test
@@ -181,7 +186,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: 22
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
@@ -375,7 +380,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
       - run: cargo check --locked -p chanto-desktop
   # Computer use on Wayland, in a headless Sway session with grim and ydotool.
   wayland:
@@ -390,7 +395,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: sudo apt-get update && sudo apt-get install -y sway grim ydotool && (ydotool --help 2>&1 | head -5 || true)
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 sway grim ydotool && (ydotool --help 2>&1 | head -5 || true)
       - run: sudo modprobe uinput && sudo chmod 666 /dev/uinput
       - name: Start Sway (headless) and ydotoold
         run: |
