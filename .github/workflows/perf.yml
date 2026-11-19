@@ -229,7 +229,7 @@ jobs:
       - name: Exact costs
         if: ${{ env.MEASURE == 'true' && github.event_name != 'push' && runner.os == 'Linux' }}
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq valgrind >/dev/null
+          sudo apt-get update -qq -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o DPkg::Lock::Timeout=120 valgrind >/dev/null
           base=()
           if [ -f "$BENCH_TEMP/chanto-base" ]; then
             base=(--base "$BENCH_TEMP/chanto-base")
@@ -253,7 +253,7 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep clangd >/dev/null
+            sudo apt-get update -qq -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o DPkg::Lock::Timeout=120 ripgrep clangd >/dev/null
           else
             brew install ripgrep >/dev/null
           fi
