@@ -37,7 +37,8 @@
     "has no tolerance or test: it fails only over its ceiling, and a pull",
     "request that needs more raises the ceiling here, where reviewers see the",
     "growth. About 2.5% above the builds of October 31, 2026",
-    "(macOS 20.3, Linux 24.0, Windows 29.3 MB)."
+    "(macOS 20.3, Linux 24.0, Windows 29.3 MB); Linux is 3.3% above its",
+    "24.0 MB build after reedline 0.53 and rfd 0.18."
   ],
   "alpha": 0.01,
   "warmup": 2,
@@ -180,7 +181,7 @@
       "startup_rss_mb": 21,
       "turn_cpu_ms": 3.3,
       "turn_rss_mb": 22.5,
-      "binary_mb": 24.5
+      "binary_mb": 24.8
     },
     "darwin": {
       "startup_cpu_ms": 45,
