@@ -45,4 +45,9 @@ ignore = [
     # but complete — the maintainers say no updates are needed. It is not a
     # vulnerability, so it should not fail the build. Remove if syntect drops it.
     "RUSTSEC-2025-0141",
+    # chrono 0.4.45 is unmaintained (RUSTSEC-2026-0543), not vulnerable: the
+    # advisory names no affected functions, and Chanto only uses it for
+    # timestamps and date parsing. reedline and the proto wire types depend on
+    # it too, so it can't be dropped here.
+    "RUSTSEC-2026-0543",
 ]
