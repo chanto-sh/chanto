@@ -74,7 +74,7 @@ ignore = "0.4.33"
 libc = "0.2.190"
 pulldown-cmark = "0.13.6"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color", "layout-cache"] }
-reedline = "0.52.1"
+reedline = "0.53.0"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls", "gzip", "http2", "charset", "system-proxy", "query", "form"] }
 webpki-root-certs = "1"

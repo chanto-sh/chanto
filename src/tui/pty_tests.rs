@@ -383,6 +383,41 @@ async fn the_plain_prompt_answers_runs_commands_and_exits() {
     );
 }
 
+/// Ctrl+C abandons what was typed at the prompt and keeps the session going,
+/// instead of ending it (reedline 0.53 hands the buffer back in `Signal::CtrlC`).
+#[tokio::test]
+async fn ctrl_c_at_the_plain_prompt_keeps_the_session() {
+    if std::env::var_os(CHILD_ENV).is_some() {
+        return;
+    }
+    let (model, seen) = mock_server(vec![json!({"content": ANSWER})]).await;
+    let dir = tmpdir("pty-plain-ctrl-c");
+    let mut pty = Pty::start("tui::pty_tests::plain_child", &model, &dir);
+    pty.wait_for("mock").await;
+    pty.keys("half a prompt");
+    pty.keys("\x03");
+    // Wait for the fresh prompt: bytes typed while the cancelled line is being
+    // torn down would go with it.
+    for _ in 0..3000 {
+        if plain(&pty.bytes())
+            .matches("[bypass permissions] >")
+            .count()
+            >= 2
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    pty.keys("say hello\r");
+    pty.wait_for(ANSWER).await;
+    let body = seen.lock().unwrap()[0]["messages"].to_string();
+    assert!(body.contains("say hello"), "{body}");
+    assert!(!body.contains("half a prompt"), "{body}");
+    pty.keys("/exit\r");
+    let (code, bytes) = pty.finish().await;
+    assert_eq!(code, "0", "{}", plain(&bytes));
+}
+
 /// The panels a session opens. Redraws only print the cells that changed, so
 /// each check looks for one word.
 #[tokio::test]

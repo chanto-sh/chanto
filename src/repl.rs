@@ -126,7 +126,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                         env.set_mode(env.mode().next());
                         continue;
                     }
-                    Signal::CtrlC => continue,
+                    Signal::CtrlC(_) => continue,
                     Signal::CtrlD => break,
                     _ => continue,
                 }
