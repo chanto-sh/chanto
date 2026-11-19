@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.1.21 (November 19, 2026)
+
+- **More read-only `gh` commands run without asking.** `gh pr status`, `gh issue status`, `gh workflow view|list`, `gh repo list`, `gh release view|list`, `gh search …` and `gh auth status` join the `gh pr`/`issue`/`run` reads Chanto already ran without a prompt. `gh api`, `gh auth token`, `gh alias`, `gh extension`, `gh pr checkout|merge|comment|review`, `gh repo clone`, `gh release download|create`, `gh workflow run`, `gh secret` and `gh variable` still go to the classifier: they write, run a command or print a credential.
+- **No leftover files after a crash mid-save.** A Chanto process killed while saving a session left a temporary file next to it for good. The session's next save now removes temporary files whose writer is no longer running.
+
 ## v0.1.20 (November 12, 2026)
 
 - **Less CPU per turn.** Two changes each cut the CPU of a model request on the benchmarks' 40-turn session (by about 4% and 5%, measured separately), and by more in longer sessions: unchanged messages are recognised without re-hashing the whole conversation for secret masking, and tool definitions are written into OpenAI-style requests directly instead of being copied first.
