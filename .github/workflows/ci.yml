@@ -183,7 +183,7 @@ jobs:
           node-version: 22
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-llvm-cov@0.9.1
       # chanto-core's own tests too: code that moved there is tested there.
@@ -243,7 +243,7 @@ jobs:
           key: coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
-      - uses: taiki-e/install-action@682ce6c3c696a4cd5168a05f98e51aa02b877941 # v2.89.1
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
         with:
           tool: cargo-llvm-cov@0.6.21
       # chanto's tests only: chanto-core's own expect the `/` paths of their
@@ -439,7 +439,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           distribution: temurin
           java-version: 21
