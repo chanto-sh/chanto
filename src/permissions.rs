@@ -141,7 +141,7 @@ pub fn secret_file_target(kind: ToolKind, tool: &str, args: &Value, cwd: &Path) 
             // Glob and Ls list names rather than read contents, so only a
             // credential directory itself counts for them, not the home folder.
             let listing = tool == "Glob" || tool == "Ls";
-            ["file_path", "notebook_path", "path"]
+            let named = ["file_path", "notebook_path", "path"]
                 .iter()
                 .filter_map(|k| args[*k].as_str())
                 .find(|p| {
@@ -152,7 +152,18 @@ pub fn secret_file_target(kind: ToolKind, tool: &str, args: &Value, cwd: &Path) 
                         crate::secrets::is_secret_target(&p)
                     }
                 })
-                .map(str::to_string)
+                .map(str::to_string);
+            if named.is_some() {
+                return named;
+            }
+            // A search's glob can name a credential file without naming its
+            // directory: `Grep { path: ".", glob: "**/.pgpass" }`.
+            if let Some(g) = args["glob"].as_str()
+                && let Some(hit) = crate::secrets::glob_matches_secret(g)
+            {
+                return Some(hit);
+            }
+            None
         }
         _ => None,
     }

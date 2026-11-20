@@ -1,0 +1,1 @@
+- **Security:** **A search could read a credential file without asking.** `Grep`, `Glob` and semantic search now skip env files, private keys and cloud credential stores, and a search whose glob names one asks first; `Read` still asks before reading them. The Docker, Maven, Gradle, Vault and Terraform credential stores outside the project are covered too. Upgrade to get the fix.

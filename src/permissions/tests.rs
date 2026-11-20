@@ -882,3 +882,29 @@ fn reads_in_a_repository_with_a_hooks_path_dont_ask() {
     assert!(ask("git log -1"));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn a_search_glob_cannot_reach_a_credential_file_without_asking() {
+    let cwd = std::env::temp_dir();
+    for glob in ["**/.pgpass", "**/id_rsa", "**/*.pem", "**/.env"] {
+        let args = serde_json::json!({"pattern": "x", "path": ".", "glob": glob});
+        assert_eq!(
+            static_decision(Mode::Default, ToolKind::ReadOnly, "Grep", &args, &cwd),
+            Some(Decision::Ask),
+            "{glob}"
+        );
+    }
+    // A credential directory asks even when the glob is ordinary.
+    let args =
+        serde_json::json!({"pattern": "auth", "path": "/home/u/.docker", "glob": "config.json"});
+    assert_eq!(
+        static_decision(Mode::Default, ToolKind::ReadOnly, "Grep", &args, &cwd),
+        Some(Decision::Ask)
+    );
+    // An ordinary search is still allowed.
+    let args = serde_json::json!({"pattern": "fn main", "path": ".", "glob": "*.rs"});
+    assert_eq!(
+        static_decision(Mode::Default, ToolKind::ReadOnly, "Grep", &args, &cwd),
+        Some(Decision::Allow)
+    );
+}

@@ -667,3 +667,64 @@ fn env_files_and_secret_paths() {
     assert!(!is_secret_path(&home.join("config.toml")));
     assert!(!is_secret_path(&home.join("runs/abc/run.json")));
 }
+
+#[test]
+fn a_search_glob_naming_a_credential_file_is_recognised() {
+    for g in [
+        "**/.pgpass",
+        "**/.env",
+        "**/.env.local",
+        "**/id_rsa",
+        "**/*.pem",
+        "**/credentials.json",
+        "**/service-account-prod.json",
+        "**/.docker/config.json",
+        "**/.vault-token",
+    ] {
+        assert!(glob_matches_secret(g).is_some(), "{g}");
+    }
+    for g in ["*.rs", "src/**", "**/Cargo.toml", "docs/**/*.md", "**/*.rs"] {
+        assert!(glob_matches_secret(g).is_none(), "{g}");
+    }
+}
+
+#[test]
+fn credential_directories_and_files_outside_the_project_are_covered() {
+    let home = dirs::home_dir().unwrap();
+    for p in [
+        ".docker/config.json",
+        ".m2/settings.xml",
+        ".gradle/gradle.properties",
+        ".vault-token",
+        ".terraform.d/credentials.tfrc.json",
+    ] {
+        assert!(is_secret_target(&home.join(p)), "{p}");
+    }
+}
+
+#[test]
+fn the_search_excludes_cover_every_credential_name() {
+    for name in [
+        ".env",
+        ".env.local",
+        "key.pem",
+        "id_rsa",
+        "id_ed25519",
+        ".netrc",
+        ".pgpass",
+        ".git-credentials",
+        "credentials",
+        "credentials.json",
+        "service-account-a.json",
+        "secrets.yaml",
+    ] {
+        let path = std::path::PathBuf::from(format!("/tmp/x/{name}"));
+        let matched = search_excludes().iter().any(|g| {
+            globset::GlobBuilder::new(g)
+                .literal_separator(true)
+                .build()
+                .is_ok_and(|g| g.compile_matcher().is_match(&path))
+        });
+        assert!(matched, "{name} is not excluded from a search");
+    }
+}

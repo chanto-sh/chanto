@@ -195,3 +195,45 @@ async fn searching_memory_matches_searching_the_disk() {
     }
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// A search never returns a credential file: `Read` is where one is read,
+/// and that asks for it.
+#[tokio::test]
+async fn a_search_never_returns_a_credential_file() {
+    if which_rg().is_none() {
+        return;
+    }
+    let d = std::env::temp_dir().join(format!("chanto-secret-search-{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(d.join("src")).unwrap();
+    std::fs::write(d.join("src/notes.txt"), "needle\n").unwrap();
+    std::fs::write(d.join(".env"), "TOKEN=needle\n").unwrap();
+    std::fs::write(d.join("src/id_rsa"), "needle\n").unwrap();
+    std::fs::write(d.join("key.pem"), "needle\n").unwrap();
+    std::fs::write(d.join("src/.pgpass"), "host:5432:db:u:needle\n").unwrap();
+
+    let files = json!({"pattern": "needle", "output_mode": "files_with_matches"});
+    let (out, total, _) = run_rg(&files, "needle", &d, "files_with_matches", &d, 10)
+        .await
+        .unwrap();
+    assert_eq!(total, 1, "{out}");
+    assert!(out.contains("notes.txt"), "{out}");
+    for hidden in [".env", "id_rsa", "key.pem", ".pgpass"] {
+        assert!(!out.contains(hidden), "{hidden} leaked: {out}");
+    }
+
+    let content = json!({"pattern": "needle", "output_mode": "content"});
+    let (text, _, _) = run_rg(&content, "needle", &d, "content", &d, 10)
+        .await
+        .unwrap();
+    assert!(!text.contains("TOKEN"), "{text}");
+    assert!(text.contains("notes.txt"), "{text}");
+
+    // The in-process fallback (used for the browser build's memory filesystem)
+    // applies the same filter.
+    let (builtin, _) =
+        builtin_grep(&grep_options(&content, "content", 10), "needle", &d, &d).unwrap();
+    assert!(!builtin.contains("TOKEN"), "{builtin}");
+    assert!(builtin.contains("notes.txt"), "{builtin}");
+    let _ = std::fs::remove_dir_all(&d);
+}

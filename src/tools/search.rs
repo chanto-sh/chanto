@@ -322,6 +322,11 @@ async fn run_rg(
     if let Some(t) = args["type"].as_str() {
         cmd.arg(format!("--type={t}"));
     }
+    // A credential file is read through Read, which asks for it; a search
+    // never hands one to the model.
+    for g in crate::secrets::search_excludes() {
+        cmd.arg(format!("--glob=!{g}"));
+    }
     cmd.arg("-e").arg(pattern);
     let shown = if path == cwd {
         PathBuf::from(".")
@@ -459,6 +464,11 @@ fn builtin_grep(
                 return ignore::WalkState::Continue;
             }
             let p = e.path();
+            // Credential files stay out of results here too, as run_rg keeps
+            // them out on disk.
+            if crate::secrets::is_secret_path(p) {
+                return ignore::WalkState::Continue;
+            }
             if !chanto_core::search::grep_filters(p, glob.as_ref(), exts.as_deref()) {
                 return ignore::WalkState::Continue;
             }

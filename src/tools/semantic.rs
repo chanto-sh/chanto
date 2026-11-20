@@ -240,6 +240,11 @@ fn collect(root: &Path) -> Vec<(String, FileChunks)> {
             if !e.file_type().map(|t| t.is_file()).unwrap_or(false) {
                 return ignore::WalkState::Continue;
             }
+            // A credential file is read through Read, which asks for it; the
+            // index and the embeddings endpoint never see one.
+            if crate::secrets::is_secret_target(e.path()) {
+                return ignore::WalkState::Continue;
+            }
             if out.lock().unwrap().len() >= MAX_FILES {
                 return ignore::WalkState::Quit;
             }
