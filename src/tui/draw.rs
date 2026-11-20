@@ -842,7 +842,7 @@ impl App {
                     crate::util::short_num(toks as u64)
                 ));
             }
-            detail.push_str(" · esc to interrupt)");
+            detail.push_str(" · esc to interrupt · ctrl+enter sends now)");
             lines.push(Line::from({
                 let mut spans = vec![Span::styled(
                     format!(" {frame} "),
@@ -929,7 +929,13 @@ impl App {
                 Some((kind, id, false)) => format!(
                     "{kind} ({id}) runs in the foreground and can't take messages · esc returns to main"
                 ),
-                None if self.busy => "Type a message…".to_string(),
+                None if self.busy => {
+                    // While a turn runs these are the ways to get a message in;
+                    // the status bar repeats send-now once text replaces this
+                    // placeholder.
+                    "Type a message… · ctrl+enter sends now · enter waits for its next step"
+                        .to_string()
+                }
                 None if self
                     .blocks
                     .iter()
