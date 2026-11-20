@@ -1,0 +1,47 @@
+# Dogfoods the action in action/: Chanto reviews each pull request for major
+# security issues and posts what it finds as a pull request review. Its policy
+# is .chanto/review.toml on the base branch. Model calls go through the Chanto
+# gateway and are billed to the account whose token is CHANTO_CLOUD_TOKEN.
+name: security review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+# A newer push replaces the review still running for the last one.
+concurrency:
+  group: security-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  # Not named `review`: that name is already a required check.
+  chanto:
+    # Fork and Dependabot pull requests get no secrets, and their code and
+    # text are untrusted; the action would skip them anyway.
+    if: github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      CHANTO_CLOUD_TOKEN: ${{ secrets.CHANTO_CLOUD_TOKEN }}
+    steps:
+      - name: Skip without a token
+        if: env.CHANTO_CLOUD_TOKEN == ''
+        run: echo "::notice::Set the CHANTO_CLOUD_TOKEN secret to turn on the security review."
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: env.CHANTO_CLOUD_TOKEN != ''
+        with:
+          persist-credentials: false
+          # The merge commit and its parents: the review reads its policy from
+          # the base commit.
+          fetch-depth: 2
+      - uses: ./action
+        if: env.CHANTO_CLOUD_TOKEN != ''
+        with:
+          model: chanto/kimi-k3
+          timeout_minutes: "20"
+          prompt: Review this pull request for major security issues only, following the instructions below.

@@ -1,0 +1,29 @@
+# Policy for the pull request security review (.github/workflows/security-review.yml).
+# The action reads this from the pull request's base commit, so a pull request
+# can't loosen its own review.
+
+# Only findings the model is at least 90% sure of are posted.
+strictness = "high"
+# Suggested one-line fixes aren't test-run: the full suite takes longer than
+# the review, and CI runs it anyway.
+checks = []
+ignore_paths = ["CHANGELOG.md", "docs/**", "site/**", "**/snapshots/**", "classifier/sources/**"]
+instructions = """
+Review only for major security issues. Ignore style, naming, performance and
+ordinary bugs. Report a finding only when you can name a concrete attack path:
+who controls the input (a prompt-injected model, a hostile repository, a
+malicious web page or MCP server, another local user or website) and what they
+gain. Areas that matter in this codebase:
+
+- running commands: shell parsing, permission decisions, auto mode, the classifier
+- the sandbox (Seatbelt, Landlock, bubblewrap, Windows) and writes outside the project
+- file tools and paths: symlinks, `..`, hardlinks, races between check and use
+- secrets: API keys, tokens, keychain, redaction, anything logged or sent
+- local servers (remote, serve, ACP): auth, CORS, origin checks
+- network fetches: loopback, metadata and private addresses
+- self-update and install scripts: signature and checksum checks
+- hooks, plugins, MCP servers and project config that run code
+- CI workflows: untrusted input in `run:`, token permissions, unpinned actions
+
+If nothing meets that bar, return an empty findings list.
+"""
