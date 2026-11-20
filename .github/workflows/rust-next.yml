@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           toolchain: stable
           components: clippy
@@ -47,6 +47,7 @@ jobs:
     needs: stable
     if: ${{ failure() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       issues: write
     steps:

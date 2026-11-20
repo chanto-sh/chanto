@@ -51,12 +51,13 @@ jobs:
   changes:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -119,16 +120,16 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.MEASURE == 'true'
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           toolchain: "1.100.0"
         if: env.MEASURE == 'true'
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: env.MEASURE == 'true'
         with:
           key: perf
@@ -243,7 +244,13 @@ jobs:
           fi
       - name: Responsiveness
         if: ${{ env.MEASURE == 'true' && github.event_name != 'push' }}
-        run: $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"
+        run: |
+          # Its ceilings are per runner; a failed comparison is measured again
+          # before it fails the job, as Measure and Exact costs already do.
+          if ! $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"; then
+            echo "::notice title=Responsiveness::Measuring again: a busy runner can cross a CPU ceiling."
+            $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"
+          fi
       # A very long session and a very large tree (tests/perf/stress.py),
       # against the fake model. ripgrep and clangd make its Grep and
       # language-server checks real; it needs POSIX tools, so not Windows.
@@ -272,7 +279,7 @@ jobs:
           if [ -f "$BENCH_TEMP/stress.md" ]; then cat "$BENCH_TEMP/stress.md" >> "$GITHUB_STEP_SUMMARY"; fi
       - name: Upload the report
         if: ${{ env.MEASURE == 'true' && (!cancelled() && github.event_name != 'push') }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chanto-perf-${{ matrix.os }}
           path: ${{ runner.temp }}/perf.json

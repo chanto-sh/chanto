@@ -26,8 +26,9 @@ jobs:
   hook-tests:
     name: commit-msg hook tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: sh .githooks/test-commit-msg.sh
@@ -36,8 +37,9 @@ jobs:
     name: PR title
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The title goes through the environment, never into the script text,
@@ -57,6 +59,7 @@ jobs:
     name: PR description
     if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # The body goes through the environment, never into the script text.
       # Each section from .github/pull_request_template.md must have text of
@@ -95,8 +98,9 @@ jobs:
     name: changelog entry
     if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -113,8 +117,9 @@ jobs:
     name: tests changed
     if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -131,8 +136,9 @@ jobs:
     name: DCO sign-off
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -158,8 +164,9 @@ jobs:
     name: commits on main
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0

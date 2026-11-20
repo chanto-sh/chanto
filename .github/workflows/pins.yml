@@ -1,0 +1,73 @@
+name: action pins
+# Floating major tags (v2, v7) and branches (stable) move with every release, so
+# a pin labelled by one goes stale upstream ships. zizmor's
+# ref-version-mismatch then fails scorecard guard on unrelated pull requests
+# until the pin is refreshed. Every pin names an exact release, CI checks that
+# format on each pull request, and this audits the releases weekly.
+on:
+  schedule:
+    - cron: '23 6 * * 1'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the format of every pin
+        run: python3 scripts/action-pins.py --check
+      # Online: asks each action's repository for its latest release in the
+      # major version the pin tracks. A breaking major bump stays with the
+      # dependency bot.
+      - name: Audit against each action's latest release
+        id: audit
+        run: |
+          if python3 scripts/action-pins.py --check --online; then
+            echo "stale=false" >> "$GITHUB_OUTPUT"
+            echo "Action pins are current." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "stale=true" >> "$GITHUB_OUTPUT"
+          python3 scripts/action-pins.py --update >/dev/null
+          git diff > "$RUNNER_TEMP/pins.diff"
+          {
+            echo "The actions below are no longer on their latest release. A"
+            echo "floating tag moves with every release, which is what turns"
+            echo "scorecard guard red on unrelated pull requests."
+            echo
+            echo '```diff'
+            head -200 "$RUNNER_TEMP/pins.diff"
+            echo '```'
+            echo
+            echo "Run \`python3 scripts/action-pins.py --update\` and open a"
+            echo "pull request, or let the dependency bot raise the bump."
+          } > "$RUNNER_TEMP/pins.md"
+          cat "$RUNNER_TEMP/pins.md" >> "$GITHUB_STEP_SUMMARY"
+      # One issue, commented on each week it stays stale, so the reminder
+      # lands without a new issue per run.
+      - name: Open or update the tracking issue
+        if: steps.audit.outputs.stale == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Action pins are out of date"
+          n=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open \
+            --search "\"$title\" in:title" --json number \
+            --jq '.[0].number // empty')
+          if [ -n "$n" ]; then
+            gh issue comment "$n" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/pins.md"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body-file "$RUNNER_TEMP/pins.md"
+          fi
+      - name: Fail while pins are stale
+        if: steps.audit.outputs.stale == 'true'
+        run: |
+          echo "::error::Action pins are behind their releases; see the tracking issue."
+          exit 1

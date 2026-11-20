@@ -17,12 +17,13 @@ jobs:
   changes:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -51,13 +52,13 @@ jobs:
       actions: read
     steps:
       - name: Build fuzzers
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1 zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           language: rust
           github-token: ${{ secrets.GITHUB_TOKEN }}
           sanitizer: address
       - name: Run fuzzers
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1 zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           language: rust
           github-token: ${{ secrets.GITHUB_TOKEN }}
