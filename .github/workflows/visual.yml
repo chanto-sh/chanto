@@ -14,13 +14,13 @@ jobs:
     runs-on: ubuntu-22.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           toolchain: "1.100.0"
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           # Main only, as in ci.yml: pull request copies evict the shared budget.
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -34,7 +34,7 @@ jobs:
           TZ: UTC
       - name: Install preview renderer
         if: ${{ !cancelled() }}
-        uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf
+        uses: charmbracelet/vhs-action@f6d7db07a432fcd3b06772628d36a57f96d95dcf # v2.1.1
         with:
           version: v0.12.1
       - name: Render preview gallery
@@ -42,7 +42,7 @@ jobs:
         run: python3 tests/visual/previews.py
       - name: Upload UI previews and snapshot diffs
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chanto-ui-previews
           path: |

@@ -23,13 +23,13 @@ jobs:
       actions: read
     steps:
       - name: Build fuzzers
-        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: google/clusterfuzzlite/actions/build_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1 zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           language: rust
           github-token: ${{ secrets.GITHUB_TOKEN }}
           sanitizer: address
       - name: Run fuzzers
-        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1
+        uses: google/clusterfuzzlite/actions/run_fuzzers@884713a6c30a92e5e8544c39945cd7cb630abcd1 # v1 zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           language: rust
           github-token: ${{ secrets.GITHUB_TOKEN }}

@@ -24,6 +24,7 @@ jobs:
     name: needs a release tag
     if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions: {}
     steps:
       - run: echo "::notice title=App check::The app's secrets are in the publish environment, which only v* tags can use; run this with --ref vX.Y.Z."
@@ -55,7 +56,7 @@ jobs:
             repos="$repos,${SITE_REPOSITORY#*/}"
           fi
           echo "repos=$repos" >> "$GITHUB_OUTPUT"
-      - uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
         id: app-token
         with:
           # The app ID works here too: GitHub takes either as the JWT issuer.
