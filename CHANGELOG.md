@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.1.22 (November 19, 2026)
+
+- **The busy prompt names how to interrupt.** While a turn runs, the prompt and status line now show `ctrl+enter` (send now: cut the turn short and run the message next). `enter` still hands the message over at the model's next step, and `ctrl+x enter` queues it for after the turn.
+- **Security:** **A search could read a credential file without asking.** `Grep`, `Glob` and semantic search now skip env files, private keys and cloud credential stores, and a search whose glob names one asks first; `Read` still asks before reading them. The Docker, Maven, Gradle, Vault and Terraform credential stores outside the project are covered too. Upgrade to get the fix.
+
 ## v0.1.21 (November 19, 2026)
 
 - **More read-only `gh` commands run without asking.** `gh pr status`, `gh issue status`, `gh workflow view|list`, `gh repo list`, `gh release view|list`, `gh search …` and `gh auth status` join the `gh pr`/`issue`/`run` reads Chanto already ran without a prompt. `gh api`, `gh auth token`, `gh alias`, `gh extension`, `gh pr checkout|merge|comment|review`, `gh repo clone`, `gh release download|create`, `gh workflow run`, `gh secret` and `gh variable` still go to the classifier: they write, run a command or print a credential.
