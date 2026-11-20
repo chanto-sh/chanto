@@ -1,1 +1,0 @@
-- **The busy prompt names how to interrupt.** While a turn runs, the prompt and status line now show `ctrl+enter` (send now: cut the turn short and run the message next). `enter` still hands the message over at the model's next step, and `ctrl+x enter` queues it for after the turn.
