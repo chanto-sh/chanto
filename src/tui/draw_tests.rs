@@ -47,7 +47,9 @@ async fn the_busy_line_names_what_runs_and_what_waits() {
     let s = t.screen(100, 30);
     assert!(s.contains("Compacting…"), "{s}");
     assert!(
-        s.contains("↓ 2.0k tokens") && s.contains("esc to interrupt"),
+        s.contains("↓ 2.0k tokens")
+            && s.contains("esc to interrupt")
+            && s.contains("ctrl+enter sends now"),
         "{s}"
     );
     assert!(
