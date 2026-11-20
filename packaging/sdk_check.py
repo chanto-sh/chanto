@@ -109,7 +109,8 @@ def check_typescript(binary, published, home):
         (d / "package.json").write_text('{"private": true, "type": "module"}\n')
         if published:
             retrying("npm", "install", "--ignore-scripts", "--prefer-online", f"@chanto/sdk@{published}", cwd=d)
-            run("npm", "audit", "signatures", cwd=d)
+            # Attestations reach the registry a little after the package does.
+            retrying("npm", "audit", "signatures", cwd=d)
         else:
             run("npm", "pack", "--pack-destination", d, cwd=sdk / "typescript/package")
             tarball = next(d.glob("*.tgz"))
