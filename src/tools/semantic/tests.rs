@@ -226,3 +226,23 @@ async fn sync_embeds_every_chunk_it_queues() {
     assert_eq!(index.entries.len(), 2);
     assert!(index.entries.iter().all(|e| !e.vec.is_empty()));
 }
+
+/// Credential files are not indexed, so they never reach the embeddings
+/// endpoint; `Read` is where one is read, and that asks for it.
+#[test]
+fn collect_skips_credential_files() {
+    let d = std::env::temp_dir().join(format!("chanto-semantic-secrets-{}", uuid::Uuid::new_v4()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("notes.txt"), "public text\n").unwrap();
+    std::fs::write(d.join(".env"), "TOKEN=secret\n").unwrap();
+    std::fs::write(d.join("id_rsa"), "fake key material\n").unwrap();
+    std::fs::write(d.join("key.pem"), "fake key material\n").unwrap();
+    let files = collect(&d);
+    let names: Vec<&str> = files.iter().map(|(p, _)| p.as_str()).collect();
+    assert!(names.iter().any(|p| p.ends_with("notes.txt")), "{names:?}");
+    assert!(!names.iter().any(|p| p.ends_with(".env")), "{names:?}");
+    assert!(!names.iter().any(|p| p.ends_with("id_rsa")), "{names:?}");
+    assert!(!names.iter().any(|p| p.ends_with("key.pem")), "{names:?}");
+    let _ = std::fs::remove_dir_all(&d);
+}

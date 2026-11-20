@@ -1135,7 +1135,14 @@ pub fn is_secret_path(p: &Path) -> bool {
         "/.aws/",
         "/.gnupg/",
         "/.config/gh/",
-        "/.docker/config.json",
+        // The whole directory: a search that names it must ask for its
+        // config.json, which holds registry credentials.
+        "/.docker/",
+        "/.m2/",
+        "/.gradle/",
+        "/.vault-token",
+        "/.terraform.d/",
+        "/.config/heroku/",
         "/.kube/",
         "/Library/Keychains/",
         "/.azure/",
@@ -1217,6 +1224,122 @@ fn known_secret_files() -> Vec<PathBuf> {
     .map(|f| h.join(f))
     .chain(std::iter::once(crate::config::home_dir().join("auth.json")))
     .collect()
+}
+
+/// Whether a glob a read tool was given could match a credential file. Grep
+/// takes a `glob`, and matching it against the known stores (plus the
+/// secret-shaped names) lets the permission check ask, as it already does for
+/// a named path.
+pub fn glob_matches_secret(pattern: &str) -> Option<String> {
+    let glob = globset::GlobBuilder::new(pattern)
+        .case_insensitive(true)
+        .literal_separator(true)
+        .build()
+        .ok()?;
+    let matcher = glob.compile_matcher();
+    let mut candidates = known_secret_files();
+    // Names that need not exist under the home directory (a project's own key
+    // or env file); the `x/` prefix gives a separator for `**/…` patterns.
+    for name in [
+        "key.pem",
+        "id_rsa",
+        "id_ed25519",
+        ".env",
+        ".env.local",
+        ".pgpass",
+        ".netrc",
+        ".git-credentials",
+        ".npmrc",
+        ".pypirc",
+        ".htpasswd",
+        "credentials",
+        "credentials.json",
+        "service-account-a.json",
+        "secrets.json",
+        ".docker/config.json",
+        ".kube/config",
+        ".vault-token",
+    ] {
+        candidates.push(PathBuf::from(format!("x/{name}")));
+    }
+    if let Some(hit) = candidates.into_iter().find(|p| matcher.is_match(p)) {
+        return Some(hit.display().to_string());
+    }
+    // A pattern whose own name is credential-shaped (`**/service-account-*.json`,
+    // `**/*.pem`), whatever directory prefix it carries.
+    let base = pattern.rsplit('/').next().unwrap_or(pattern).to_lowercase();
+    let base = base.trim_start_matches(['*', '?']);
+    let secret_name = base.starts_with(".env")
+        || matches!(
+            base,
+            ".pgpass"
+                | ".netrc"
+                | ".git-credentials"
+                | ".npmrc"
+                | ".pypirc"
+                | ".htpasswd"
+                | ".vault-token"
+                | "credentials"
+                | "credentials.json"
+                | "secret.json"
+        )
+        || base.starts_with("id_rsa")
+        || base.starts_with("id_ed25519")
+        || base.starts_with("id_ecdsa")
+        || base.starts_with("id_dsa")
+        || base.starts_with("secrets.")
+        || (base.contains("service-account") && base.contains(".json"))
+        || [
+            ".pem",
+            ".key",
+            ".p12",
+            ".pfx",
+            ".jks",
+            ".keystore",
+            ".kdbx",
+            ".ppk",
+        ]
+        .iter()
+        .any(|e| base.ends_with(e));
+    secret_name.then(|| pattern.to_string())
+}
+
+/// Globs kept out of a search's results. A credential file is read through
+/// `Read`, which asks for it; a search never hands one to the model.
+pub fn search_excludes() -> &'static [&'static str] {
+    &[
+        "**/.env",
+        "**/.env.*",
+        "**/*.pem",
+        "**/*.key",
+        "**/*.p12",
+        "**/*.pfx",
+        "**/*.jks",
+        "**/*.keystore",
+        "**/*.kdbx",
+        "**/*.ppk",
+        "**/id_rsa*",
+        "**/id_ed25519*",
+        "**/id_ecdsa*",
+        "**/id_dsa*",
+        "**/.netrc",
+        "**/.npmrc",
+        "**/.pypirc",
+        "**/.git-credentials",
+        "**/.pgpass",
+        "**/.htpasswd",
+        "**/.vault-token",
+        "**/credentials",
+        "**/credentials.json",
+        "**/service-account*.json",
+        "**/secrets.json",
+        "**/secrets.yaml",
+        "**/secrets.yml",
+        "**/secrets.toml",
+        "**/secret.json",
+        "**/.docker/config.json",
+        "**/.kube/config",
+    ]
 }
 
 /// Mentions of secret files in a shell command (`cat .env`, `grep KEY ~/.aws/credentials`).
