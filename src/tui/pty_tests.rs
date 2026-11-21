@@ -159,8 +159,14 @@ impl Pty {
     }
 
     fn keys(&mut self, keys: &str) {
-        self.input.write_all(keys.as_bytes()).unwrap();
-        self.input.flush().unwrap();
+        // The pty closes if the child exits; say that rather than unwrapping an
+        // EIO from a test that raced the child's startup.
+        self.input
+            .write_all(keys.as_bytes())
+            .expect("write to the child's pty (did the child exit?)");
+        self.input
+            .flush()
+            .expect("flush the child's pty (did the child exit?)");
     }
 
     /// Send a signal to the TUI process, which records its pid at startup.
@@ -393,21 +399,27 @@ async fn ctrl_c_at_the_plain_prompt_keeps_the_session() {
     let (model, seen) = mock_server(vec![json!({"content": ANSWER})]).await;
     let dir = tmpdir("pty-plain-ctrl-c");
     let mut pty = Pty::start("tui::pty_tests::plain_child", &model, &dir);
-    pty.wait_for("mock").await;
+    // The banner shows before reedline starts reading; wait for the prompt so
+    // Ctrl+C lands after the signal handler is installed, or the default action
+    // ends the child (which is how this raced on Linux).
+    pty.wait_for("[bypass permissions] >").await;
     pty.keys("half a prompt");
     pty.keys("\x03");
     // Wait for the fresh prompt: bytes typed while the cancelled line is being
     // torn down would go with it.
+    let mut second = false;
     for _ in 0..3000 {
         if plain(&pty.bytes())
             .matches("[bypass permissions] >")
             .count()
             >= 2
         {
+            second = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
+    assert!(second, "no fresh prompt after Ctrl+C:\n{}", pty.text());
     pty.keys("say hello\r");
     pty.wait_for(ANSWER).await;
     let body = seen.lock().unwrap()[0]["messages"].to_string();
