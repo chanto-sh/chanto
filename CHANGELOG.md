@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## v0.1.23 (November 21, 2026)
+
+- **The docs quote the current overhead numbers.** The homepage's speed line now matches the published benchmark — 1.8–2.8 ms of CPU per turn, 11–14 ms to start and 17–23 MB of peak memory on GitHub's macOS and Linux runners — instead of the 0.1.15 figures. The release's SDK publish check also retries npm's attestation lookup, so a release no longer needs a manual re-run.
+
 ## v0.1.22 (November 19, 2026)
 
 - **The busy prompt names how to interrupt.** While a turn runs, the prompt and status line now show `ctrl+enter` (send now: cut the turn short and run the message next). `enter` still hands the message over at the model's next step, and `ctrl+x enter` queues it for after the turn.
