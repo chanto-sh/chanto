@@ -64,7 +64,7 @@ Every tool call the model makes goes through one decision point before it runs.
   `--file`) and `git remote add`. Chanto follows `cd`, `pushd`, wrappers such
   as `env -C`, `sudo` and `timeout`, `sh -c` scripts, command substitutions
   and brace expansion. A target the shell computes when it runs (`$var`,
-  `$(…)`, `$'…'`) can't be checked, so it asks too. An allow rule that covers
+  `$(…)`, `$'…'`) can't be checked, and asks as well. An allow rule that covers
   the command still applies. In auto mode, extracting an archive or applying
   a patch (`tar x`, `unzip`, `patch`, `git apply`, `git am`) asks, because
   its input names the files it writes. Files that a script or program writes
@@ -125,8 +125,8 @@ Landlock and seccomp on Linux, a write-restricted token on Windows):
   Maven and Gradle jars) are writable, like the project's own `node_modules`;
   toolchains, installed tools and their settings are not;
 - on macOS, paths inside those trees whose contents run later outside the
-  sandbox stay read-only: the project's `.git` (pinned, so it can't be renamed
-  away or created), its hooks, config and submodule/worktree git dirs, nested
+  sandbox stay read-only: the project's `.git` (pinned against renaming or
+  recreation), its hooks, config and submodule/worktree git dirs, nested
   repositories' hooks and config, agent and editor settings that carry hooks
   (`.chanto/`, `.claude/`, `.mcp.json`, `.husky/`, `.githooks/`,
   `.vscode/{settings,tasks}.json`), Chanto's own home, shell startup files and
