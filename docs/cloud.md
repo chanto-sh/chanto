@@ -27,7 +27,7 @@ Runs can also ask for **labels** (for example `gpu` or `linux`); only runners wi
 
 ## Your own runners
 
-A runner is any machine with Chanto installed. It only makes outbound HTTPS requests, so it works behind a firewall, and it uses the machine's git credentials and Chanto configuration, so your code and model keys stay there.
+A runner is any machine with Chanto installed. It makes only outbound HTTPS requests, which works behind a firewall. It uses the machine's git credentials and Chanto configuration; your code and model keys stay there.
 
 1. In the dashboard, open your org's **Runners** page and create a registration token.
 2. On the machine, run:
@@ -42,7 +42,7 @@ Nobody watches these runs, so permission prompts are denied with an explanation 
 
 ## Hosted runners
 
-Hosted runners (early access) are ephemeral: each job gets a fresh VM that's gone when the run ends, so nothing carries over between jobs or customers. Hosted time is $0.005 a minute and counts toward your org's usage: paid plans include some every month, and past it orgs with a card go on pay-as-you-go up to their spending cap (see [pricing](https://chanto.sh/pricing) and the dashboard's **Usage & billing**).
+Hosted runners (early access) are ephemeral. Each job gets a fresh VM, gone when the run ends; nothing carries over between jobs or customers. Hosted time is $0.005 a minute and counts toward your org's usage. Paid plans include some every month; past it, orgs with a card go on pay-as-you-go up to their spending cap (see [pricing](https://chanto.sh/pricing) and the dashboard's **Usage & billing**).
 
 To keep them from being misused:
 
@@ -111,4 +111,4 @@ A runner keeps its run with a heartbeat. If it disappears (crash, lost network, 
 
 You sign in with GitHub, Google, GitLab or Bitbucket. Every account has a personal org. Team orgs have owners, admins and members: members queue and follow runs, admins manage runners, members and settings, and owners can also manage other owners. Add a member by their login once they've signed in; if two people on different providers share a login, say which, e.g. `gitlab:alice`.
 
-Plans aren't priced per seat: they differ in limits and in how much usage they include each month. See [pricing](https://chanto.sh/pricing) for what each plan includes. Free includes no usage, but your personal org gets a one-time $2 trial credit, kept until it's spent, for models on our keys (or hosted time, once you add a card). It arrives when you sign in with a GitHub, GitLab or Bitbucket account at least 30 days old (a newer one gets it at a later sign-in), or, with Google, which doesn't say how old an account is, when you add a card. Each card backs one person's trial, and only a few trials start from one network address a day.
+Plans aren't priced per seat: they differ in limits and in how much usage they include each month. See [pricing](https://chanto.sh/pricing) for what each plan includes. Free includes no usage, but your personal org gets a one-time $2 trial credit, kept until it's spent, for models on our keys (or hosted time, once you add a card). GitHub, GitLab or Bitbucket accounts at least 30 days old get it at that sign-in; a newer one gets it later. Google doesn't say how old an account is, so with Google it arrives when you add a card. Each card backs one person's trial, and only a few trials start from one network address a day.
