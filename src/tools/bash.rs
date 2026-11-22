@@ -121,8 +121,7 @@ pub(crate) fn kill_group(pid: u32) {
         .status();
 }
 
-#[cfg(unix)]
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
 mod config_guard;
 mod guards;
 mod sandbox;
@@ -675,8 +674,8 @@ independent calls in parallel."
             unsandboxed,
         )?;
         apply_env_vars(ctx, &cwd, unsandboxed, &mut cmd);
-        #[cfg(target_os = "linux")]
-        let config_guard = (sandbox_on() && !unsandboxed && exec.is_none()).then(|| {
+        #[cfg(any(target_os = "linux", windows))]
+        let mut config_guard = (sandbox_on() && !unsandboxed && exec.is_none()).then(|| {
             config_guard::ConfigGuard::take(
                 &crate::permissions::project_root().unwrap_or_else(|| cwd.clone()),
             )
@@ -777,9 +776,15 @@ independent calls in parallel."
                 .insert(id.clone(), shell.clone());
             let cf = cwd_file.clone();
             let title = shell.title();
+            // The command keeps running, so the guard has to outlive this call
+            // and restore when the process finally exits.
+            #[cfg(any(target_os = "linux", windows))]
+            let bg_guard = config_guard.take();
             tokio::spawn(async move {
                 let code = child.wait().await.ok().and_then(|s| s.code());
                 drain_output(r1, r2).await;
+                #[cfg(any(target_os = "linux", windows))]
+                undo_config_changes(&shell, bg_guard);
                 if exec.is_some() {
                     crate::runs::container::untrack(shell.pid);
                 }
@@ -840,7 +845,7 @@ independent calls in parallel."
             }
         }
         let _ = std::fs::remove_file(&cwd_file);
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", windows))]
         if let Some(note) = config_guard.and_then(|g| g.restore()) {
             out.push_str(&note);
         }
@@ -948,6 +953,9 @@ fn a_missing_login_points_at_the_sandbox_on_macos() {
     }
     assert!(!looks_sandbox_blocked("fatal: not a git repository"));
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 #[path = "bash/output_tests.rs"]
@@ -1159,7 +1167,7 @@ pub(crate) fn spawn_background(
         unsandboxed,
     )?;
     apply_env_vars(ctx, cwd, unsandboxed, &mut cmd);
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", windows))]
     let config_guard = (sandbox_on() && !unsandboxed && exec.is_none()).then(|| {
         config_guard::ConfigGuard::take(
             &crate::permissions::project_root().unwrap_or_else(|| cwd.to_path_buf()),
@@ -1208,10 +1216,8 @@ pub(crate) fn spawn_background(
     tokio::spawn(async move {
         let status = child.wait().await;
         drain_output(r1, r2).await;
-        #[cfg(target_os = "linux")]
-        if let Some(note) = config_guard.and_then(|g| g.restore()) {
-            push_capped(&s3, &note);
-        }
+        #[cfg(any(target_os = "linux", windows))]
+        undo_config_changes(&s3, config_guard);
         if exec.is_some() {
             crate::runs::container::untrack(s3.pid);
         }
@@ -1245,6 +1251,15 @@ fn push_capped(sh: &BgShell, s: &str) {
         *pos = pos.saturating_sub(cut);
         let mut watched = sh.watch_pos.lock().unwrap();
         *watched = watched.saturating_sub(cut);
+    }
+}
+
+/// Put back a finished command's changes to the files that run code later, and
+/// tell readers of the shell's output what was undone.
+#[cfg(any(target_os = "linux", windows))]
+fn undo_config_changes(sh: &BgShell, guard: Option<config_guard::ConfigGuard>) {
+    if let Some(note) = guard.and_then(|g| g.restore()) {
+        push_capped(sh, &note);
     }
 }
 

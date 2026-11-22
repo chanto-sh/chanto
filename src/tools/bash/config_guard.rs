@@ -1,10 +1,13 @@
-//! Linux: put back files that run code later if a sandboxed command changed them.
+//! Linux and Windows: put back files that run code later if a sandboxed
+//! command changed them.
 //!
-//! Landlock only grants access, so keeping `.git/hooks` or `.chanto` read-only
-//! inside a writable project would also stop `git commit` and every build. This
-//! compares them around a command instead. Those files run outside the sandbox
-//! on the next `git` command or session, so a change can't be left in place.
-//! macOS doesn't need it: Seatbelt denies these writes outright.
+//! Landlock (Linux) only grants access, and Windows' write-restricted token
+//! only grants write under the project root, so keeping `.git/hooks` or
+//! `.chanto` read-only inside a writable project would also stop `git commit`
+//! and every build. This compares them around a command instead. Those files
+//! run outside the sandbox on the next `git` command or session, so a change
+//! can't be left in place. macOS doesn't need it: Seatbelt denies these writes
+//! outright.
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -31,10 +34,28 @@ const MAX_BYTES: u64 = 1 << 20;
 
 #[derive(PartialEq, Clone)]
 enum Entry {
-    File(Vec<u8>, u32),
+    File(Vec<u8>, Mode),
     Link(PathBuf),
     Dir,
     Large(u64, Option<std::time::SystemTime>),
+}
+
+/// The permission bits to put back.
+#[cfg(unix)]
+type Mode = u32;
+/// Whether the file was read-only; Windows has no mode bits to preserve.
+#[cfg(windows)]
+type Mode = bool;
+
+#[cfg(unix)]
+fn mode_of(md: &std::fs::Metadata) -> Mode {
+    use std::os::unix::fs::PermissionsExt;
+    md.permissions().mode()
+}
+
+#[cfg(windows)]
+fn mode_of(md: &std::fs::Metadata) -> Mode {
+    md.permissions().readonly()
 }
 
 pub(super) struct ConfigGuard {
@@ -43,7 +64,6 @@ pub(super) struct ConfigGuard {
 }
 
 fn entry(p: &Path) -> Option<Entry> {
-    use std::os::unix::fs::PermissionsExt;
     let md = p.symlink_metadata().ok()?;
     if md.file_type().is_symlink() {
         return Some(Entry::Link(std::fs::read_link(p).ok()?));
@@ -54,7 +74,7 @@ fn entry(p: &Path) -> Option<Entry> {
     if md.len() > MAX_BYTES {
         return Some(Entry::Large(md.len(), md.modified().ok()));
     }
-    Some(Entry::File(std::fs::read(p).ok()?, md.permissions().mode()))
+    Some(Entry::File(std::fs::read(p).ok()?, mode_of(&md)))
 }
 
 fn scan(root: &Path) -> BTreeMap<PathBuf, Entry> {
@@ -82,9 +102,13 @@ fn scan(root: &Path) -> BTreeMap<PathBuf, Entry> {
 }
 
 fn put_back(path: &Path, was: &Entry) -> std::io::Result<()> {
-    use std::os::unix::fs::PermissionsExt;
     let remove = |p: &Path| match p.symlink_metadata() {
         Ok(md) if md.is_dir() => std::fs::remove_dir_all(p),
+        Ok(md) if md.file_type().is_symlink() => {
+            // A directory symlink needs remove_dir on Windows; a file link
+            // needs remove_file on Unix.
+            std::fs::remove_file(p).or_else(|_| std::fs::remove_dir(p))
+        }
         Ok(_) => std::fs::remove_file(p),
         Err(_) => Ok(()),
     };
@@ -95,11 +119,21 @@ fn put_back(path: &Path, was: &Entry) -> std::io::Result<()> {
                 std::fs::create_dir_all(parent)?;
             }
             std::fs::write(path, bytes)?;
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode))
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(path, std::fs::Permissions::from_mode(*mode))
+            }
+            #[cfg(windows)]
+            {
+                let mut perms = std::fs::metadata(path)?.permissions();
+                perms.set_readonly(*mode);
+                std::fs::set_permissions(path, perms)
+            }
         }
         Entry::Link(target) => {
             remove(path)?;
-            std::os::unix::fs::symlink(target, path)
+            symlink(target, path)
         }
         Entry::Dir => {
             if !path.symlink_metadata().is_ok_and(|m| m.is_dir()) {
@@ -109,6 +143,31 @@ fn put_back(path: &Path, was: &Entry) -> std::io::Result<()> {
             Ok(())
         }
         Entry::Large(..) => Err(std::io::Error::other("too large to keep a copy")),
+    }
+}
+
+#[cfg(unix)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+    // Windows wants to know whether the link is to a directory; the target may
+    // itself be gone, so fall back to a file link.
+    if target.metadata().is_ok_and(|m| m.is_dir()) {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
+/// Restore on the way out even if a caller forgets, so a command's changes
+/// can't outlive the guard. An explicit [`ConfigGuard::restore`] first makes
+/// this a no-op.
+impl Drop for ConfigGuard {
+    fn drop(&mut self) {
+        let _ = self.restore();
     }
 }
 
