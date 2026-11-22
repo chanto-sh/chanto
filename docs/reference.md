@@ -422,7 +422,7 @@ Note that Chanto's `--agents` takes either form: a number is the team size, as b
 | `esc esc` | rewind to an earlier prompt |
 | `enter` while it works | the model gets the message at its next step (between tool calls); slash commands wait for the turn to end. If the turn ends before the message is delivered, it starts the next turn as plain text (a leading `!`, `/` or `#` isn't run, and `@file` isn't attached) |
 | `ctrl+x enter` | queue the message to run after the current turn |
-| `ctrl+x ctrl+s` / `ctrl+enter` | send now: cut the current turn short and run the message next |
+| `ctrl+x ctrl+s` (or `ctrl+enter`, where the terminal reports it) | send now: cut the current turn short and run the message next |
 | `↑` on an empty prompt while working | pull messages the model hasn't received yet (queued ones, and ones sent with Enter that are still waiting for its next step) back into the prompt to edit |
 | `ctrl+x ctrl+e` | edit the prompt in your editor (same as `ctrl+g`) |
 | `shift+enter` / `alt+enter` / `ctrl+j` / `\` + enter | newline |

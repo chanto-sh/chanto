@@ -23,7 +23,7 @@ expression: snapshot(buffer)
 
 
 
- ◇ Waiting for you… (1m 5s · esc to interrupt · ctrl+enter sends now)
+ ◇ Waiting for you… (1m 5s · esc to interrupt · ctrl+x ctrl+s to send)
 
  Question ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
  Which database should we use?
@@ -64,8 +64,8 @@ row 19 cols 011..012: Style::new().fg(Color::Rgb(78, 203, 162)).bg(Color::Reset)
 row 19 cols 012..013: Style::new().fg(Color::Rgb(36, 191, 139)).bg(Color::Reset).underline_color(Color::Reset)
 row 19 cols 013..014: Style::new().fg(Color::Rgb(17, 185, 130)).bg(Color::Reset).underline_color(Color::Reset)
 row 19 cols 014..019: Style::new().fg(Color::Rgb(16, 185, 129)).bg(Color::Reset).underline_color(Color::Reset)
-row 19 cols 019..069: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Reset).underline_color(Color::Reset)
-row 19 cols 069..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
+row 19 cols 019..070: Style::new().fg(Color::Rgb(128, 128, 128)).bg(Color::Reset).underline_color(Color::Reset)
+row 19 cols 070..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 20 cols 000..120: Style::new().fg(Color::Reset).bg(Color::Reset).underline_color(Color::Reset)
 row 21 cols 000..010: Style::new().fg(Color::Rgb(160, 100, 0)).bg(Color::Reset).underline_color(Color::Reset).bold()
 row 21 cols 010..120: Style::new().fg(Color::Rgb(160, 100, 0)).bg(Color::Reset).underline_color(Color::Reset)
