@@ -74,6 +74,8 @@ jobs:
         run: python3 packaging/changelog.py --check
       - name: Test the test gate
         run: python3 scripts/test_test_gate.py
+      - name: Test the PR description check
+        run: python3 scripts/test_check_pr.py
       - name: Check the docs name every flag, command, key and tool
         run: |
           python3 scripts/test_docs_drift.py
