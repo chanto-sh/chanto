@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+## v0.1.25 (November 22, 2026)
+
+- **OpenCode Go.** `/models` now lists the Go plan's models: its list endpoint answers in OpenAI's `data` shape, which Chanto read as empty.
+- **Security:** `url` is updated to 2.5.9, which fixes a stack overflow in `Url::origin()` on nested `blob:` URLs (RUSTSEC-2026-0592). Upgrade.
+
 ## v0.1.24 (November 21, 2026)
 
 - **Security:** A sandboxed command that changes a file which runs code outside the sandbox (`.git/hooks`, `.git/config`, agent or editor settings) has the change undone even when the command times out and keeps running in the background, and Windows now guards the same files. Upgrade.
