@@ -92,6 +92,14 @@ Public URLs come from `src/site.rs`; route new code through it.
 5. Give the pull request a [Conventional Commits](#commit-messages) title. PRs
    are squash-merged, so the title becomes the commit on `main`; CI checks it.
 6. Make sure the three CI checks above pass.
+7. Open it with `scripts/pr.sh create --title "<Conventional Commits title>"
+   --body-file <file>` (or `scripts/pr.sh edit <number> --body-file <file>`
+   to change one). It runs the same title and description checks as CI before
+   it calls `gh`, so a missing `## What this changes` or `## Testing` section
+   fails locally; start the file from
+   [.github/pull_request_template.md](.github/pull_request_template.md).
+   `python3 scripts/check-pr.py --body-file <file>` checks just the
+   description.
 
 ## Commit messages
 
