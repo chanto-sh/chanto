@@ -49,7 +49,7 @@ async fn the_busy_line_names_what_runs_and_what_waits() {
     assert!(
         s.contains("↓ 2.0k tokens")
             && s.contains("esc to interrupt")
-            && s.contains("ctrl+enter sends now"),
+            && s.contains("ctrl+x ctrl+s to send"),
         "{s}"
     );
     assert!(

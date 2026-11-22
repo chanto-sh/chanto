@@ -1,0 +1,1 @@
+- **The send-now hint works on every terminal.** The status line and prompt now show `ctrl+x ctrl+s` (or `ctrl+x enter` to queue), since macOS Terminal.app can't report `ctrl+enter`; it still works where the terminal sends it. `esc` still interrupts.
