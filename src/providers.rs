@@ -242,10 +242,18 @@ pub const CATALOG: &[Hosted] = &[
         &["AI_GATEWAY_API_KEY"],
     ),
     p(
-        "opencode",
+        "opencode-zen",
         "OpenCode Zen",
         OAI,
         "https://opencode.ai/zen/v1",
+        &["OPENCODE_API_KEY"],
+    ),
+    // Go and Zen are served from different addresses with the same Console key.
+    p(
+        "opencode-go",
+        "OpenCode Go (coding plan)",
+        OAI,
+        "https://opencode.ai/inference/go/openai/v1",
         &["OPENCODE_API_KEY"],
     ),
     p(
@@ -626,6 +634,9 @@ pub fn key_page(id: &str) -> Option<&'static str> {
         ),
         "minimax-coding" => Some(
             "Copy your M Plan subscription key (sk-cp-…) from https://platform.minimax.io/console/plan (a pay-as-you-go key won't work here).",
+        ),
+        "opencode-go" => Some(
+            "Copy a Console API key from https://opencode.ai/console (a key from a workspace with a Go subscription uses Go; otherwise it bills your balance).",
         ),
         _ => None,
     }

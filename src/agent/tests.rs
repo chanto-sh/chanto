@@ -1435,6 +1435,53 @@ fn make_interactive_env(
     })
 }
 
+#[test]
+fn opencode_go_uses_the_environments_session_id() {
+    let dir = tmpdir("opencode-go-session");
+    let mut config = Config::default();
+    config.provider = ProviderKind::Openai;
+    config.providers.insert(
+        "go".into(),
+        crate::config::ProviderConfig {
+            kind: ProviderKind::Openai,
+            base_url: "https://opencode.ai/inference/go/openai/v1".into(),
+            api_key: Some("k".into()),
+            ..Default::default()
+        },
+    );
+    let env = Env::new(EnvInit {
+        config,
+        provider: Provider::new(ProviderKind::Openai, "http://127.0.0.1:1/v1", None, 4096),
+        model: "mock".into(),
+        mode: Mode::Default,
+        vision: false,
+        cwd: dir.clone(),
+        tools: Registry::builtin(),
+        mcp: vec![],
+        frontend: Arc::new(NullFrontend),
+        interactive: false,
+    });
+    *env.session_info.lock().unwrap() = Some(("ses_abc".into(), dir.join("s.jsonl")));
+    let (p, model) = env.resolve("go/kimi-k3");
+    assert_eq!(model, "kimi-k3");
+    assert!(
+        p.headers
+            .iter()
+            .any(|(k, v)| *k == "x-opencode-session" && v == "ses_abc")
+    );
+    // Every turn of the session sends the same id, once.
+    let (again, _) = env.resolve("go/kimi-k3");
+    assert_eq!(again.headers, p.headers);
+    // A provider that isn't OpenCode Go is untouched.
+    let (plain, _) = env.resolve("mock");
+    assert!(
+        !plain
+            .headers
+            .iter()
+            .any(|(k, _)| *k == "x-opencode-session")
+    );
+}
+
 #[tokio::test]
 async fn auto_mode_offers_a_classifier_block_to_the_human() {
     let dir = tmpdir("auto-ask");

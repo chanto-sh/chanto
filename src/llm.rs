@@ -318,6 +318,10 @@ pub fn builtin_provider(name: &str, model: &str) -> Option<Provider> {
     // Billed as this provider, not another catalog entry at the same address
     // (a MiniMax plan key isn't charged MiniMax's per-token rates).
     p.billing_provider = Some(h.id.to_string());
+    if h.id == "opencode-go" {
+        // Its OpenAI route is `/openai/v1`, but the model list lives at `/v1`.
+        p.models_url = Some("https://opencode.ai/inference/go/v1/models".into());
+    }
     Some(p)
 }
 
@@ -338,6 +342,9 @@ pub struct Provider {
     cloud_vars: Option<std::sync::Arc<crate::cloud::Vars>>,
     /// Sent with every request (Chanto cloud's `x-chanto-org`).
     pub headers: Vec<(&'static str, String)>,
+    /// OpenCode's Go plan gateway, which needs a per-conversation session id
+    /// on every request (see [`Provider::with_session_id`]).
+    pub opencode_go: bool,
     /// Where to list models instead of the API's own route: Chanto cloud's
     /// catalog, which spans both of its APIs.
     pub models_url: Option<String>,
@@ -429,6 +436,7 @@ impl Provider {
         Provider {
             kind,
             base_url: base_url.trim_end_matches('/').to_string(),
+            opencode_go: base_url.contains("opencode.ai/inference/go"),
             api_key,
             login: None,
             num_ctx,
@@ -441,6 +449,25 @@ impl Provider {
             models_url: None,
             stream_idle: Some(STREAM_IDLE_DEFAULT),
             http,
+        }
+    }
+
+    /// Give OpenCode Go the stable session id it requires (`x-opencode-session`)
+    /// so it can route the conversation and reuse its prompt cache. A provider
+    /// with no session (a one-shot run) keeps one id for the process.
+    pub fn with_session_id(&mut self, id: Option<&str>) {
+        if self.opencode_go {
+            let id = id
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| {
+                    static FALLBACK: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+                    FALLBACK
+                        .get_or_init(|| format!("chanto-{}", uuid::Uuid::new_v4()))
+                        .clone()
+                });
+            self.headers.retain(|(k, _)| *k != "x-opencode-session");
+            self.headers.push(("x-opencode-session", id));
         }
     }
 
