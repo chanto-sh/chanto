@@ -1,2 +1,0 @@
-- **OpenCode Zen is now `opencode-zen`.** The built-in provider id changed from `opencode`, so use `chanto login opencode-zen` and `opencode-zen/<model>`; the display name and `OPENCODE_API_KEY` are unchanged.
-- **OpenCode Go.** `chanto login opencode-go` (or `OPENCODE_API_KEY`) uses an OpenCode Go subscription at its own endpoint, sending the per-conversation session id Go requires.
