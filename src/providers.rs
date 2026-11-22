@@ -242,7 +242,7 @@ pub const CATALOG: &[Hosted] = &[
         &["AI_GATEWAY_API_KEY"],
     ),
     p(
-        "opencode",
+        "opencode-zen",
         "OpenCode Zen",
         OAI,
         "https://opencode.ai/zen/v1",
