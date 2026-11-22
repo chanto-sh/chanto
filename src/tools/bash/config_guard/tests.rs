@@ -56,6 +56,40 @@ fn planted_and_edited_files_are_put_back() {
 }
 
 #[test]
+fn dropping_the_guard_puts_changes_back() {
+    let d = project("drop");
+    {
+        let _g = ConfigGuard::take(&d);
+        std::fs::write(d.join(".git/hooks/pre-commit"), "evil").unwrap();
+        std::fs::write(d.join(".git/config"), "[core]\n\tfsmonitor = evil\n").unwrap();
+    }
+    assert!(
+        !d.join(".git/hooks/pre-commit").exists(),
+        "a planted hook can't outlive the guard"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.join(".git/config")).unwrap(),
+        "[core]\n"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn an_explicit_restore_makes_the_drop_a_no_op() {
+    let d = project("twice");
+    let g = ConfigGuard::take(&d);
+    std::fs::write(d.join(".git/hooks/pre-commit"), "evil").unwrap();
+    assert!(g.restore().is_some());
+    // Work done after the explicit restore is ordinary, so dropping the guard
+    // must not undo it.
+    std::fs::write(d.join("a.txt"), "after\n").unwrap();
+    drop(g);
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).unwrap(), "after\n");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
 fn a_directory_swapped_for_a_link_is_put_back() {
     let d = project("swap");
     let elsewhere = project("elsewhere");

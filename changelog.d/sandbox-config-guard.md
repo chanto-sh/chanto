@@ -1,0 +1,1 @@
+- **Security:** A sandboxed command that changes a file which runs code outside the sandbox (`.git/hooks`, `.git/config`, agent or editor settings) has the change undone even when the command times out and keeps running in the background, and Windows now guards the same files. Upgrade.
