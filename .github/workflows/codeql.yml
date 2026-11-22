@@ -50,3 +50,31 @@ jobs:
       - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
         with:
           category: "/language:${{ matrix.language }}"
+
+  # A pull request's scan is compared against main and cannot introduce an
+  # alert (the "Require code scanning results" rule in "protect main"). A scan
+  # of main itself can still find something new after merge, so check the
+  # backlog as soon as the analysis finishes instead of waiting for the
+  # six-hourly code-scanning-watch. That job keeps the tracking issue current.
+  watch:
+    if: github.event_name != 'pull_request' && github.event_name != 'merge_group'
+    needs: analyze
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: read
+      issues: write
+    concurrency:
+      group: codeql-watch
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Let the new analysis land
+        run: sleep 30
+      - name: Check the post-merge backlog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/codeql-watch.sh

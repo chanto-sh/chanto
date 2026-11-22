@@ -6,9 +6,42 @@ name: hosted model
 # is skipped; so is an OpenRouter model that has left its free list, which
 # changes month to month. Free tiers allow a few dozen requests a day, about
 # five per leg.
+#
+# The OpenCode Go legs are paid from that subscription instead of a free tier.
+# The secret is a Console API key (repository secret OPENCODE_GO_API_KEY) with
+# Models: Read and Request; the Read part is the catalog check below, which
+# skips a model the plan no longer serves before spending a run on it.
+# The nightly legs use the cheap models (a run costs about $0.003-0.01, well
+# under 1% of that model's monthly Go allowance), so a nightly run stays around
+# 1% of the plan. The `latest` legs cover the current frontier models (Kimi K3,
+# Qwen3.8 Max, GPT 6 Luna, Grok 4.7, ...); each run costs 0.02-0.55% of the
+# plan, so together about 1.5%: they run only on workflow_dispatch (Run
+# workflow), where every leg runs, not nightly.
+#
+# Not every pull request: the agent loop already runs against real local models
+# on every PR (.github/workflows/real-model.yml, no secrets, fork-safe), and
+# these legs are about the hosted provider layer. A pull request that touches
+# that layer runs only the four cheap Go legs, for about 0.04% of the plan.
+#
+# A release tag (v*) runs the nightly set (the free legs and the four cheap Go
+# ones), so a release is validated against the hosted providers; the frontier
+# legs stay on-demand so the total stays around 1-2% of the Go plan a month.
+# It is the tag push, not the `release` event: release.yml creates the release
+# with the default token, whose events don't start other workflows.
 on:
   schedule:
     - cron: "17 4 * * *"
+  push:
+    # zizmor: ignore[cache-poisoning] this workflow only restores the cache
+    # (save-if: false); real-model.yml writes it on main, never from a tag.
+    tags: ["v*"]
+  pull_request:
+    paths:
+      - "src/llm.rs"
+      - "src/llm/**"
+      - "src/providers.rs"
+      - "tests/real-model/**"
+      - ".github/workflows/hosted-model.yml"
   workflow_dispatch:
 permissions:
   contents: read
@@ -16,7 +49,9 @@ permissions:
 jobs:
   smoke:
     name: smoke (${{ matrix.model }})
-    if: ${{ github.repository == 'chanto-sh/chanto' }}
+    # Same-repository pull requests only: a fork gets no secrets anyway, and a
+    # job that can only skip shouldn't report.
+    if: ${{ github.repository == 'chanto-sh/chanto' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -27,14 +62,58 @@ jobs:
           # share OpenRouter's free pool.
           - service: openrouter
             model: poolside/laguna-xs-2.1:free
+            tier: nightly
           - service: openrouter
             model: nvidia/nemotron-3.5-lightning:free
+            tier: nightly
           - service: groq
             model: qwen/qwen3.8-27b
+            tier: nightly
           # Google AI Studio's free tier (a project with no billing account
           # can't be charged); free-tier prompts may be used for training.
           - service: gemini
             model: gemma-4-26b-a4b-it
+            tier: nightly
+          # OpenCode Go: the cheapest models, so a nightly run is negligible.
+          # --no-think keeps reasoning tokens (and the allowance they'd use) down.
+          - service: opencode-go
+            model: deepseek-v4.1-flash
+            tier: nightly
+            pr: true
+          - service: opencode-go
+            model: glm-5.3-flash
+            tier: nightly
+            pr: true
+          - service: opencode-go
+            model: minimax-m3
+            tier: nightly
+            pr: true
+          - service: opencode-go
+            model: claude-haiku-5-5
+            tier: nightly
+            pr: true
+          # Current frontier models, on demand only (see the note above).
+          - service: opencode-go
+            model: kimi-k3
+            tier: latest
+          - service: opencode-go
+            model: qwen3.8-max
+            tier: latest
+          - service: opencode-go
+            model: glm-5.3
+            tier: latest
+          - service: opencode-go
+            model: deepseek-v4-pro
+            tier: latest
+          - service: opencode-go
+            model: gemini-4-argon
+            tier: latest
+          - service: opencode-go
+            model: gpt-6-luna
+            tier: latest
+          - service: opencode-go
+            model: grok-4.7
+            tier: latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,14 +123,30 @@ jobs:
         env:
           SERVICE: ${{ matrix.service }}
           MODEL: ${{ matrix.model }}
+          TIER: ${{ matrix.tier }}
+          PR_RUN: ${{ matrix.pr == true }}
+          EVENT: ${{ github.event_name }}
           HAS_OPENROUTER: ${{ secrets.OPENROUTER_API_KEY != '' }}
           HAS_GROQ: ${{ secrets.GROQ_API_KEY != '' }}
           HAS_GEMINI: ${{ secrets.GEMINI_API_KEY != '' }}
+          HAS_OPENCODE_GO: ${{ secrets.OPENCODE_GO_API_KEY != '' }}
+          OPENCODE_GO_API_KEY: ${{ matrix.service == 'opencode-go' && secrets.OPENCODE_GO_API_KEY || '' }}
         run: |
+          if [ "$TIER" = latest ] && [ "$EVENT" != workflow_dispatch ]; then
+            echo "::notice::$MODEL is a frontier model, run only on workflow_dispatch; skipping"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$EVENT" = pull_request ] && [ "$PR_RUN" != true ]; then
+            echo "::notice::$MODEL runs nightly and on workflow_dispatch; skipping on a pull request"
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           case "$SERVICE" in
             openrouter) has=$HAS_OPENROUTER ;;
             groq) has=$HAS_GROQ ;;
             gemini) has=$HAS_GEMINI ;;
+            opencode-go) has=$HAS_OPENCODE_GO ;;
           esac
           if [ "$has" != true ]; then
             echo "::notice::no API key secret for $SERVICE; skipping $MODEL"
@@ -63,6 +158,24 @@ jobs:
             echo "::warning::$MODEL is no longer a free tool-calling model on OpenRouter; skipping (update the matrix)"
             echo "run=false" >> "$GITHUB_OUTPUT"
             exit 0
+          fi
+          # Go bills only a workspace with a subscription; catch a wrong key
+          # before spending a job on it. A model missing from the catalog is
+          # retired: skip it rather than fail the nightly.
+          if [ "$SERVICE" = opencode-go ]; then
+            code=$(curl -sS -o "$RUNNER_TEMP/go-models.json" -w '%{http_code}' \
+              -H "Authorization: Bearer $OPENCODE_GO_API_KEY" \
+              https://opencode.ai/inference/go/v1/models)
+            if [ "$code" != 200 ]; then
+              echo "::error::OPENCODE_GO_API_KEY can't list Go models (HTTP $code)"
+              exit 1
+            fi
+            if ! jq -e --arg m "$MODEL" 'any(.data[]; .id == $m and .capabilities.tools.supported)' \
+                "$RUNNER_TEMP/go-models.json" > /dev/null; then
+              echo "::warning::$MODEL is not a Go tool-calling model; skipping (update the matrix)"
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
           echo "run=true" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
@@ -83,6 +196,10 @@ jobs:
           OPENROUTER_API_KEY: ${{ matrix.service == 'openrouter' && secrets.OPENROUTER_API_KEY || '' }}
           GROQ_API_KEY: ${{ matrix.service == 'groq' && secrets.GROQ_API_KEY || '' }}
           GEMINI_API_KEY: ${{ matrix.service == 'gemini' && secrets.GEMINI_API_KEY || '' }}
+          OPENCODE_API_KEY: ${{ matrix.service == 'opencode-go' && secrets.OPENCODE_GO_API_KEY || '' }}
+          # Reasoning tokens are most of a Go run's allowance and add nothing
+          # to this one-line fix.
+          SMOKE_FLAGS: ${{ matrix.service == 'opencode-go' && '--no-think' || '' }}
         # Through Chanto's built-in provider for each service, which reads the
         # service's own key variable. A free model's shared pool can be busy
         # (429): wait and retry, but fail on anything else.

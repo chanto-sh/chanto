@@ -5,8 +5,9 @@
 #   tests/real-model/smoke.sh CHANTO BASE_URL MODEL [PROVIDER]
 #
 # BASE_URL - (and no PROVIDER) sends MODEL to one of Chanto's built-in hosted
-# providers instead, as `openrouter/<model>` or `gemini/<model>`, with that
-# provider's own key variable set (OPENROUTER_API_KEY, GEMINI_API_KEY, ...).
+# providers instead, as `openrouter/<model>`, `opencode-go/<model>` or
+# `gemini/<model>`, with that provider's own key variable set
+# (OPENROUTER_API_KEY, OPENCODE_API_KEY, GEMINI_API_KEY, ...).
 #
 # CI serves Qwen3.5-4B with llama-server (see .github/workflows/real-model.yml);
 # locally any OpenAI-compatible or Ollama server works. SMOKE_FLAGS adds
