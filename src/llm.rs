@@ -736,8 +736,10 @@ impl Provider {
                 );
             }
             let v: Value = serde_json::from_str(&text)?;
-            return Ok(v["models"]
-                .as_array()
+            // Chanto cloud lists under `models`; OpenCode Go uses OpenAI's
+            // `{"object":"list","data":[…]}`.
+            let list = v["data"].as_array().or_else(|| v["models"].as_array());
+            return Ok(list
                 .map(|a| {
                     a.iter()
                         .filter_map(|m| m["id"].as_str().map(String::from))

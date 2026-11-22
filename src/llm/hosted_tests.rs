@@ -1369,6 +1369,25 @@ async fn opencode_go_sends_the_conversation_session_id() {
     }
 }
 
+#[tokio::test]
+async fn a_models_url_lists_openai_and_cloud_shapes() {
+    // OpenCode Go answers with OpenAI's `{"object":"list","data":[…]}`, while
+    // Chanto cloud's catalog uses `{"models":[…]}`; both must list.
+    let mut p = Provider::new(ProviderKind::Openai, "http://127.0.0.1:1/v1", None, 1000);
+    let (base, seen) = serve(vec![
+        (
+            200,
+            json!({"object": "list", "data": [{"id": "kimi-k3"}, {"id": "glm-5.3"}]}).to_string(),
+        ),
+        (200, json!({"models": [{"id": "chanto-model"}]}).to_string()),
+    ])
+    .await;
+    p.models_url = Some(format!("{base}/v1/models"));
+    assert_eq!(p.list_models().await.unwrap(), vec!["kimi-k3", "glm-5.3"]);
+    assert_eq!(p.list_models().await.unwrap(), vec!["chanto-model"]);
+    assert!(seen.lock().unwrap().headers[0].starts_with("GET /v1/models "));
+}
+
 /// Each body through a fresh mock server: the error text, or the response.
 async fn chat_each(kind: ProviderKind, bodies: Vec<String>) -> Vec<Result<ChatResponse, String>> {
     let mut out = Vec::new();
