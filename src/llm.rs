@@ -455,7 +455,7 @@ impl Provider {
     /// Give OpenCode Go the stable session id it requires (`x-opencode-session`)
     /// so it can route the conversation and reuse its prompt cache. A provider
     /// with no session (a one-shot run) keeps one id for the process.
-    pub fn with_session_id(mut self, id: Option<&str>) -> Self {
+    pub fn with_session_id(&mut self, id: Option<&str>) {
         if self.opencode_go {
             let id = id
                 .filter(|s| !s.is_empty())
@@ -469,7 +469,6 @@ impl Provider {
             self.headers.retain(|(k, _)| *k != "x-opencode-session");
             self.headers.push(("x-opencode-session", id));
         }
-        self
     }
 
     /// A response's body, read with this provider's stream idle limit.

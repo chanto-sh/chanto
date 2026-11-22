@@ -1301,7 +1301,7 @@ async fn opencode_go_sends_the_conversation_session_id() {
             },
         )
         .unwrap();
-        let p = builtin_provider("opencode-go", "kimi-k3").unwrap();
+        let mut p = builtin_provider("opencode-go", "kimi-k3").unwrap();
         assert_eq!(p.base_url, "https://opencode.ai/inference/go/openai/v1");
         assert!(p.opencode_go);
         assert_eq!(
@@ -1312,7 +1312,7 @@ async fn opencode_go_sends_the_conversation_session_id() {
             "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]
         })]);
         let (base, seen) = serve(vec![(200, reply)]).await;
-        let mut p = p.with_session_id(Some("ses_conversation"));
+        p.with_session_id(Some("ses_conversation"));
         p.base_url = format!("{base}/openai/v1");
         let r = p
             .chat(&chat_req("kimi-k3", vec![Message::user("hi")]), &mut |_| {})
@@ -1338,8 +1338,8 @@ async fn opencode_go_sends_the_conversation_session_id() {
             "https://opencode.ai/inference/go/openai/v1",
             Some("k".into()),
             1000,
-        )
-        .with_session_id(None);
+        );
+        p.with_session_id(None);
         p.base_url = format!("{base}/openai/v1");
         p.chat(&chat_req("kimi-k3", vec![Message::user("hi")]), &mut |_| {})
             .await
@@ -1347,13 +1347,13 @@ async fn opencode_go_sends_the_conversation_session_id() {
         let head = seen.lock().unwrap().headers[0].to_ascii_lowercase();
         assert!(head.contains("x-opencode-session: chanto-"), "{head}");
         // The Zen (pay-as-you-go) endpoint takes no session id.
-        let zen = Provider::new(
+        let mut zen = Provider::new(
             ProviderKind::Openai,
             "https://opencode.ai/zen/v1",
             Some("k".into()),
             1000,
-        )
-        .with_session_id(Some("ses_conversation"));
+        );
+        zen.with_session_id(Some("ses_conversation"));
         assert!(!zen.opencode_go && zen.headers.is_empty());
     };
     let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
