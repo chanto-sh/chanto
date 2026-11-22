@@ -870,12 +870,13 @@ fn err(code: StatusCode, msg: impl Into<String>) -> Response {
     (code, Json(json!({"error": msg.into()}))).into_response()
 }
 
-/// A project path from a request body (only accepted from the daemon's own clients).
+/// A project path from a request (only accepted from the daemon's own clients).
+fn project_path(project: Option<&str>) -> Option<PathBuf> {
+    project.map(PathBuf::from).and_then(|p| p.canonical().ok())
+}
+
 fn project_of(body: &Value) -> Option<PathBuf> {
-    body["project"]
-        .as_str()
-        .map(PathBuf::from)
-        .and_then(|p| p.canonical().ok())
+    project_path(body["project"].as_str())
 }
 
 /// Routes behind the daemon's bearer token:
@@ -948,13 +949,15 @@ async fn trigger(
     if headers.get("x-github-event").and_then(|h| h.to_str().ok()) == Some("ping") {
         return Json(json!({"ok": true, "job": name})).into_response();
     }
-    // Only the daemon's own clients may point at a project or say how they triggered.
-    let req: Value = if local {
-        serde_json::from_slice(&body).unwrap_or_default()
+    // Only the daemon's own clients may point at a project or say how they
+    // triggered: they send both as query parameters, so a webhook body (a
+    // GitHub payload) is never parsed.
+    let (project, trigger) = if local {
+        (q.get("project").cloned(), q.get("trigger").cloned())
     } else {
-        Value::Null
+        (None, None)
     };
-    let jobs = Scheduler::jobs(project_of(&req)).await;
+    let jobs = Scheduler::jobs(project_path(project.as_deref())).await;
     let Some(job) = jobs.get(&name) else {
         let hint = jobs
             .problems
@@ -964,7 +967,7 @@ async fn trigger(
         return err(StatusCode::NOT_FOUND, format!("no job named {name}{hint}"));
     };
     let how = if local {
-        req["trigger"].as_str().unwrap_or("manual").to_string()
+        trigger.unwrap_or_else(|| "manual".into())
     } else {
         "webhook".into()
     };
@@ -996,6 +999,18 @@ fn here() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let root = crate::runs::git::toplevel(&cwd).ok()?;
     Some(root.canonical().unwrap_or(root))
+}
+
+/// The trigger path for the daemon's own clients: the project and trigger go
+/// as query parameters, so a webhook payload is never parsed.
+fn trigger_path(job: &str, project: Option<&Path>) -> String {
+    match project {
+        Some(p) => format!(
+            "/runs/jobs/{job}/trigger?project={}&trigger=manual",
+            urlencoding::encode(&p.to_string_lossy())
+        ),
+        None => format!("/runs/jobs/{job}/trigger?trigger=manual"),
+    }
 }
 
 fn short_path(p: &Path) -> String {
@@ -1234,11 +1249,8 @@ pub async fn cli(args: &[String]) -> Result<()> {
                 arg.ok_or_else(|| anyhow::anyhow!("usage: chanto runner trigger <job> [--wait]"))?;
             let c = crate::runs::cli::connect(true).await?;
             let r: Run = serde_json::from_value(
-                c.post(
-                    &format!("/runs/jobs/{job}/trigger"),
-                    json!({"project": here(), "trigger": "manual"}),
-                )
-                .await?,
+                c.post(&trigger_path(&job, here().as_deref()), json!({}))
+                    .await?,
             )?;
             println!(
                 "job {job}: started background run {} on branch {} (chanto attach {})",
@@ -1327,11 +1339,8 @@ pub async fn slash(root: &Path, arg: &str) -> String {
             let res: Result<Run> = async {
                 let c = crate::runs::cli::connect(true).await?;
                 Ok(serde_json::from_value(
-                    c.post(
-                        &format!("/runs/jobs/{job}/trigger"),
-                        json!({"project": root, "trigger": "manual"}),
-                    )
-                    .await?,
+                    c.post(&trigger_path(job, Some(root.as_path())), json!({}))
+                        .await?,
                 )?)
             }
             .await;
