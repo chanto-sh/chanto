@@ -1,1 +1,0 @@
-- **Security:** `url` is updated to 2.5.9, which fixes a stack overflow in `Url::origin()` on nested `blob:` URLs (RUSTSEC-2026-0592). Upgrade.
