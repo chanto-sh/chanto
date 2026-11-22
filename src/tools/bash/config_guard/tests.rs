@@ -88,6 +88,40 @@ fn an_explicit_restore_makes_the_drop_a_no_op() {
     std::fs::remove_dir_all(&d).unwrap();
 }
 
+#[cfg(windows)]
+#[test]
+fn links_to_a_file_and_a_directory_are_put_back() {
+    let d = project("links");
+    let elsewhere = project("links-elsewhere");
+    std::fs::write(d.join("target.txt"), "real\n").unwrap();
+    std::os::windows::fs::symlink_file(d.join("target.txt"), d.join(".git/hooks/file-link"))
+        .unwrap();
+    std::os::windows::fs::symlink_dir(elsewhere.join(".git/hooks"), d.join(".git/hooks/dir-link"))
+        .unwrap();
+    let g = ConfigGuard::take(&d);
+    std::fs::remove_file(d.join(".git/hooks/file-link")).unwrap();
+    std::fs::remove_dir(d.join(".git/hooks/dir-link")).unwrap();
+    std::fs::write(d.join(".git/hooks/file-link"), "evil").unwrap();
+    std::fs::create_dir(d.join(".git/hooks/dir-link")).unwrap();
+    assert!(g.restore().is_some());
+    assert!(
+        d.join(".git/hooks/file-link")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        d.join(".git/hooks/dir-link")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+    std::fs::remove_dir_all(&elsewhere).unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn a_directory_swapped_for_a_link_is_put_back() {

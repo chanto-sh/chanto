@@ -784,9 +784,7 @@ independent calls in parallel."
                 let code = child.wait().await.ok().and_then(|s| s.code());
                 drain_output(r1, r2).await;
                 #[cfg(any(target_os = "linux", windows))]
-                if let Some(note) = bg_guard.and_then(|g| g.restore()) {
-                    push_capped(&shell, &note);
-                }
+                undo_config_changes(&shell, bg_guard);
                 if exec.is_some() {
                     crate::runs::container::untrack(shell.pid);
                 }
@@ -955,6 +953,9 @@ fn a_missing_login_points_at_the_sandbox_on_macos() {
     }
     assert!(!looks_sandbox_blocked("fatal: not a git repository"));
 }
+
+#[cfg(test)]
+mod tests;
 
 #[cfg(test)]
 #[path = "bash/output_tests.rs"]
@@ -1216,9 +1217,7 @@ pub(crate) fn spawn_background(
         let status = child.wait().await;
         drain_output(r1, r2).await;
         #[cfg(any(target_os = "linux", windows))]
-        if let Some(note) = config_guard.and_then(|g| g.restore()) {
-            push_capped(&s3, &note);
-        }
+        undo_config_changes(&s3, config_guard);
         if exec.is_some() {
             crate::runs::container::untrack(s3.pid);
         }
@@ -1252,6 +1251,15 @@ fn push_capped(sh: &BgShell, s: &str) {
         *pos = pos.saturating_sub(cut);
         let mut watched = sh.watch_pos.lock().unwrap();
         *watched = watched.saturating_sub(cut);
+    }
+}
+
+/// Put back a finished command's changes to the files that run code later, and
+/// tell readers of the shell's output what was undone.
+#[cfg(any(target_os = "linux", windows))]
+fn undo_config_changes(sh: &BgShell, guard: Option<config_guard::ConfigGuard>) {
+    if let Some(note) = guard.and_then(|g| g.restore()) {
+        push_capped(sh, &note);
     }
 }
 

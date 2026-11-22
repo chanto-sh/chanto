@@ -104,6 +104,11 @@ fn scan(root: &Path) -> BTreeMap<PathBuf, Entry> {
 fn put_back(path: &Path, was: &Entry) -> std::io::Result<()> {
     let remove = |p: &Path| match p.symlink_metadata() {
         Ok(md) if md.is_dir() => std::fs::remove_dir_all(p),
+        Ok(md) if md.file_type().is_symlink() => {
+            // A directory symlink needs remove_dir on Windows; a file link
+            // needs remove_file on Unix.
+            std::fs::remove_file(p).or_else(|_| std::fs::remove_dir(p))
+        }
         Ok(_) => std::fs::remove_file(p),
         Err(_) => Ok(()),
     };
