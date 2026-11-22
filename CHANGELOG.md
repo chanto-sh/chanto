@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## v0.1.24 (November 21, 2026)
+
+- **Security:** A sandboxed command that changes a file which runs code outside the sandbox (`.git/hooks`, `.git/config`, agent or editor settings) has the change undone even when the command times out and keeps running in the background, and Windows now guards the same files. Upgrade.
+- **OpenCode Zen is now `opencode-zen`.** The built-in provider id changed from `opencode`, so use `chanto login opencode-zen` and `opencode-zen/<model>`; the display name and `OPENCODE_API_KEY` are unchanged.
+- **OpenCode Go.** `chanto login opencode-go` (or `OPENCODE_API_KEY`) uses an OpenCode Go subscription at its own endpoint, sending the per-conversation session id Go requires.
+
 ## v0.1.23 (November 21, 2026)
 
 - **The docs quote the current overhead numbers.** The homepage's speed line now matches the published benchmark — 1.8–2.8 ms of CPU per turn, 11–14 ms to start and 17–23 MB of peak memory on GitHub's macOS and Linux runners — instead of the 0.1.15 figures. The release's SDK publish check also retries npm's attestation lookup, so a release no longer needs a manual re-run.
