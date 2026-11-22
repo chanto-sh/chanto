@@ -1,0 +1,1 @@
+- **Security:** Background-run and webhook-trigger requests are parsed into typed, size-limited structs with unknown fields refused, so a malformed or oversized body can't make the daemon deserialize an arbitrary document.
