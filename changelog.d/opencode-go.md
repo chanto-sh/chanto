@@ -1,0 +1,1 @@
+- **OpenCode Go.** `chanto login opencode-go` (or `OPENCODE_API_KEY`) uses an OpenCode Go subscription at its own endpoint, sending the per-conversation session id Go requires; `opencode` remains the pay-as-you-go Zen provider.

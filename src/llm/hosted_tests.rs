@@ -1284,6 +1284,91 @@ async fn a_coding_plan_without_a_model_list_offers_its_documented_models() {
     assert!(p.list_models().await.is_err());
 }
 
+#[tokio::test]
+async fn opencode_go_sends_the_conversation_session_id() {
+    let _g = crate::compat::TEST_HOME_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let d = std::env::temp_dir().join(format!("chanto-opencode-go-{}", uuid::Uuid::new_v4()));
+    let saved_home = std::env::var_os("CHANTO_HOME");
+    unsafe { std::env::set_var("CHANTO_HOME", &d) };
+    let result = async {
+        crate::auth::set_as(
+            "opencode-go",
+            None,
+            crate::auth::Credential::ApiKey {
+                key: "oc_sk_go".into(),
+            },
+        )
+        .unwrap();
+        let p = builtin_provider("opencode-go", "kimi-k3").unwrap();
+        assert_eq!(p.base_url, "https://opencode.ai/inference/go/openai/v1");
+        assert!(p.opencode_go);
+        assert_eq!(
+            p.models_url.as_deref(),
+            Some("https://opencode.ai/inference/go/v1/models")
+        );
+        let reply = chat_sse(&[json!({
+            "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]
+        })]);
+        let (base, seen) = serve(vec![(200, reply)]).await;
+        let mut p = p.with_session_id(Some("ses_conversation"));
+        p.base_url = format!("{base}/openai/v1");
+        let r = p
+            .chat(&chat_req("kimi-k3", vec![Message::user("hi")]), &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text, "ok");
+        let head = seen.lock().unwrap().headers[0].to_ascii_lowercase();
+        assert!(
+            head.contains("x-opencode-session: ses_conversation"),
+            "{head}"
+        );
+        assert!(
+            head.contains("authorization: bearer oc_sk_go") && head.contains("user-agent: chanto/"),
+            "{head}"
+        );
+        // A one-shot run with no Chanto session gets one id per process.
+        let reply = chat_sse(&[json!({
+            "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]
+        })]);
+        let (base, seen) = serve(vec![(200, reply)]).await;
+        let mut p = Provider::new(
+            ProviderKind::Openai,
+            "https://opencode.ai/inference/go/openai/v1",
+            Some("k".into()),
+            1000,
+        )
+        .with_session_id(None);
+        p.base_url = format!("{base}/openai/v1");
+        p.chat(&chat_req("kimi-k3", vec![Message::user("hi")]), &mut |_| {})
+            .await
+            .unwrap();
+        let head = seen.lock().unwrap().headers[0].to_ascii_lowercase();
+        assert!(head.contains("x-opencode-session: chanto-"), "{head}");
+        // The Zen (pay-as-you-go) endpoint takes no session id.
+        let zen = Provider::new(
+            ProviderKind::Openai,
+            "https://opencode.ai/zen/v1",
+            Some("k".into()),
+            1000,
+        )
+        .with_session_id(Some("ses_conversation"));
+        assert!(!zen.opencode_go && zen.headers.is_empty());
+    };
+    let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    unsafe {
+        match saved_home {
+            Some(home) => std::env::set_var("CHANTO_HOME", home),
+            None => std::env::remove_var("CHANTO_HOME"),
+        }
+    }
+    let _ = std::fs::remove_dir_all(d);
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
+
 /// Each body through a fresh mock server: the error text, or the response.
 async fn chat_each(kind: ProviderKind, bodies: Vec<String>) -> Vec<Result<ChatResponse, String>> {
     let mut out = Vec::new();

@@ -1085,7 +1085,8 @@ impl Env {
     pub fn provider(&self) -> Provider {
         let mut p = self.provider.read().unwrap().clone();
         p.accounting = Some(self.accounting.clone());
-        p
+        let id = self.session_id();
+        p.with_session_id(Some(&id))
     }
 
     /// Resolve a model spec ("model" or "provider/model") to a provider and model name.
@@ -1093,6 +1094,8 @@ impl Env {
         let (mut p, model) = self.resolve_untracked(spec);
         p.accounting = Some(self.accounting.clone());
         p.stream_idle = self.config.stream_idle();
+        let id = self.session_id();
+        p = p.with_session_id(Some(&id));
         if let Some((prefix, _)) = spec.split_once('/') {
             // Cloud platforms bill by platform, whatever the section is called.
             if let Some(id) = p.kind.cloud_id() {
