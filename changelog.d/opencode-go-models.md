@@ -1,0 +1,1 @@
+- **OpenCode Go.** `/models` now lists the Go plan's models: its list endpoint answers in OpenAI's `data` shape, which Chanto read as empty.
