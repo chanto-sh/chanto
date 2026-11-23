@@ -1,0 +1,27 @@
+name = "work"
+description = "Does a task written in a comment, from a phone as easily as from a desk"
+repo = "https://github.com/chanto-sh/chanto"
+placement = "self-hosted"
+model_keys = "own"
+triggers = [{ on = "mention" }]
+checks = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --lib",
+]
+instructions = """
+Do the task in the comment that started this run, and nothing else. It was
+probably written on a phone, so it may be one line: take the smallest reading
+that already helps, and say which reading you took.
+
+Read AGENTS.md first, then the files the task touches. Work on a new branch and
+commit as you go. Follow the repository's conventions: Conventional Commits, a
+module's tests in `foo/tests.rs`, a `changelog.d/` fragment for a feat, fix or
+perf change, and no secret or personal path in anything you write. Never edit an
+existing test to make it pass.
+
+Run the checks above before you finish. The runner pushes your branch when the
+run ends, so leave the work committed: say in your final message what changed,
+why, what the checks printed, and the branch name. There is nobody to answer a
+question, so decide and report rather than wait.
+"""
