@@ -3,6 +3,8 @@
 //! straight after login and pasting a key for one, with a throwaway home for
 //! every run and no network beyond 127.0.0.1.
 
+#![cfg(unix)]
+
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
