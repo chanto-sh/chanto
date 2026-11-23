@@ -295,6 +295,22 @@ async fn choose_account_model(mut candidate: Candidate, plain: bool) -> Result<C
     Ok(candidate)
 }
 
+/// A picker row for one detected provider: its model, or the kind of catalog
+/// its account has, followed by where the credential came from.
+fn candidate_label(c: &Candidate) -> String {
+    format!(
+        "{}{} — {} ({})",
+        if c.recommended { "Recommended: " } else { "" },
+        c.model.as_deref().unwrap_or(match c.provider.as_str() {
+            "chanto" => "chanto cloud models",
+            "chatgpt" => "ChatGPT account catalog",
+            p => crate::providers::find(p).map(|h| h.name).unwrap_or(p),
+        }),
+        c.note,
+        c.source
+    )
+}
+
 pub async fn picker(plain: bool) -> Result<Candidate> {
     {
         let candidates = detect::detect().await;
@@ -303,22 +319,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
             .filter(|c| c.model.is_some() || c.note == "Credential available")
             .collect();
         usable.sort_by_key(|c| !matches!(c.provider.as_str(), "ollama" | "lmstudio" | "llamacpp"));
-        let mut labels: Vec<_> = usable
-            .iter()
-            .map(|c| {
-                format!(
-                    "{}{} — {} ({})",
-                    if c.recommended { "Recommended: " } else { "" },
-                    c.model.as_deref().unwrap_or(match c.provider.as_str() {
-                        "chanto" => "chanto cloud models",
-                        "chatgpt" => "ChatGPT account catalog",
-                        p => crate::providers::find(p).map(|h| h.name).unwrap_or(p),
-                    }),
-                    c.note,
-                    c.source
-                )
-            })
-            .collect();
+        let mut labels: Vec<_> = usable.iter().map(candidate_label).collect();
         labels.extend([
             "Log in with ChatGPT",
             "Log in with OpenRouter",

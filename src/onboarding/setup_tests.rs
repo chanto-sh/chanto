@@ -316,3 +316,34 @@ async fn a_candidate_that_already_has_a_model_is_kept() {
     let picked = choose_account_model(c, true).await.unwrap();
     assert_eq!(picked.model.as_deref(), Some("openai/gpt-5"));
 }
+
+#[test]
+fn a_picker_row_names_the_model_or_the_account_catalog() {
+    let label = |provider: &str, model: Option<&str>, recommended: bool| {
+        let mut c = account_candidate(provider);
+        c.model = model.map(String::from);
+        c.recommended = recommended;
+        candidate_label(&c)
+    };
+    assert_eq!(
+        label("openai", Some("gpt-5"), true),
+        "Recommended: gpt-5 — Credential available (env)"
+    );
+    assert_eq!(
+        label("chanto", None, false),
+        "chanto cloud models — Credential available (env)"
+    );
+    assert_eq!(
+        label("chatgpt", None, false),
+        "ChatGPT account catalog — Credential available (env)"
+    );
+    // A catalog provider shows its display name; an unknown one only its id.
+    assert_eq!(
+        label("openrouter", None, false),
+        "OpenRouter — Credential available (env)"
+    );
+    assert_eq!(
+        label("pigeon", None, false),
+        "pigeon — Credential available (env)"
+    );
+}
