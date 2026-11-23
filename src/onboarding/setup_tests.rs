@@ -238,3 +238,112 @@ async fn suggestions_include_the_existing_default() {
     sorted.dedup();
     assert_eq!(s, sorted, "sorted and without duplicates");
 }
+
+/// A candidate as the picker builds one before a model is chosen.
+fn account_candidate(provider: &str) -> detect::Candidate {
+    detect::Candidate {
+        source: "env".into(),
+        provider: provider.into(),
+        model: None,
+        note: "Credential available".into(),
+        recommended: false,
+    }
+}
+
+#[tokio::test]
+async fn an_account_model_is_listed_and_its_failures_explained() {
+    let _home = Home::new("setup-account");
+    let hint =
+        "Run `chanto models acme` to see its models, then `chanto setup --model acme/<model>`.";
+    let provider =
+        |base: &str| crate::llm::Provider::new(crate::llm::ProviderKind::Openai, base, None, 32768);
+
+    let listed = models_server(&["model-a", "model-b"]).await;
+    let models = account_models(provider(&listed), "acme", "Acme")
+        .await
+        .unwrap();
+    assert_eq!(models, ["model-a", "model-b"]);
+
+    let empty = models_server(&[]).await;
+    assert_eq!(
+        format!(
+            "{:#}",
+            account_models(provider(&empty), "acme", "Acme")
+                .await
+                .unwrap_err()
+        ),
+        format!("Acme listed no models. {hint}")
+    );
+
+    let down = "http://127.0.0.1:1/v1";
+    assert!(
+        format!(
+            "{:#}",
+            account_models(provider(down), "acme", "Acme")
+                .await
+                .unwrap_err()
+        )
+        .starts_with(&format!("Acme couldn't list its models. {hint}"))
+    );
+}
+
+#[tokio::test]
+async fn a_cloud_platform_is_not_asked_for_an_account_model() {
+    let _home = Home::new("setup-account-cloud");
+    let err = choose_account_model(account_candidate("bedrock"), true)
+        .await
+        .unwrap_err();
+    assert!(
+        format!("{err:#}").starts_with("Amazon Bedrock needs its endpoint in the config."),
+        "{err:#}"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_provider_says_how_to_log_in() {
+    let _home = Home::new("setup-account-unknown");
+    let err = choose_account_model(account_candidate("pigeon"), true)
+        .await
+        .unwrap_err();
+    assert_eq!(format!("{err:#}"), "Run chanto login pigeon first");
+}
+
+#[tokio::test]
+async fn a_candidate_that_already_has_a_model_is_kept() {
+    let _home = Home::new("setup-account-model");
+    let mut c = account_candidate("openai");
+    c.model = Some("openai/gpt-5".into());
+    let picked = choose_account_model(c, true).await.unwrap();
+    assert_eq!(picked.model.as_deref(), Some("openai/gpt-5"));
+}
+
+#[test]
+fn a_picker_row_names_the_model_or_the_account_catalog() {
+    let label = |provider: &str, model: Option<&str>, recommended: bool| {
+        let mut c = account_candidate(provider);
+        c.model = model.map(String::from);
+        c.recommended = recommended;
+        candidate_label(&c)
+    };
+    assert_eq!(
+        label("openai", Some("gpt-5"), true),
+        "Recommended: gpt-5 — Credential available (env)"
+    );
+    assert_eq!(
+        label("chanto", None, false),
+        "chanto cloud models — Credential available (env)"
+    );
+    assert_eq!(
+        label("chatgpt", None, false),
+        "ChatGPT account catalog — Credential available (env)"
+    );
+    // A catalog provider shows its display name; an unknown one only its id.
+    assert_eq!(
+        label("openrouter", None, false),
+        "OpenRouter — Credential available (env)"
+    );
+    assert_eq!(
+        label("pigeon", None, false),
+        "pigeon — Credential available (env)"
+    );
+}
