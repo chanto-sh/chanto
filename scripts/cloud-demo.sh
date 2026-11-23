@@ -138,7 +138,12 @@ Runners page, and give the jobs its saved sign-in:
 The workflow thinks with OpenCode Go (`CHANTO_MODEL`); set the repository's
 OPENCODE_GO_API_KEY secret to a Console key from that subscription.
 
-Or take them on this machine (`--runner`). Then start an agent by hand:
+Or take them on this machine (`--runner`). To keep taking them after the
+terminal closes, on a laptop or a VPS, install it as a service instead:
+
+  scripts/runner-service.sh install --label local --own-model
+
+Then start an agent by hand, from a terminal or the dashboard:
 
   scripts/cloud-demo.sh --run review --input "look at PR #123"
 EOF
