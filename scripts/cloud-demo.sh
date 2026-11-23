@@ -9,8 +9,9 @@
 #   scripts/cloud-demo.sh --run review --input "look at PR #123"
 #   scripts/cloud-demo.sh --runner         ...then take runs on this machine
 #
-# The agents ask for the `gha` label, which GitHub Actions offers for free
-# (.github/workflows/quality-runner.yml). `--runner` takes them here instead.
+# The quality agents ask for the `gha` label, which GitHub Actions offers for
+# free (.github/workflows/quality-runner.yml); `work` asks for none, so any
+# runner takes it. `--runner` takes them here instead.
 # Either way the runner needs a registration token from the dashboard's
 # Runners page (or CHANTO_RUNNER_REGISTRATION_TOKEN). `--dry-run` only prints.
 set -euo pipefail
@@ -23,7 +24,7 @@ with_runner=0
 dry=0
 url=${CHANTO_CLOUD_URL:-https://api.chanto.sh}
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; }
+usage() { sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; }
 
 while [ $# -gt 0 ]; do
   case "$1" in
