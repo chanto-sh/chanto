@@ -228,14 +228,40 @@ fn picker_area(screen: ratatui::layout::Rect, labels: &[String]) -> ratatui::lay
     )
 }
 
+/// How to pick a model by hand when setup can't offer one.
+fn model_hint(provider: &str) -> String {
+    format!(
+        "Run `chanto models {provider}` to see its models, then `chanto setup --model {provider}/<model>`."
+    )
+}
+
+/// A provider's account models, or the reason setup can't offer them.
+async fn account_models(
+    provider: crate::llm::Provider,
+    p: &str,
+    name: &str,
+) -> Result<Vec<String>> {
+    let hint = model_hint(p);
+    let listed =
+        tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models()).await;
+    let models = match listed {
+        Ok(Ok(models)) => models,
+        Ok(Err(e)) => {
+            return Err(e).context(format!("{name} couldn't list its models. {hint}"));
+        }
+        Err(_) => bail!("{name} timed out listing its models. {hint}"),
+    };
+    if models.is_empty() {
+        bail!("{name} listed no models. {hint}");
+    }
+    Ok(models)
+}
+
 async fn choose_account_model(mut candidate: Candidate, plain: bool) -> Result<Candidate> {
     if candidate.model.is_none() {
         let p = candidate.provider.clone();
         let hosted = crate::providers::find(&p);
         let name = hosted.map(|h| h.name).unwrap_or(p.as_str());
-        let hint = format!(
-            "Run `chanto models {p}` to see its models, then `chanto setup --model {p}/<model>`."
-        );
         // A cloud platform's endpoint comes from the account, not the catalog,
         // so there is nothing to ask.
         if hosted.is_some_and(|h| {
@@ -247,7 +273,10 @@ async fn choose_account_model(mut candidate: Candidate, plain: bool) -> Result<C
                     | crate::llm::ProviderKind::Foundry
             )
         }) {
-            bail!("{name} needs its endpoint in the config. {hint}");
+            bail!(
+                "{name} needs its endpoint in the config. {}",
+                model_hint(&p)
+            );
         }
         let provider = crate::llm::builtin_provider(&p, "").with_context(|| {
             format!(
@@ -255,18 +284,7 @@ async fn choose_account_model(mut candidate: Candidate, plain: bool) -> Result<C
                 if p == "chanto" { "cloud" } else { p.as_str() }
             )
         })?;
-        let listed =
-            tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models()).await;
-        let models = match listed {
-            Ok(Ok(models)) => models,
-            Ok(Err(e)) => {
-                return Err(e).context(format!("{name} couldn't list its models. {hint}"));
-            }
-            Err(_) => bail!("{name} timed out listing its models. {hint}"),
-        };
-        if models.is_empty() {
-            bail!("{name} listed no models. {hint}");
-        }
+        let models = account_models(provider, &p, name).await?;
         let i = choose(
             &format!("Choose a {name} model from your account"),
             &models,
