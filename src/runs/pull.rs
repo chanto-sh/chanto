@@ -34,9 +34,12 @@ use std::time::Duration;
 
 const USAGE: &str = "usage: chanto runner connect <url> [--registration-token <token>] [--name <name>]
                               [--label <label>]... [--mode <mode>] [--ephemeral] [--once] [--own-model]
+                              [--register-only]
 Take runs from a Chanto cloud queue (or any compatible server) and run them here.
   --registration-token  registers this machine (once; the runner's own token is saved)
                         also CHANTO_RUNNER_REGISTRATION_TOKEN; the url can be CHANTO_CLOUD_URL
+  --register-only       register and save the token, then exit (for a service that starts
+                        the runner without the registration token)
   --label               runs that require labels only go to runners with all of them
   --mode                permission mode for runs (default: [background] mode, else acceptEdits)
   --ephemeral           take one job, then deregister (for throwaway VMs and containers)
@@ -103,6 +106,8 @@ struct Opts {
     mode: Option<String>,
     ephemeral: bool,
     once: bool,
+    /// Register and save the token, then exit.
+    register_only: bool,
     /// Ignore the model endpoint the server offers.
     own_model: bool,
     /// Run the scripts jobs come with.
@@ -121,6 +126,7 @@ fn parse(args: &[String]) -> Result<Opts> {
         mode: None,
         ephemeral: false,
         once: false,
+        register_only: false,
         own_model: std::env::var("CHANTO_RUNNER_OWN_MODEL").is_ok_and(|v| v == "1" || v == "true"),
         allow_scripts: std::env::var("CHANTO_RUNNER_ALLOW_SCRIPTS")
             .is_ok_and(|v| v == "1" || v == "true"),
@@ -139,6 +145,7 @@ fn parse(args: &[String]) -> Result<Opts> {
             "--mode" => o.mode = Some(value(a)?),
             "--ephemeral" => o.ephemeral = true,
             "--once" => o.once = true,
+            "--register-only" => o.register_only = true,
             "--own-model" => o.own_model = true,
             "--allow-scripts" => o.allow_scripts = true,
             "-h" | "--help" | "help" => bail!("{USAGE}"),
@@ -157,6 +164,11 @@ fn parse(args: &[String]) -> Result<Opts> {
         && crate::permissions::Mode::parse(m).is_none()
     {
         bail!("unknown mode {m}");
+    }
+    if o.register_only && o.ephemeral {
+        bail!(
+            "--register-only and --ephemeral can't be combined: an ephemeral runner keeps no token"
+        );
     }
     Ok(o)
 }
@@ -329,6 +341,9 @@ pub async fn cli(args: &[String]) -> Result<()> {
         .user_agent(concat!("chanto-runner/", env!("CARGO_PKG_VERSION")))
         .build()?;
     let saved = register(&http, &o).await?;
+    if o.register_only {
+        return Ok(());
+    }
     let client = Client {
         http,
         url: o.url.clone(),

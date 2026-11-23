@@ -398,3 +398,40 @@ async fn git_authenticates_with_the_header() {
     );
     assert!(seen.iter().all(|(_, a)| *a == expected), "{seen:?}");
 }
+
+fn args(s: &[&str]) -> Vec<String> {
+    s.iter().map(|a| a.to_string()).collect()
+}
+
+#[test]
+fn register_only_saves_without_taking_jobs() {
+    let o = parse(&args(&[
+        "https://cloud.example",
+        "--registration-token",
+        "hrr_x",
+        "--register-only",
+        "--label",
+        "local",
+    ]))
+    .unwrap();
+    assert!(o.register_only);
+    assert_eq!(o.url, "https://cloud.example");
+    assert_eq!(o.labels, vec!["local".to_string()]);
+    assert_eq!(o.registration_token.as_deref(), Some("hrr_x"));
+    assert!(!o.once && !o.ephemeral);
+}
+
+#[test]
+fn register_only_refuses_an_ephemeral_runner() {
+    let err = match parse(&args(&[
+        "https://cloud.example",
+        "--registration-token",
+        "hrr_x",
+        "--register-only",
+        "--ephemeral",
+    ])) {
+        Ok(_) => panic!("accepted --register-only with --ephemeral"),
+        Err(e) => e,
+    };
+    assert!(err.to_string().contains("--ephemeral"), "{err}");
+}
