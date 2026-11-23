@@ -229,22 +229,44 @@ fn picker_area(screen: ratatui::layout::Rect, labels: &[String]) -> ratatui::lay
 }
 
 async fn choose_account_model(mut candidate: Candidate, plain: bool) -> Result<Candidate> {
-    if matches!(candidate.provider.as_str(), "chatgpt" | "chanto") && candidate.model.is_none() {
-        let (p, name) = if candidate.provider == "chatgpt" {
-            ("chatgpt", "ChatGPT")
-        } else {
-            ("chanto", "chanto cloud")
-        };
-        let provider = crate::llm::builtin_provider(p, "").with_context(|| {
+    if candidate.model.is_none() {
+        let p = candidate.provider.clone();
+        let hosted = crate::providers::find(&p);
+        let name = hosted.map(|h| h.name).unwrap_or(p.as_str());
+        let hint = format!(
+            "Run `chanto models {p}` to see its models, then `chanto setup --model {p}/<model>`."
+        );
+        // A cloud platform's endpoint comes from the account, not the catalog,
+        // so there is nothing to ask.
+        if hosted.is_some_and(|h| {
+            matches!(
+                h.kind,
+                crate::llm::ProviderKind::Bedrock
+                    | crate::llm::ProviderKind::Vertex
+                    | crate::llm::ProviderKind::Azure
+                    | crate::llm::ProviderKind::Foundry
+            )
+        }) {
+            bail!("{name} needs its endpoint in the config. {hint}");
+        }
+        let provider = crate::llm::builtin_provider(&p, "").with_context(|| {
             format!(
                 "Run chanto login {} first",
-                if p == "chanto" { "cloud" } else { p }
+                if p == "chanto" { "cloud" } else { p.as_str() }
             )
         })?;
-        let models =
-            tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models())
-                .await
-                .with_context(|| format!("{name} catalog timed out; rerun chanto setup"))??;
+        let listed =
+            tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models()).await;
+        let models = match listed {
+            Ok(Ok(models)) => models,
+            Ok(Err(e)) => {
+                return Err(e).context(format!("{name} couldn't list its models. {hint}"));
+            }
+            Err(_) => bail!("{name} timed out listing its models. {hint}"),
+        };
+        if models.is_empty() {
+            bail!("{name} listed no models. {hint}");
+        }
         let i = choose(
             &format!("Choose a {name} model from your account"),
             &models,
@@ -260,11 +282,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
         let candidates = detect::detect().await;
         let mut usable: Vec<_> = candidates
             .into_iter()
-            .filter(|c| {
-                c.model.is_some()
-                    || (matches!(c.provider.as_str(), "chatgpt" | "chanto")
-                        && c.note == "Credential available")
-            })
+            .filter(|c| c.model.is_some() || c.note == "Credential available")
             .collect();
         usable.sort_by_key(|c| !matches!(c.provider.as_str(), "ollama" | "lmstudio" | "llamacpp"));
         let mut labels: Vec<_> = usable
@@ -273,10 +291,10 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                 format!(
                     "{}{} — {} ({})",
                     if c.recommended { "Recommended: " } else { "" },
-                    c.model.as_deref().unwrap_or(if c.provider == "chanto" {
-                        "chanto cloud models"
-                    } else {
-                        "ChatGPT account catalog"
+                    c.model.as_deref().unwrap_or(match c.provider.as_str() {
+                        "chanto" => "chanto cloud models",
+                        "chatgpt" => "ChatGPT account catalog",
+                        p => crate::providers::find(p).map(|h| h.name).unwrap_or(p),
                     }),
                     c.note,
                     c.source
@@ -358,6 +376,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                     note: "Key saved".into(),
                     recommended: true,
                 };
+                let c = choose_account_model(c, plain).await?;
                 save_candidate(&c)?;
                 Ok(c)
             }

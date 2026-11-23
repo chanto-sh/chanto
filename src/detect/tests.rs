@@ -586,3 +586,12 @@ fn cloud_credentials_are_suggested_after_local_models_and_checked_by_doctor() {
     );
     assert!(table.contains("project proj, global"), "{table}");
 }
+
+#[test]
+fn every_opencode_plan_has_a_default_model() {
+    // Setup picks a plan's default model straight after login; without one the
+    // picker can only fail with "candidate has no model".
+    for p in ["opencode-zen", "opencode-go"] {
+        assert!(default_model(p).is_some(), "{p} has no default model");
+    }
+}

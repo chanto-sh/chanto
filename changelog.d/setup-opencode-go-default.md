@@ -1,0 +1,1 @@
+- **Setup after logging in to opencode-go.** `chanto login opencode-go` followed by `chanto setup` now offers the plan with its default model, instead of failing with "candidate has no model". A provider whose default isn't known lists its own models and asks which one to use, rather than disappearing from the picker.
