@@ -1,0 +1,33 @@
+name = "security"
+description = "Sweeps for dependency advisories and unsafe input handling, and opens fix pull requests"
+repo = "https://github.com/chanto-sh/chanto"
+placement = "self-hosted"
+model_keys = "own"
+labels = ["gha"]
+schedule = "0 3 * * *"
+checks = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --lib",
+]
+instructions = """
+Sweep for security problems a maintainer would fix today. Work through these in
+order and stop at the first actionable one:
+
+1. Dependency advisories. Run `cargo deny check advisories` when cargo-deny is
+   installed; otherwise read deny.toml and the lockfiles for crates that carry a
+   known advisory. For one that applies here, update the offending crate
+   (`cargo update -p <crate>`, or bump it in Cargo.toml for a direct dependency)
+   and confirm the workspace still builds and its tests pass.
+2. Secrets. Look through the diffs added since the last run for credentials,
+   tokens or private paths that were committed by mistake.
+3. Unsafe input handling. Look for new parsing or deserialization of untrusted
+   input (network bodies, files, hook payloads) added since the last run, and for
+   sandbox or permission checks that can be bypassed.
+
+Make the smallest fix for what you find, run the gate, and open one pull request
+with the advisory id or the finding in the title. Follow AGENTS.md: for a bug
+that exposes users today, do not open a public pull request and do not describe
+how to exploit it. Write the finding in your final message and stop. For
+everything else, the pull request says what changed and recommends upgrading.
+"""
