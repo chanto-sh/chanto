@@ -41,7 +41,7 @@ class SignificanceTest(unittest.TestCase):
 
 class VerdictTest(unittest.TestCase):
     def judge(self, base, head, budget=100.0, tolerance=0.05, large_change=0.25):
-        return gate.judge("startup_cpu_ms", base, head, budget, tolerance, 0.01, large_change)
+        return gate.judge("startup_cpu_ms", base, head, budget, tolerance, 0.01, large_change, 0.1)
 
     def test_a_change_inside_tolerance_passes(self):
         m = self.judge(SAME, [v * 1.02 for v in SAME])
@@ -59,6 +59,18 @@ class VerdictTest(unittest.TestCase):
         self.assertTrue(m["over_budget"])
         self.assertIsNone(m["base"])
 
+    def test_a_few_ticks_of_a_coarse_clock_are_not_a_large_change(self):
+        tick = 0.390625
+        # What Windows reported: the sets lean apart, by two ticks of a 5 ms median.
+        base = [tick * n for n in [12, 13, 13, 13, 13, 13, 13, 14, 14, 14]]
+        head = [tick * n for n in [13, 14, 14, 15, 15, 15, 15, 15, 15, 16]]
+        moved = gate.judge("turn_cpu_ms", base, head, 21.0, 0.04, 1e-9, 0.1, 0.1)
+        self.assertEqual(moved["verdict"], "pass", moved)
+        # Well past what a run moves by itself, it fails on the same weak test.
+        far = [tick * (n + 3) for n in [13, 14, 14, 15, 15, 15, 15, 15, 15, 16]]
+        jumped = gate.judge("turn_cpu_ms", base, far, 21.0, 0.04, 1e-9, 0.1, 0.1)
+        self.assertEqual(jumped["verdict"], "fail", jumped)
+
     def test_a_large_change_fails_without_significance(self):
         # Overlapping sample sets: the test cannot separate them, but a 30%
         # median jump is still a regression.
@@ -67,6 +79,16 @@ class VerdictTest(unittest.TestCase):
         m = self.judge(base, head)
         self.assertEqual(m["verdict"], "fail")
         self.assertTrue(m["too_big"])
+
+    def test_a_median_moved_by_noise_alone_passes(self):
+        # The same two values in both sets, only a little more often slow in
+        # head: its median jumps 28%, but the sets overlap evenly (p ~ 0.27).
+        base = [25.0] * 11 + [32.0] * 9
+        head = [25.0] * 9 + [32.0] * 11
+        m = gate.judge("startup_cpu_ms", base, head, 100.0, 0.04, 0.01, 0.10, 0.1)
+        self.assertGreater(m["change"], 0.10)
+        self.assertFalse(m["too_big"])
+        self.assertEqual(m["verdict"], "pass")
 
     def test_a_faster_change_passes_and_is_reported(self):
         m = self.judge(SAME, [v * 0.9 for v in SAME])
@@ -130,14 +152,14 @@ class CoarseClockTest(unittest.TestCase):
             109.375, 109.375, 125.0, 109.375]
 
     def test_a_one_tick_median_shift_is_not_a_regression(self):
-        m = gate.judge("startup_cpu_ms", self.BASE, self.HEAD, 160.0, 0.04, 0.01, 0.10)
+        m = gate.judge("startup_cpu_ms", self.BASE, self.HEAD, 160.0, 0.04, 0.01, 0.10, 0.1)
         self.assertFalse(m["significant"])
         self.assertFalse(m["too_big"])
         self.assertEqual(m["verdict"], "pass")
 
     def test_a_shift_of_several_ticks_still_fails(self):
         head = [v + 46.875 for v in self.HEAD]
-        m = gate.judge("startup_cpu_ms", self.BASE, head, 160.0, 0.04, 0.01, 0.10)
+        m = gate.judge("startup_cpu_ms", self.BASE, head, 160.0, 0.04, 0.01, 0.10, 0.1)
         self.assertTrue(m["too_big"])
         self.assertEqual(m["verdict"], "fail")
 
@@ -167,6 +189,8 @@ class ConfigTest(unittest.TestCase):
         self.assertLess(0, self.cfg["alpha"])
         self.assertLess(self.cfg["alpha"], 0.5)
         self.assertLess(0, self.cfg["large_change"])
+        self.assertLess(self.cfg["alpha"], self.cfg["large_change_p"])
+        self.assertLess(self.cfg["large_change_p"], 0.5)
         for value in self.cfg["tolerance"].values():
             self.assertLess(0, value)
             self.assertLess(value, self.cfg["large_change"])
@@ -210,6 +234,46 @@ class MarkdownTest(unittest.TestCase):
         self.assertIn("A metric regressed", text)
         self.assertIn("fail (over ceiling)", text)
         self.assertIn("CPU per request (ms)", text)
+
+    def test_a_one_shot_that_started_git_fails_and_says_what_ran(self):
+        report = self.report("pass")
+        report["helpers"] = ["git -c core.hooksPath=/dev/null init --bare /x"]
+        report["ok"] = False
+        text = gate.markdown(report)
+        self.assertIn("| Helper programs (git) | | 1 | | 0 | fail |", text)
+        self.assertIn("started a helper program", text)
+        self.assertIn("`git -c core.hooksPath=/dev/null init --bare /x`", text)
+
+    def test_no_helper_calls_pass(self):
+        report = self.report("pass")
+        report["helpers"] = []
+        self.assertIn("| Helper programs (git) | | 0 | | 0 | pass |", gate.markdown(report))
+
+    def test_a_read_only_session_that_started_a_shell_fails(self):
+        report = self.report("pass")
+        report["shells"] = ["bash -i -l -c capture"]
+        report["ok"] = False
+        text = gate.markdown(report)
+        self.assertIn("| Login shells, read-only session | | 1 | | 0 | fail |", text)
+        self.assertIn("started a login shell", text)
+
+    def test_no_shells_pass(self):
+        report = self.report("pass")
+        report["shells"] = []
+        self.assertIn("| Login shells, read-only session | | 0 | | 0 | pass |", gate.markdown(report))
+
+    def test_a_first_screen_that_waits_on_a_big_folder_fails(self):
+        report = self.report("pass")
+        report["big_folder"] = {"empty_ms": 4.0, "big_ms": 130.0}
+        report["ok"] = False
+        text = gate.markdown(report)
+        self.assertIn("| First screen, 100,000-file folder vs empty (ms) | | +126.0 | | 50 | fail |", text)
+        self.assertIn("waits on the folder it starts in", text)
+
+    def test_a_first_screen_unaffected_by_a_big_folder_passes(self):
+        report = self.report("pass")
+        report["big_folder"] = {"empty_ms": 4.0, "big_ms": 5.5}
+        self.assertIn("| First screen, 100,000-file folder vs empty (ms) | | +1.5 | | 50 | pass |", gate.markdown(report))
 
     def test_a_missing_base_is_named(self):
         report = self.report("pass")

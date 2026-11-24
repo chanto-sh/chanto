@@ -68,12 +68,8 @@ pub fn router<S: Clone + Send + Sync + 'static>(m: Arc<Manager>) -> Router<S> {
         .with_state(m)
 }
 
-async fn create(State(m): State<Arc<Manager>>, body: Option<Json<Value>>) -> Response {
-    let body = body.map(|b| b.0).unwrap_or_else(|| json!({}));
-    let req: NewRun = match serde_json::from_value(body) {
-        Ok(r) => r,
-        Err(e) => return err(StatusCode::BAD_REQUEST, format!("invalid run options: {e}")),
-    };
+async fn create(State(m): State<Arc<Manager>>, body: Option<Json<NewRun>>) -> Response {
+    let req = body.map(|b| b.0).unwrap_or_default();
     match m.create(req).await {
         Ok(run) => (StatusCode::CREATED, Json(run.to_json())).into_response(),
         Err(e) => err(StatusCode::BAD_REQUEST, format!("{e:#}")),

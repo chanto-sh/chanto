@@ -36,6 +36,7 @@ fn payload(dir: &Path, marker: &Path) -> String {
 }
 
 /// A repository with one commit, and a linked worktree of it on `w`.
+#[cfg(unix)]
 fn repo_and_worktree(d: &Path) -> (PathBuf, PathBuf) {
     let (repo, wt) = (d.join("repo"), d.join("wt"));
     std::fs::create_dir_all(&repo).unwrap();
@@ -96,6 +97,7 @@ fn a_nested_repositorys_filter_does_not_run_on_finalize() {
     let _ = std::fs::remove_dir_all(&d);
 }
 
+#[cfg(unix)]
 fn run_json(repo: &Path, wt: &Path) -> super::super::Run {
     serde_json::from_value(serde_json::json!({
         "id": "r1", "task": "t", "state": "done", "created": "",

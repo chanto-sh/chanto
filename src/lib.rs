@@ -31,11 +31,15 @@ mod doctor;
 mod feedback;
 mod format;
 // Crate internals the fuzz targets in fuzz/ call; not public API.
+mod batch;
 #[cfg(feature = "fuzzing")]
 #[doc(hidden)]
 pub mod fuzzing;
 mod github;
 mod goal;
+/// `CHANTO_TIMING` checkpoints, for the binary's entry point; not public API.
+#[doc(hidden)]
+pub use util::timing;
 mod guardrails;
 mod history;
 mod hooks;
@@ -63,8 +67,10 @@ mod plain;
 mod plugin;
 mod presence;
 mod primer;
+mod procs;
 mod provenance;
 mod providers;
+mod quality;
 mod remote;
 mod remote_crypto;
 mod repl;
@@ -81,6 +87,8 @@ mod shell;
 mod spend;
 mod structured;
 mod team;
+#[cfg(test)]
+mod test_support;
 pub mod tools;
 mod tui;
 mod ui;
@@ -90,6 +98,7 @@ mod util;
 mod voice;
 #[cfg(windows)]
 mod windows_sandbox;
+pub mod wire;
 mod worktree;
 
 use agent::{Agent, Env, EnvInit, Frontend, TurnEnd};
@@ -120,6 +129,8 @@ Commands:
   plugin <command>              Install and manage plugins and marketplaces
   customize <request>           Have chanto write a command, skill, hook or agent
   check-extensions              Validate custom commands, skills, hooks and agents
+  prime [--dry-run | --hook]    Find this project's checks and write .chanto/quality.toml
+  quality check [--all]         Check the quality profile's rules and scan for secrets
   goal <objective>              Keep working until acceptance criteria pass
   team <task>                   Split a task across parallel agents in worktrees
   run --bg <task>               Run a task in the background in its own worktree
@@ -135,6 +146,7 @@ Commands:
   github install                Set up the GitHub review bot in this repository
   insights | logs [--tail]      Usage report, or the diagnostic log
   feedback <message>            Send feedback or a bug report (shows what is sent first)
+  batch <prompt> --from <file>  Run a prompt once per line of a file, in parallel
   upgrade [--check]             Update chanto
 
 Most commands accept --help. Docs: ",
@@ -242,7 +254,7 @@ pub struct Cli {
     /// Disable model reasoning
     #[arg(long)]
     pub no_think: bool,
-    /// Reasoning effort: low | medium | high | xhigh | max
+    /// Reasoning effort: low | medium | high | xhigh | max | ultra (delegates to subagents)
     #[arg(long, value_name = "LEVEL", value_parser = clap::builder::PossibleValuesParser::new(llm::EFFORTS), conflicts_with = "no_think")]
     pub effort: Option<String>,
     /// Use the simple line-based interface instead of the full-screen TUI
@@ -725,10 +737,8 @@ async fn setup_session(
     crate::util::timing("connection resolved");
     context::prefetch_git(&cwd);
     // MCP servers connect while the rest of startup runs.
-    let mcp_task = {
-        let servers = cfg.mcp_servers.clone();
-        tokio::spawn(async move { mcp::connect_all(&servers).await })
-    };
+    let (mcp, connecting) = mcp::start_all(&cfg.mcp_servers);
+    let mcp_task = tokio::spawn(connecting);
     // Language-server detection may start a process (rustup); run it alongside.
     lsp::set_trusted(config::is_trusted(&cwd));
     let lsp_task = {
@@ -842,51 +852,52 @@ async fn setup_session(
     // only feeds `vision`/`num_ctx` (and dump-prompt's output is independent of
     // both). Skip its network round-trip so these paths stay fast — a hosted
     // provider's model_info otherwise blocks startup ~600ms fetching `/models`.
-    let info = if cli.run_tool.is_some() || cli.dump_prompt {
-        None
-    } else {
-        match model.split_once('/') {
-            Some((p, m)) if cfg.providers.contains_key(p) => {
-                cfg.providers[p].provider(cfg.num_ctx()).model_info(m).await
+    let explicit_ctx = cfg.num_ctx.is_some();
+    let lookup: Option<std::pin::Pin<Box<dyn std::future::Future<Output = _> + Send>>> =
+        if cli.run_tool.is_some() || cli.dump_prompt {
+            None
+        } else {
+            Some(match model.split_once('/') {
+                Some((p, m)) if cfg.providers.contains_key(p) => {
+                    let (p, m) = (cfg.providers[p].provider(cfg.num_ctx()), m.to_string());
+                    Box::pin(async move { p.model_info(&m).await })
+                }
+                // A built-in hosted provider manages its own context budget; just read vision support.
+                Some((p, m))
+                    if cfg.allows_builtin_hosted() && llm::builtin_provider(p, m).is_some() =>
+                {
+                    let (p, m) = (llm::builtin_provider(p, m).unwrap(), m.to_string());
+                    Box::pin(async move { p.model_info(&m).await.map(|(_, v)| (0, v)) })
+                }
+                Some(("ollama" | "lmstudio" | "llamacpp", _)) => {
+                    let (p, m, _) = doctor::resolve(&cfg, &model);
+                    Box::pin(async move { p.model_info(&m).await })
+                }
+                _ => {
+                    let (p, m) = (provider.clone(), model.clone());
+                    Box::pin(async move { p.model_info(&m).await })
+                }
+            })
+        };
+    // A quick answer (cached, or a server on this machine) applies now; a slow
+    // or unreachable server doesn't hold up the start: the first model request
+    // waits for it instead (`Env::settle_model_info`).
+    let mut pending_lookup = None;
+    if let Some(lookup) = lookup {
+        let mut task = tokio::spawn(lookup);
+        match tokio::time::timeout(std::time::Duration::from_millis(50), &mut task).await {
+            Ok(Ok(Some(info))) => {
+                let (num_ctx, v, warning) =
+                    llm::model_info_effect(info, explicit_ctx, serving_kind, cfg.num_ctx());
+                vision = v;
+                cfg.num_ctx = Some(num_ctx);
+                warnings.extend(warning);
             }
-            // A built-in hosted provider manages its own context budget; just read vision support.
-            Some((p, m))
-                if cfg.allows_builtin_hosted() && llm::builtin_provider(p, m).is_some() =>
-            {
-                llm::builtin_provider(p, m)
-                    .unwrap()
-                    .model_info(m)
-                    .await
-                    .map(|(_, v)| (0, v))
-            }
-            Some(("ollama" | "lmstudio" | "llamacpp", _)) => {
-                let (p, m, _) = doctor::resolve(&cfg, &model);
-                p.model_info(&m).await
-            }
-            _ => provider.model_info(&model).await,
-        }
-    };
-    crate::util::timing("model_info done");
-    if let Some((ctx_len, v)) = info {
-        vision = v;
-        // An OpenAI-compatible server that reports its window gets all of it
-        // (it only sets when to compact). Ollama keeps the default: there,
-        // num_ctx is memory the server allocates.
-        if cfg.num_ctx.is_none()
-            && serving_kind == ProviderKind::Openai
-            && ctx_len > cfg.num_ctx() as u64
-        {
-            cfg.num_ctx = Some(ctx_len.min(u32::MAX as u64) as u32);
-        }
-        if ctx_len > 0 && (cfg.num_ctx() as u64) > ctx_len {
-            warnings.push(format!(
-                "num_ctx {} exceeds the model's trained context {}; clamping",
-                cfg.num_ctx(),
-                ctx_len
-            ));
-            cfg.num_ctx = Some(ctx_len as u32);
+            Ok(_) => {}
+            Err(_) => pending_lookup = Some(task),
         }
     }
+    crate::util::timing("model_info done");
     let provider = Provider::new(
         cfg.provider,
         &cfg.base_url(),
@@ -960,7 +971,9 @@ async fn setup_session(
         mode
     };
     cfg.mode = Some(mode);
-    crate::tools::bash::prime_sandbox_caches(&cfg.sandbox);
+    if interactive {
+        crate::tools::bash::prime_sandbox_caches(&cfg.sandbox);
+    }
     for (key, overridden) in [
         ("model", cli.model.is_some()),
         ("provider", cli.provider.is_some()),
@@ -994,9 +1007,16 @@ async fn setup_session(
         // SAFETY: called during startup before any other threads read the environment.
         unsafe { std::env::set_var(k, v) };
     }
-    let (mcp, errs) = mcp_task.await.unwrap_or_default();
-    crate::util::timing("mcp connected");
-    warnings.extend(errs);
+    // A session someone is about to type into doesn't wait for them: its
+    // first request does, if they are still connecting by then. One that
+    // starts with a prompt, a script or a client's request waits here.
+    let mcp_task = if interactive && cli.prompt.is_empty() && mcp::connects_in_background() {
+        Some(mcp_task)
+    } else {
+        warnings.extend(mcp_task.await.unwrap_or_default());
+        crate::util::timing("mcp connected");
+        None
+    };
     let mut tools = tools::Registry::builtin();
     // In-session scheduling, where a frontend fires the tasks (TUI, REPL).
     if crate::cron::available() {
@@ -1055,11 +1075,18 @@ async fn setup_session(
     }
     lsp::set_trusted(config::is_trusted(&cwd));
     crate::util::timing("trust checked");
-    secrets::init(&cfg, &cwd);
-    // Do the first prompt's secret-file scan in the background.
+    secrets::init_known(&cfg);
+    // Find the project's env files and do the first prompt's secret-file scan
+    // in the background: both walk the project, which takes a noticeable
+    // moment in a big folder, and the first screen shouldn't wait for it. A
+    // turn refreshes before its first model request, so nothing leaves
+    // unmasked meanwhile.
     {
         let root = cwd.clone();
-        std::thread::spawn(move || secrets::warm(&root));
+        std::thread::spawn(move || {
+            secrets::refresh(&root);
+            secrets::warm(&root);
+        });
     }
     crate::util::timing("secrets init");
     permissions::PROTECT_SECRET_FILES.store(
@@ -1091,19 +1118,20 @@ async fn setup_session(
             });
         }
     }
+    crate::shell::set_sandboxed_tool_shell(cfg.sandbox.enabled);
     tools::bash::SANDBOX_ACTIVE.store(
-        cfg.sandbox.enabled && tools::bash::sandbox_available(),
+        cfg.sandbox.enabled && tools::bash::sandbox_supported(),
         std::sync::atomic::Ordering::Relaxed,
     );
     guardrails::set_policy(&cfg.sandbox, &cfg.secrets);
     if cfg.sandbox.enabled {
         tools::bash::start_sandbox_probe();
     }
-    if cfg.sandbox.enabled && !tools::bash::sandbox_available() {
+    if cfg.sandbox.enabled && !tools::bash::sandbox_supported() {
         warnings.push("Shell commands aren't sandboxed on this system (chanto needs working macOS Seatbelt, Linux Landlock or a Windows restricted token). Set `[sandbox] enabled = false` to hide this.".into());
     }
     // The Windows sandbox confines writes only; say so where config expects more.
-    if cfg!(windows) && cfg.sandbox.enabled && tools::bash::sandbox_available() {
+    if cfg!(windows) && cfg.sandbox.enabled {
         if cfg.sandbox.network_policy() == crate::config::NetworkPolicy::Deny {
             warnings.push("sandbox.network = \"deny\" isn't enforced on Windows: sandboxed commands can still reach the network.".into());
         }
@@ -1111,7 +1139,8 @@ async fn setup_session(
             warnings.push("sandbox.auto_allow is on, but on Windows the sandbox only confines writes: auto-allowed commands can still read credential files and use the network.".into());
         }
     }
-    if cfg.sandbox.enabled && cfg.sandbox.auto_allow && tools::bash::sandbox_available() {
+    // `permissions` also needs `sandbox_on`, so this never outlives a failed start.
+    if cfg.sandbox.enabled && cfg.sandbox.auto_allow && tools::bash::sandbox_supported() {
         permissions::SANDBOX_AUTO_ALLOW.store(true, std::sync::atomic::Ordering::Relaxed);
     }
     // `--tools` (and `--bare`'s or `--restricted`'s default set) limits the built-in tools; MCP tools stay.
@@ -1153,6 +1182,21 @@ async fn setup_session(
         frontend,
         interactive,
     });
+    if let Some(task) = mcp_task {
+        let fe = env.frontend.clone();
+        *env.pending_mcp.lock().unwrap() = Some(tokio::spawn(async move {
+            for w in task.await.unwrap_or_default() {
+                fe.emit(agent::Event::Warn(w));
+            }
+        }));
+    }
+    if let Some(lookup) = pending_lookup {
+        *env.pending_model_info.lock().unwrap() = Some(agent::PendingModelInfo {
+            lookup,
+            explicit_ctx,
+            serving_kind,
+        });
+    }
     *env.session_tool_policy.write().unwrap() = (
         list(&cli.allowed_tools),
         list(&cli.disallowed_tools).unwrap_or_default(),
@@ -1930,6 +1974,36 @@ pub async fn run() {
         return;
     }
 
+    if argv.get(1).map(String::as_str) == Some("prime") {
+        match quality::prime_cli(&argv[2..]).await {
+            Ok(out) => println!("{out}"),
+            Err(e) => {
+                ui::error(&format!("{e:#}"));
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+    if argv.get(1).map(String::as_str) == Some("quality") {
+        let result = match argv.get(2).map(String::as_str) {
+            Some("check") => quality::check_cli(&argv[3..]).await,
+            _ => Err(anyhow::anyhow!("usage: chanto quality check [--all]")),
+        };
+        match result {
+            Ok(out) => {
+                println!("{}", out.text);
+                if out.failed {
+                    std::process::exit(1);
+                }
+            }
+            Err(e) => {
+                ui::error(&format!("{e:#}"));
+                std::process::exit(2);
+            }
+        }
+        return;
+    }
+
     if argv.get(1).map(String::as_str) == Some("migrate") {
         match migrate::cli(&argv[2..]).await {
             Ok(out) => println!("{out}"),
@@ -2086,6 +2160,17 @@ pub async fn run() {
         }
         return;
     }
+    // `chanto batch <prompt> --from FILE [--jobs N] [--out FILE] [-- chanto args]`.
+    if argv.get(1).map(String::as_str) == Some("batch") {
+        match batch::cli(&argv[2..]).await {
+            Ok(out) => println!("{out}"),
+            Err(e) => {
+                ui::error(&format!("{e:#}"));
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
     // `chanto upgrade [--check] [--yes] [--force]`.
     if matches!(
         argv.get(1).map(String::as_str),
@@ -2166,8 +2251,8 @@ pub async fn run() {
         argv.get(1).map(String::as_str),
         Some("login" | "logout" | "providers")
     ) {
-        match auth::cli(&argv[1..]).await {
-            Ok(out) => println!("{out}"),
+        match auth::cli(&argv[1..], &|m| println!("{m}")).await {
+            Ok(()) => {}
             Err(e) => {
                 ui::error(&format!("{e:#}"));
                 std::process::exit(1);
@@ -2840,448 +2925,16 @@ fn query_explicit_models(explicit_url: bool, explicit_model: bool) -> bool {
 }
 
 #[cfg(test)]
-mod onboarding_flag_tests {
-    #[test]
-    fn explicit_endpoint_queries_models_unless_model_is_explicit() {
-        assert!(super::query_explicit_models(true, false));
-        assert!(!super::query_explicit_models(true, true));
-        assert!(!super::query_explicit_models(false, false));
-        assert!(!super::query_explicit_models(false, true));
-    }
-}
+mod onboarding_flag_tests;
 
 #[cfg(all(test, target_os = "linux"))]
-mod process_memory_tests {
-    #[test]
-    fn chanto_is_not_dumpable_and_still_reads_what_it_needs_from_proc() {
-        super::hide_process_memory();
-        // SAFETY: PR_GET_DUMPABLE takes no pointers.
-        let zero: libc::c_ulong = 0;
-        assert_eq!(
-            unsafe { libc::prctl(libc::PR_GET_DUMPABLE, zero, zero, zero, zero) },
-            0
-        );
-        // What Chanto reads about itself: process stats and its own path.
-        assert!(std::fs::read("/proc/self/stat").is_ok());
-        let pid = std::process::id();
-        assert!(std::fs::read(format!("/proc/{pid}/status")).is_ok());
-        assert!(std::env::current_exe().is_ok());
-        // The owner-only files are root's now, which is the point.
-        assert!(std::fs::read("/proc/self/environ").is_err());
-    }
-}
+mod process_memory_tests;
 
 #[cfg(test)]
-mod claude_flag_tests {
-    use super::{Cli, print_only_error, run_structured};
-    use crate::agent::Agent;
-    use crate::agent::tests::{make_env, mock_server, tmpdir};
-    use crate::permissions::Mode;
-    use clap::Parser;
-    use serde_json::json;
-
-    fn parse(args: &[&str]) -> Cli {
-        Cli::try_parse_from([&["chanto"][..], args].concat()).unwrap()
-    }
-
-    #[test]
-    fn safe_mode_and_restricted_launch_flags() {
-        let l = parse(&["--safe-mode"]).launch().unwrap();
-        assert!(l.safe_mode && l.no_customizations() && !l.bare && l.wants("user"));
-        let l = parse(&[
-            "--restricted",
-            "--setting-sources",
-            "user,project",
-            "--settings",
-            "{}",
-        ])
-        .launch()
-        .unwrap();
-        // Only managed settings and --settings.
-        assert!(
-            l.restricted
-                && !l.wants("user")
-                && !l.wants("project")
-                && !l.wants("local")
-                && l.settings.len() == 1
-        );
-        let e = parse(&["--restricted", "--dangerously-skip-permissions"])
-            .launch()
-            .unwrap_err();
-        assert!(e.to_string().contains("bypass"), "{e}");
-    }
-
-    #[test]
-    fn claude_code_flags_parse() {
-        let c = parse(&[
-            "-p",
-            "--system-prompt",
-            "S",
-            "--append-system-prompt-file",
-            "a.txt",
-            "--mcp-config",
-            "a.json",
-            "--mcp-config",
-            "{\"mcpServers\":{}}",
-            "--strict-mcp-config",
-            "--settings",
-            "{}",
-            "--setting-sources",
-            "user,project",
-            "--session-id",
-            "550e8400-e29b-41d4-a716-446655440000",
-            "-n",
-            "my-work",
-            "--no-session-persistence",
-            "--json-schema",
-            "{\"type\":\"object\"}",
-            "--agent",
-            "reviewer",
-            "--tools",
-            "",
-            "--plugin-dir",
-            "p1",
-            "--plugin-dir",
-            "p2",
-            "--bare",
-            "--include-partial-messages",
-            "--permission-prompt-tool",
-            "mcp__auth__ok",
-            "do it",
-        ]);
-        assert_eq!(c.system_prompt.as_deref(), Some("S"));
-        assert_eq!(c.mcp_config.len(), 2);
-        assert_eq!(c.plugin_dir, vec!["p1", "p2"]);
-        assert_eq!(c.tools.as_deref(), Some(""));
-        assert_eq!(c.name.as_deref(), Some("my-work"));
-        assert_eq!(c.prompt, vec!["do it"]);
-        assert!(
-            c.strict_mcp_config && c.bare && c.no_session_persistence && c.include_partial_messages
-        );
-        assert!(
-            Cli::try_parse_from([
-                "chanto",
-                "--system-prompt",
-                "a",
-                "--system-prompt-file",
-                "b"
-            ])
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn agents_is_a_team_size_or_subagent_json() {
-        let c = parse(&["team", "x", "--agents", "4"]);
-        assert_eq!(c.team_size(), Some(4));
-        assert!(c.launch().is_ok());
-        let c = parse(&["--agents", r#"{"r":{"description":"d","prompt":"p"}}"#]);
-        assert_eq!(c.team_size(), None);
-        assert!(c.launch().is_ok());
-        assert!(
-            parse(&["--agents", r#"{"r":{"prompt":"p"}}"#])
-                .launch()
-                .is_err()
-        );
-    }
-
-    #[test]
-    fn launch_flags_are_checked_up_front() {
-        assert!(
-            parse(&["--json-schema", "{\"type\":\"objekt\"}"])
-                .launch()
-                .unwrap_err()
-                .to_string()
-                .contains("not a valid JSON Schema")
-        );
-        assert!(parse(&["--json-schema", "nope"]).launch().is_err());
-        assert!(parse(&["--session-id", "not-a-uuid"]).launch().is_err());
-        assert!(
-            parse(&["--permission-prompt-tool", "approve"])
-                .launch()
-                .is_err()
-        );
-        assert!(
-            parse(&["--setting-sources", "everything"])
-                .launch()
-                .is_err()
-        );
-        assert!(
-            parse(&["--mcp-config", "/no/such/file.json"])
-                .launch()
-                .is_err()
-        );
-        let l = parse(&[
-            "--strict-mcp-config",
-            "--mcp-config",
-            r#"{"mcpServers":{"a":{"command":"x"}}}"#,
-            "--bare",
-        ])
-        .launch()
-        .unwrap();
-        assert!(l.strict_mcp && l.bare && l.mcp[0].1.contains_key("a"));
-        assert!(print_only_error(&parse(&["--json-schema", "{}"]), false).is_some());
-        assert!(print_only_error(&parse(&["-p", "--json-schema", "{}"]), true).is_none());
-        assert!(
-            print_only_error(
-                &parse(&["--session-id", "550e8400-e29b-41d4-a716-446655440000", "-c"]),
-                true
-            )
-            .is_some()
-        );
-    }
-
-    #[test]
-    fn quiet_presets_auto_mode_unless_a_mode_is_given() {
-        let mode = |args: &[&str], configured| super::start_mode(&parse(args), configured).unwrap();
-        assert_eq!(mode(&["--quiet"], None), Mode::Auto);
-        // The preset beats the config's default mode; anything explicit beats the preset.
-        assert_eq!(mode(&["--quiet"], Some(Mode::Default)), Mode::Auto);
-        assert_eq!(mode(&["--quiet", "--mode", "plan"], None), Mode::Plan);
-        assert_eq!(
-            mode(&["--quiet", "--permission-mode", "default"], None),
-            Mode::Default
-        );
-        assert_eq!(
-            mode(&["--quiet", "--dangerously-skip-permissions"], None),
-            Mode::Bypass
-        );
-        assert_eq!(
-            mode(&["--quiet", "--sandbox", "read-only"], None),
-            Mode::Plan
-        );
-        // Without --quiet nothing changes.
-        assert_eq!(mode(&[], Some(Mode::AcceptEdits)), Mode::AcceptEdits);
-        assert_eq!(mode(&[], None), Mode::Default);
-    }
-
-    #[test]
-    fn quiet_print_text_is_the_summary_only_and_json_is_unchanged() {
-        use crate::plain::OutputFormat;
-        let fmt = |args: &[&str]| super::print_format(&parse(args));
-        assert!(fmt(&["-p", "--quiet", "--verbose", "x"]) == OutputFormat::Text);
-        assert!(fmt(&["-p", "--verbose", "x"]) == OutputFormat::Live);
-        assert!(fmt(&["-p", "--quiet", "--output-format", "json", "x"]) == OutputFormat::Json);
-        assert!(
-            fmt(&[
-                "-p",
-                "--quiet",
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "x"
-            ]) == OutputFormat::StreamJson
-        );
-    }
-
-    #[tokio::test]
-    async fn quiet_print_mode_answers_with_the_final_summary() {
-        let dir = tmpdir("quiet-print");
-        std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
-        let (base, _) = mock_server(vec![
-            json!({"content": "Let me look.", "tool_calls": crate::agent::tests::tc("Read", json!({"file_path": "a.txt"}))}),
-            json!({"content": "Read a.txt. Nothing changed."}),
-        ])
-        .await;
-        let env = crate::agent::tests::make_env_with(&base, &dir, Mode::Bypass, 32768, |c| {
-            c.optimize.quiet = Some(true)
-        });
-        let mut agent = Agent::new(env);
-        // What `-p` text prints: the turn's answer, without the narration before the tool call.
-        let (text, ok, _) = run_structured(
-            &mut agent,
-            "read a.txt",
-            None,
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert!(ok);
-        assert_eq!(text, "Read a.txt. Nothing changed.");
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    #[tokio::test]
-    async fn json_schema_output_is_validated_and_repaired_once() {
-        let schema =
-            json!({"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]});
-        // Valid on the first try (inside prose).
-        let (base, seen) = mock_server(vec![json!({"content": "Done: {\"n\": 2}"})]).await;
-        let dir = tmpdir("schema-ok");
-        let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
-        let (_, ok, v) = run_structured(
-            &mut agent,
-            "count",
-            Some(&schema),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert!(ok);
-        assert_eq!(v, Some(json!({"n": 2})));
-        assert!(seen.lock().unwrap()[0].to_string().contains("JSON Schema"));
-        let _ = std::fs::remove_dir_all(dir);
-
-        // Wrong, then repaired.
-        let (base, seen) = mock_server(vec![
-            json!({"content": "{\"n\": \"two\"}"}),
-            json!({"content": "{\"n\": 2}"}),
-        ])
-        .await;
-        let dir = tmpdir("schema-fix");
-        let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
-        let (_, ok, v) = run_structured(
-            &mut agent,
-            "count",
-            Some(&schema),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert!(ok);
-        assert_eq!(v, Some(json!({"n": 2})));
-        assert!(
-            seen.lock().unwrap()[1]
-                .to_string()
-                .contains("expected integer")
-        );
-        let _ = std::fs::remove_dir_all(dir);
-
-        // Wrong twice: an error.
-        let (base, _) = mock_server(vec![
-            json!({"content": "no"}),
-            json!({"content": "still no"}),
-        ])
-        .await;
-        let dir = tmpdir("schema-bad");
-        let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
-        let (text, ok, v) = run_structured(
-            &mut agent,
-            "count",
-            Some(&schema),
-            tokio_util::sync::CancellationToken::new(),
-        )
-        .await;
-        assert!(!ok && v.is_none());
-        assert!(text.contains("doesn't match --json-schema"), "{text}");
-        let _ = std::fs::remove_dir_all(dir);
-    }
-}
+mod claude_flag_tests;
 
 #[cfg(test)]
-mod stream_input_tests {
-    use super::{parse_stream_input, stream_input_error};
-
-    #[test]
-    fn string_content_is_the_prompt() {
-        let m = parse_stream_input(
-            r#"{"type":"user","message":{"role":"user","content":"fix the tests"}}"#,
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(m, ("fix the tests".to_string(), vec![]));
-    }
-
-    #[test]
-    fn content_blocks_join_text_and_collect_base64_images() {
-        let line = r#"{"type":"user","session_id":"x","message":{"role":"user","content":[{"type":"text","text":"what is this?"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"iVBORw0K"}},{"type":"text","text":"be brief"}]}}"#;
-        let (text, images) = parse_stream_input(line).unwrap().unwrap();
-        assert_eq!(text, "what is this?\nbe brief");
-        assert_eq!(images, vec!["iVBORw0K".to_string()]);
-    }
-
-    #[test]
-    fn blank_lines_are_skipped() {
-        assert_eq!(parse_stream_input("").unwrap(), None);
-        assert_eq!(parse_stream_input("   \r").unwrap(), None);
-    }
-
-    #[test]
-    fn malformed_messages_are_rejected() {
-        for line in [
-            "not json",
-            r#"{"message":{"content":"hi"}}"#,
-            r#"{"type":"control_request","request":{}}"#,
-            r#"{"type":"user","message":{"role":"assistant","content":"hi"}}"#,
-            r#"{"type":"user","message":{"role":"user"}}"#,
-            r#"{"type":"user","message":{"role":"user","content":"  "}}"#,
-            r#"{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"x"}]}}"#,
-            r#"{"type":"user","message":{"role":"user","content":[{"type":"image","source":{"type":"url","url":"https://x/y.png"}}]}}"#,
-        ] {
-            assert!(parse_stream_input(line).is_err(), "{line}");
-        }
-    }
-
-    #[test]
-    fn stream_input_needs_print_and_stream_json_output() {
-        assert_eq!(stream_input_error("text", false, "text", false), None);
-        assert_eq!(
-            stream_input_error("stream-json", true, "stream-json", false),
-            None
-        );
-        assert!(stream_input_error("stream-json", false, "stream-json", false).is_some());
-        assert!(stream_input_error("stream-json", true, "json", false).is_some());
-        assert!(stream_input_error("stream-json", true, "stream-json", true).is_some());
-    }
-}
+mod stream_input_tests;
 
 #[cfg(test)]
-mod version_tests {
-    /// Everything released from this repository reports the CLI's version: the
-    /// desktop app (About, `--version`, the bundle) and both editor plugins.
-    /// A stale manifest makes an installed copy look like no update arrived.
-    #[test]
-    fn shipped_manifests_agree_on_the_version() {
-        let version = env!("CARGO_PKG_VERSION");
-        let field = |text: &str, prefix: &str| {
-            text.lines()
-                .find_map(|l| l.trim().strip_prefix(prefix))
-                .and_then(|v| v.trim_end_matches(',').strip_suffix('"'))
-                .unwrap_or_else(|| panic!("no {prefix} field"))
-                .to_string()
-        };
-        assert_eq!(
-            field(include_str!("../desktop/Cargo.toml"), "version = \""),
-            version,
-            "desktop/Cargo.toml"
-        );
-        assert_eq!(
-            field(
-                include_str!("../ide/vscode/package.json"),
-                "\"version\": \""
-            ),
-            version,
-            "ide/vscode/package.json"
-        );
-        assert_eq!(
-            field(
-                include_str!("../ide/jetbrains/build.gradle.kts"),
-                "version = \""
-            ),
-            version,
-            "ide/jetbrains/build.gradle.kts"
-        );
-    }
-
-    /// Every surface that can be installed on its own carries the app mark:
-    /// the VS Code extension's store icon and the JetBrains plugin icon. A
-    /// missing or malformed one ships as a blank square.
-    #[test]
-    fn shipped_marks_are_present() {
-        let png = include_bytes!("../ide/vscode/icon.png");
-        assert_eq!(
-            &png[..8],
-            b"\x89PNG\r\n\x1a\n",
-            "ide/vscode/icon.png is a PNG"
-        );
-        // Width and height lead the IHDR chunk, big-endian.
-        assert_eq!(
-            &png[16..24],
-            &[0, 0, 0, 128, 0, 0, 0, 128],
-            "ide/vscode/icon.png is 128×128"
-        );
-        assert!(include_str!("../ide/vscode/package.json").contains("\"icon\": \"icon.png\""));
-        assert!(
-            include_str!("../ide/jetbrains/src/main/resources/META-INF/pluginIcon.svg")
-                .contains("<svg")
-        );
-        assert!(include_str!("../assets/logo.svg").contains("<svg"));
-    }
-}
+mod version_tests;

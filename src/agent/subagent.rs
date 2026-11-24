@@ -453,11 +453,16 @@ pub async fn run_subagent(
     let mut agent = build_subagent(&env, ctx.depth + 1, kind);
     let def = find_agent_def(&env, kind);
     let mut opts = opts;
+    // A background run outlives its parent's turn, so only the main agent starts them.
+    let nested_call = ctx.depth > 0;
     if let Some(d) = &def {
         // `background: true` and `isolation: worktree` hold whatever the call asked.
         opts.background |= d.background;
         opts.worktree |= d.isolation.as_deref() == Some("worktree");
         connect_agent_mcp(&mut agent, d).await;
+    }
+    if nested_call {
+        opts.background = false;
     }
     if let Some(m) = opts.model.take() {
         let m = subagent_model(&env, &agent.model(), &m);
@@ -570,11 +575,32 @@ pub async fn run_subagent(
     }
     if !opts.background {
         let t0 = Instant::now();
-        // "Limit parallelism" from the spend guard, then the resource limit.
-        let Some(_spend_slot) = env.spend.slot(&ctx.cancel).await else {
-            return Ok(ToolOutput::err("Interrupted by user"));
+        // "Limit parallelism" from the spend guard, then the resource limit;
+        // a nested agent has its own (see `resources::nested_agent`).
+        let nested = ctx.depth > 0;
+        let _nested = if nested {
+            let Some(room) = crate::resources::nested_agent() else {
+                return Ok(ToolOutput::err(
+                    "Too many nested subagents are running; do this one yourself.",
+                ));
+            };
+            Some(room)
+        } else {
+            None
         };
-        let _slot = crate::resources::agent_slot().await;
+        let _spend_slot = if nested {
+            None
+        } else {
+            let Some(slot) = env.spend.slot(&ctx.cancel).await else {
+                return Ok(ToolOutput::err("Interrupted by user"));
+            };
+            Some(slot)
+        };
+        let _slot = if nested {
+            None
+        } else {
+            Some(crate::resources::agent_slot().await)
+        };
         if let Some(key) = &agent.parent {
             env.live_agents
                 .start(key, &id, kind, &opts.description, prompt, false);

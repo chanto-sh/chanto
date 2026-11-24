@@ -50,6 +50,7 @@ fn sh(dir: &Path, args: &[&str]) {
 }
 
 /// A program that leaves `marker` behind when git runs it.
+#[cfg(unix)]
 fn payload(dir: &Path, marker: &Path) -> String {
     let p = dir.join("payload.sh");
     std::fs::write(&p, format!("#!/bin/sh\ntouch '{}'\n", marker.display())).unwrap();

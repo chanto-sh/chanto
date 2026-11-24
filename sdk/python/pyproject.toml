@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chanto-sdk"
+# Set from the release tag by .github/workflows/sdk-publish.yml.
+version = "0.0.0"
+description = "Python client for `chanto serve`, the Chanto coding agent's server"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.9"
+
+[project.urls]
+Source = "https://github.com/chanto-sh/chanto"
+
+[tool.setuptools]
+py-modules = ["chanto_sdk", "chanto_types"]

@@ -204,11 +204,20 @@ pub fn create(
     let dir = private_dir()
         .map_err(|e| Error::Failed(format!("can't create the snapshot directory: {e}")))?;
     let result = capture_in(&dir, shell, home, timeout).and_then(|c| {
-        let text = render(&c, &|k| std::env::var(k).ok(), &config.secrets, &|k| {
-            config.env.contains_key(k)
-        });
+        let functions_path = dir.join("functions.sh");
+        let r = render(
+            &c,
+            &|k| std::env::var(k).ok(),
+            &config.secrets,
+            &|k| config.env.contains_key(k),
+            &functions_path,
+        );
+        // The functions first: a stub that ran before they were written
+        // would define nothing.
+        write_private(&functions_path, r.functions.as_bytes())
+            .map_err(|e| Error::Failed(format!("can't write the snapshot: {e}")))?;
         let p = dir.join("snapshot.sh");
-        write_private(&p, text.as_bytes())
+        write_private(&p, r.snapshot.as_bytes())
             .map_err(|e| Error::Failed(format!("can't write the snapshot: {e}")))?;
         Ok(p)
     });
@@ -219,7 +228,7 @@ pub fn create(
 }
 
 /// Run `shell` as an interactive login shell and collect what it set up.
-#[cfg(test)]
+#[cfg(all(test, unix))]
 pub fn capture(shell: &Path, home: Option<&Path>, timeout: Duration) -> Result<Captured, Error> {
     let dir = private_dir().map_err(|e| Error::Failed(e.to_string()))?;
     let r = capture_in(&dir, shell, home, timeout);
@@ -285,6 +294,9 @@ fn capture_in(
         }
     };
     let bytes = std::fs::read(&out).unwrap_or_default();
+    // It holds every exported variable, secrets included, which the
+    // snapshot itself withholds: don't leave it beside the snapshot.
+    let _ = std::fs::remove_file(&out);
     parse(&bytes).ok_or_else(|| {
         Error::Failed(format!(
             "{} exited ({status}) without reporting its setup",
@@ -603,15 +615,23 @@ fn merge_path(inherited: Option<&str>, captured: &str) -> String {
     out.join(":")
 }
 
-/// The snapshot file: bash code that recreates what the startup files set
-/// up. Variables already as `inherited` has them, and `pinned` ones (the
-/// config's `env`, which Chanto set itself), are left alone.
+/// The snapshot: bash code that recreates what the startup files set up,
+/// and the definitions of their functions. Variables already as `inherited`
+/// has them, and `pinned` ones (the config's `env`, which Chanto set itself),
+/// are left alone.
+///
+/// The snapshot is sourced before every command, and defining every function
+/// each time cost more than the command itself (~20 ms for nvm's alone). So
+/// it defines a one-line stub per function instead; the first call to any of
+/// them sources `functions` (written to `functions_path`), which replaces
+/// all the stubs with the real definitions and runs the call.
 pub fn render(
     c: &Captured,
     inherited: &dyn Fn(&str) -> Option<String>,
     secrets: &crate::secrets::SecretsConfig,
     pinned: &dyn Fn(&str) -> bool,
-) -> String {
+    functions_path: &Path,
+) -> Rendered {
     let mut out = String::from(
         "# chanto shell snapshot: your shell's setup, sourced before each Bash command\n",
     );
@@ -637,7 +657,10 @@ pub fn render(
         }
         out.push_str(&format!("export {name}={}\n", sq(&value)));
     }
-    // Functions before aliases, so no alias rewrites a function as it's defined.
+    // Functions before aliases, so no alias rewrites a function as it's
+    // defined (the loader turns alias expansion off while it defines them).
+    let mut lazy: Vec<&str> = Vec::new();
+    let mut defs = String::new();
     for (name, def) in &c.functions {
         if skip_function(name)
             || def.len() > MAX_FUNCTION
@@ -647,10 +670,29 @@ pub fn render(
             continue;
         }
         let line = format!("eval {} 2>/dev/null\n", sq(def));
-        if out.len() + line.len() > MAX_TOTAL {
+        if out.len() + defs.len() + line.len() > MAX_TOTAL {
             break;
         }
-        out.push_str(&line);
+        if stub_name(name) {
+            lazy.push(name);
+            defs.push_str(&line);
+        } else {
+            out.push_str(&line);
+        }
+    }
+    let mut functions = String::new();
+    if !lazy.is_empty() {
+        let loader = sq(&functions_path.display().to_string());
+        for name in &lazy {
+            out.push_str(&format!(
+                "{name} () {{ . {loader} 2>/dev/null; {name} \"$@\"; }}\n"
+            ));
+        }
+        functions.push_str(&format!("unset -f {} 2>/dev/null\n", lazy.join(" ")));
+        functions.push_str("__chanto_aliases=$(shopt -p expand_aliases 2>/dev/null)\n");
+        functions.push_str("shopt -u expand_aliases 2>/dev/null\n");
+        functions.push_str(&defs);
+        functions.push_str("eval \"$__chanto_aliases\" 2>/dev/null; unset __chanto_aliases\n");
     }
     let mut aliases = String::new();
     for (name, value) in &c.aliases {
@@ -667,7 +709,27 @@ pub fn render(
         out.push_str("shopt -s expand_aliases 2>/dev/null\n");
         out.push_str(&aliases);
     }
-    out
+    Rendered {
+        snapshot: out,
+        functions,
+    }
+}
+
+/// The two files of a snapshot: what's sourced before each command, and the
+/// function definitions its stubs load on first use (empty without any).
+pub struct Rendered {
+    pub snapshot: String,
+    pub functions: String,
+}
+
+/// A function name that can be written as a plain stub definition: anything
+/// else is defined in the snapshot itself, as before.
+fn stub_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | ':' | '.'))
 }
 
 /// A new directory only this user can enter, for one snapshot. Also clears
@@ -683,23 +745,33 @@ fn private_dir() -> std::io::Result<PathBuf> {
     let base = crate::config::home_dir().join("shell-snapshots");
     std::fs::create_dir_all(&base)?;
     if let Ok(rd) = std::fs::read_dir(&base) {
-        let old = std::time::SystemTime::now() - Duration::from_secs(2 * 86400);
+        let now = std::time::SystemTime::now();
+        let old = now - Duration::from_secs(2 * 86400);
         for e in rd.flatten() {
-            if e.metadata()
-                .is_ok_and(|m| m.is_dir() && m.modified().is_ok_and(|t| t < old) && owned_by_me(&m))
-            {
+            let Ok(m) = e.metadata() else { continue };
+            if !m.is_dir() || !owned_by_me(&m) {
+                continue;
+            }
+            if m.modified().is_ok_and(|t| t < old) {
                 let _ = std::fs::remove_dir_all(e.path());
+                continue;
+            }
+            // A raw capture a crashed or older Chanto left behind; one still
+            // being written is younger than any capture's timeout.
+            let capture = e.path().join("capture");
+            if std::fs::metadata(&capture)
+                .and_then(|m| m.modified())
+                .is_ok_and(|t| now.duration_since(t).is_ok_and(|age| age > 10 * TIMEOUT))
+            {
+                let _ = std::fs::remove_file(capture);
             }
         }
     }
     let dir = base.join(uuid::Uuid::new_v4().simple().to_string());
-    let mut b = std::fs::DirBuilder::new();
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::DirBuilderExt;
-        b.mode(0o700);
-    }
-    b.create(&dir)?;
+    std::os::unix::fs::DirBuilderExt::mode(&mut std::fs::DirBuilder::new(), 0o700).create(&dir)?;
+    #[cfg(not(unix))]
+    std::fs::DirBuilder::new().create(&dir)?;
     Ok(dir)
 }
 
@@ -726,225 +798,4 @@ fn write_private(p: &Path, bytes: &[u8]) -> std::io::Result<()> {
 }
 
 #[cfg(all(test, unix))]
-pub(crate) mod tests {
-    use super::*;
-
-    pub(crate) fn home() -> PathBuf {
-        let d =
-            std::env::temp_dir().join(format!("chanto-snaphome-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(d.join("mybin")).unwrap();
-        let tool = d.join("mybin/hx-only-tool");
-        std::fs::write(&tool, "#!/bin/sh\necho tool-ran\n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
-        d
-    }
-
-    pub(crate) const RC: &str = "echo noisy rc output\necho more noise >&2\nexport PATH=\"$HOME/mybin:$PATH\"\nexport HX_SNAP_VAR=from-rc\nexport GITHUB_TOKEN=ghp_shouldnotleak1234567890abcdefABCDEF\nalias hxgreet='echo hello-from-alias'\nhxfn() { echo \"fn-got-$1\"; }\n_hx_completion() { :; }\nfalse\n";
-
-    fn run_with(snapshot: &Path, cmd: &str) -> String {
-        let script = format!("{}{cmd}", source_line(snapshot));
-        let o = std::process::Command::new("/bin/bash")
-            .args(["-c", &script])
-            .current_dir(std::env::temp_dir())
-            .output()
-            .unwrap();
-        format!(
-            "{}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        )
-    }
-
-    fn check(shell: &str, rc: &str) {
-        if !Path::new(shell).exists() {
-            return;
-        }
-        // The snapshot dir is under Chanto's home, which other tests point
-        // elsewhere (and delete) while holding this lock.
-        let _home_lock = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let h = home();
-        std::fs::write(h.join(rc), RC).unwrap();
-        let p = create(
-            Path::new(shell),
-            Some(&h),
-            Duration::from_secs(20),
-            &Default::default(),
-        )
-        .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            std::fs::metadata(&p).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        let text = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            !text.contains("ghp_"),
-            "secrets stay out of the snapshot: {text}"
-        );
-        assert!(
-            !text.contains("_hx_completion") && !text.contains("noisy"),
-            "{text}"
-        );
-        let out = run_with(
-            &p,
-            "hx-only-tool && hxgreet && hxfn x && echo \"$HX_SNAP_VAR\" && echo \"tok=${GITHUB_TOKEN:-unset}\"",
-        );
-        assert!(
-            out.contains("tool-ran"),
-            "{shell}: PATH from the rc file: {out}\n{text}"
-        );
-        assert!(
-            out.contains("hello-from-alias"),
-            "{shell}: alias: {out}\n{text}"
-        );
-        assert!(out.contains("fn-got-x"), "{shell}: function: {out}\n{text}");
-        assert!(out.contains("from-rc"), "{out}");
-        assert!(!out.contains("noisy"), "{out}");
-        let _ = std::fs::remove_dir_all(p.parent().unwrap());
-        let _ = std::fs::remove_dir_all(&h);
-    }
-
-    #[test]
-    fn snapshot_lives_under_chanto_home_not_temp() {
-        // The sandbox can write the temp dir but not Chanto's home, so the
-        // snapshot a later unsandboxed command sources must sit under home.
-        // The snapshot dir is under Chanto's home, which other tests point
-        // elsewhere (and delete) while holding this lock.
-        let _home_lock = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = private_dir().unwrap();
-        assert!(
-            dir.starts_with(crate::config::home_dir()),
-            "snapshot dir {dir:?} is not under CHANTO_HOME"
-        );
-        assert!(
-            !dir.starts_with(std::env::temp_dir())
-                || crate::config::home_dir().starts_with(std::env::temp_dir())
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn zsh_rc_path_aliases_and_functions_reach_bash() {
-        check("/bin/zsh", ".zshrc");
-    }
-
-    #[test]
-    fn bash_rc_path_aliases_and_functions_reach_bash() {
-        check("/bin/bash", ".bashrc");
-    }
-
-    #[test]
-    fn a_slow_rc_file_times_out() {
-        let h = home();
-        std::fs::write(h.join(".bashrc"), "sleep 30\nexport HX_SNAP_VAR=late\n").unwrap();
-        let t0 = Instant::now();
-        let r = create(
-            Path::new("/bin/bash"),
-            Some(&h),
-            Duration::from_millis(500),
-            &Default::default(),
-        );
-        assert!(matches!(r, Err(Error::TimedOut)), "{r:?}");
-        assert!(t0.elapsed() < Duration::from_secs(5));
-        // An rc file that waits for input gets /dev/null and moves on.
-        std::fs::write(
-            h.join(".bashrc"),
-            "read -r answer\nexport HX_SNAP_VAR=after-read\n",
-        )
-        .unwrap();
-        let c = capture(Path::new("/bin/bash"), Some(&h), Duration::from_secs(20)).unwrap();
-        assert!(
-            c.vars
-                .iter()
-                .any(|(k, v)| k == "HX_SNAP_VAR" && v == "after-read")
-        );
-        let _ = std::fs::remove_dir_all(&h);
-    }
-
-    #[test]
-    fn render_filters_and_merges_path() {
-        let c = Captured {
-            vars: vec![
-                ("PATH".into(), "/opt/new/bin:/usr/bin:/bin".into()),
-                ("SAME".into(), "x".into()),
-                ("PINNED".into(), "from-rc".into()),
-                ("NEW".into(), "it's".into()),
-                ("PS1".into(), "$ ".into()),
-                ("HTTPS_PROXY".into(), "http://x".into()),
-                ("MY_API_KEY".into(), "abc".into()),
-                ("bad-name".into(), "x".into()),
-            ],
-            aliases: vec![
-                ("ll".into(), "ls -l".into()),
-                ("cd".into(), "echo no".into()),
-            ],
-            alias_defs: vec![],
-            functions: vec![
-                ("_comp".into(), "_comp () { :; }".into()),
-                ("prompt_x".into(), "prompt_x () { :; }".into()),
-                ("ok".into(), "ok () { echo 'q'; }".into()),
-            ],
-        };
-        let inherited = |k: &str| match k {
-            "PATH" => Some("/venv/bin:/usr/bin:/bin".to_string()),
-            "SAME" => Some("x".to_string()),
-            _ => None,
-        };
-        let s = render(&c, &inherited, &Default::default(), &|k| k == "PINNED");
-        assert!(
-            s.contains("export PATH='/venv/bin:/opt/new/bin:/usr/bin:/bin'"),
-            "{s}"
-        );
-        assert!(s.contains("export NEW='it'\\''s'"), "{s}");
-        for bad in [
-            "SAME",
-            "PINNED",
-            "PS1",
-            "PROXY",
-            "MY_API_KEY",
-            "bad-name",
-            "_comp",
-            "prompt_x",
-            "echo no",
-        ] {
-            assert!(!s.contains(bad), "{bad}: {s}");
-        }
-        assert!(
-            s.contains("alias 'll'='ls -l'") && s.contains("eval 'ok () { echo '\\''q'\\''; }'"),
-            "{s}"
-        );
-        assert_eq!(merge_path(None, "/a::/b:/a"), "/a:/b");
-    }
-
-    #[test]
-    fn an_activated_venv_stays_first_after_path_helper() {
-        // macOS's login shell runs path_helper: system directories first, the
-        // inherited entries (the venv) moved after them.
-        assert_eq!(
-            merge_path(
-                Some("/venv/bin:/usr/bin:/bin"),
-                "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/venv/bin"
-            ),
-            "/venv/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin"
-        );
-    }
-
-    #[test]
-    fn startup_files_extend_a_bare_launch_path() {
-        // Launched from a GUI with a bare PATH: what the startup files add
-        // comes before the system directories, as they put it.
-        assert_eq!(
-            merge_path(
-                Some("/usr/bin:/bin"),
-                "/opt/homebrew/bin:/Users/u/.cargo/bin:/usr/bin:/bin"
-            ),
-            "/opt/homebrew/bin:/Users/u/.cargo/bin:/usr/bin:/bin"
-        );
-        assert_eq!(merge_path(Some("/usr/bin"), "/usr/bin:/x"), "/usr/bin:/x");
-    }
-}
+pub(crate) mod tests;

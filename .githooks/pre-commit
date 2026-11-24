@@ -26,12 +26,22 @@ fi
 
 # --- no debug leftovers in Rust source --------------------------------------
 # A committed todo!()/unimplemented!() panics at runtime and dbg!() is never
-# meant to ship. Comment lines are ignored.
-if git diff --cached --diff-filter=ACM -U0 -- '*.rs' \
-    | grep -E '^\+' | grep -vE '^\+\s*//' \
-    | grep -nE 'todo!\(|unimplemented!\(|dbg!\('; then
-    echo "error: staged Rust contains todo!(), unimplemented!() or dbg!()" >&2
-    status=1
+# meant to ship. Comment lines are ignored, and so are lines this commit only
+# moves (a test module to its own file): they were already there.
+debug_removed=$(git diff --cached -U0 -- '*.rs' | grep -E '^-[^-]' | sed -e 's/^-//' -e 's/^[[:space:]]*//')
+debug_added=$(git diff --cached --diff-filter=ACM -U0 -- '*.rs' \
+    | grep -E '^\+[^+]' | grep -vE '^\+\s*//' \
+    | grep -E 'todo!\(|unimplemented!\(|dbg!\(' || true)
+if [ -n "$debug_added" ]; then
+    new_debug=$(printf '%s\n' "$debug_added" | while IFS= read -r line; do
+        trimmed=$(printf '%s\n' "$line" | sed -e 's/^+//' -e 's/^[[:space:]]*//')
+        printf '%s\n' "$debug_removed" | grep -qxF -- "$trimmed" || printf '%s\n' "$line"
+    done)
+    if [ -n "$new_debug" ]; then
+        printf '%s\n' "$new_debug" >&2
+        echo "error: staged Rust contains todo!(), unimplemented!() or dbg!()" >&2
+        status=1
+    fi
 fi
 
 # --- keep `unsafe` where it belongs -----------------------------------------
@@ -98,6 +108,8 @@ while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
         */tests/*|*.md|src/secrets.rs|src/cloud/*|src/cost.rs|src/feedback.rs|src/memory.rs|src/share.rs) continue ;;
+        # Their test modules, moved to their own files.
+        src/secrets/tests.rs|src/cost/tests.rs|src/feedback/tests.rs|src/memory/tests.rs|src/share/tests.rs) continue ;;
         *.rs|*.py|*.toml|*.json|*.yaml|*.yml|*.sh) ;;
         *) continue ;;
     esac

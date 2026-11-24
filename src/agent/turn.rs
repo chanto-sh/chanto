@@ -63,9 +63,9 @@ impl Agent {
         end
     }
 
-    /// An error when `input` alone can't fit in the model's context window
-    /// beside the system prompt (counted up to half the window).
-    pub(super) fn oversized_input(&self, input: &str) -> Option<anyhow::Error> {
+    /// `input`'s tokens and the context window when it can't fit there beside
+    /// the system prompt (counted up to half the window).
+    pub fn oversized_tokens(&self, input: &str) -> Option<(u64, u64)> {
         let max = self.env.context_max();
         let tokens = llm::estimate_tokens(&[Message::user(input)]);
         let system = self
@@ -77,6 +77,12 @@ impl Agent {
         if max == 0 || tokens + system.min(max / 2) <= max {
             return None;
         }
+        Some((tokens, max))
+    }
+
+    /// An error when `input` alone can't fit in the model's context window.
+    pub(super) fn oversized_input(&self, input: &str) -> Option<anyhow::Error> {
+        let (tokens, max) = self.oversized_tokens(input)?;
         Some(anyhow::anyhow!(
             "The input is too large to send: ~{tokens} tokens, and the model's context is {max} tokens. Attach it as a file instead (save it and mention the path, so the model reads only what it needs) or trim it."
         ))
@@ -257,9 +263,6 @@ impl Agent {
             content.push_str(r);
         }
         if self.depth == 0 {
-            // Nothing changes files before the model's first reply, so the
-            // snapshot runs alongside the model call; file-changing tools wait.
-            self.env.wait_snapshot().await;
             let id = uuid::Uuid::new_v4().to_string();
             // A new prompt ends what /redo can bring back.
             self.env.redo.lock().unwrap().clear();
@@ -271,36 +274,18 @@ impl Agent {
                 prompt: input.lines().next().unwrap_or("").to_string(),
                 files: HashMap::new(),
             });
-            let env = self.env.clone();
-            *self.env.pending_snapshot.lock().unwrap() =
-                Some(tokio::task::spawn_blocking(move || {
-                    crate::util::timing("snapshot start");
-                    // After `/cd` out of the project, a snapshot of the old project
-                    // says nothing about this turn's files (and restoring it would
-                    // revert the user's own changes there): rewind uses the
-                    // turn's per-file copies instead.
-                    let moved = !permissions::normalize(&env.cwd())
-                        .starts_with(permissions::normalize(&env.root));
-                    let tree = if moved { None } else { env.shadow_snapshot() };
-                    crate::util::timing("snapshot done");
-                    if let Some(cp) = env
-                        .checkpoints
-                        .lock()
-                        .unwrap()
-                        .iter_mut()
-                        .find(|c| c.id == id)
-                    {
-                        cp.tree = tree;
-                    }
-                }));
+            // Nothing changes files before the model asks to, so the snapshot
+            // waits until then (`execute_calls`); a turn that only reads or
+            // answers never takes one.
+            self.env.defer_snapshot(id).await;
         }
         // Merge into a trailing user message (e.g. `!cmd` output, an interrupted turn)
         // so roles keep alternating for strict chat templates.
         let n_msgs = self.messages.len();
         match self.messages.last_mut() {
             Some(last) if last.role == Role::User && n_msgs > 1 => {
-                last.content.push_str("\n\n");
-                last.content.push_str(&content);
+                std::sync::Arc::make_mut(&mut last.content).push_str("\n\n");
+                std::sync::Arc::make_mut(&mut last.content).push_str(&content);
                 last.images.extend(images);
                 if self.depth == 0
                     && let Some(cp) = self.env.checkpoints.lock().unwrap().last_mut()
@@ -340,6 +325,13 @@ impl Agent {
         } else {
             guard.checks.clone()
         };
+        if verify {
+            for c in &guard.quality_checks {
+                if !verify_checks.contains(c) {
+                    verify_checks.push(c.clone());
+                }
+            }
+        }
         if let Some((extra, _)) = &forced {
             for c in extra {
                 if !verify_checks.contains(c) {
@@ -439,12 +431,23 @@ impl Agent {
                 }
             };
             if let Some(last) = self.messages.last_mut().filter(|m| m.role == Role::User) {
-                last.content.push_str(&format!(
+                std::sync::Arc::make_mut(&mut last.content).push_str(&format!(
                     "\n\n<system-reminder>Verified mode: when you finish, chanto runs {checks} and checks that existing tests were not deleted or weakened. \
                      Run them yourself before your final answer, and fix the code, not the tests. The user's instructions come first: \
                      if a check fails in code they told you to leave alone, leave it and say so in your answer.</system-reminder>"
                 ));
             }
+        }
+        // Subagents don't get this: they'd keep splitting work into more of themselves.
+        if self.depth == 0
+            && self.effort().as_deref() == Some("ultra")
+            && let Some(last) = self.messages.last_mut().filter(|m| m.role == Role::User)
+        {
+            std::sync::Arc::make_mut(&mut last.content).push_str(
+                "\n\n<system-reminder>Delegate on your own initiative: when work can run in parallel or a second \
+                 agent would improve the result, use the Task tool without waiting to be asked. A request from the \
+                 user not to delegate takes priority.</system-reminder>",
+            );
         }
         let max_turns = self
             .sub
@@ -652,31 +655,35 @@ impl Agent {
                     scope,
                     fast_full,
                 );
-                let vouched: Vec<String> = plan
-                    .runs
-                    .iter()
-                    .filter(|r| {
-                        self.check_runs.iter().any(|(cmd, seq, ok, _)| {
-                            *ok && *seq == self.edit_seq
-                                && (crate::guardrails::covers(cmd, &r.command)
-                                    || crate::guardrails::covers(cmd, &r.full))
+                let vouched: Vec<String> =
+                    plan.runs
+                        .iter()
+                        .filter(|r| {
+                            self.check_runs.iter().any(|(cmd, seq, ok, _, dir)| {
+                                *ok && *seq == self.edit_seq
+                                    && crate::guardrails::at_root(cmd, dir, &verify_root)
+                                        .is_some_and(|cmd| {
+                                            crate::guardrails::covers(&cmd, &r.command)
+                                                || crate::guardrails::covers(&cmd, &r.full)
+                                        })
+                            })
                         })
-                    })
-                    .map(|r| r.command.clone())
-                    .collect();
+                        .map(|r| r.command.clone())
+                        .collect();
                 // A check the agent ran itself this turn that failed: reuse its
                 // output rather than repeating a suite that can take minutes.
                 // Stale once anything was edited since, so those are dropped.
                 let mut reuse: Vec<crate::guardrails::CheckResult> = Vec::new();
                 for r in &plan.runs {
-                    for (cmd, seq, ok, out) in &self.check_runs {
+                    for (cmd, seq, ok, out, dir) in &self.check_runs {
                         if !*ok
                             && *seq == self.edit_seq
-                            && (crate::guardrails::covers(cmd, &r.command)
-                                || crate::guardrails::covers(cmd, &r.full))
+                            && let Some(cmd) = crate::guardrails::at_root(cmd, dir, &verify_root)
+                            && (crate::guardrails::covers(&cmd, &r.command)
+                                || crate::guardrails::covers(&cmd, &r.full))
                         {
                             reuse.push(crate::guardrails::CheckResult {
-                                command: cmd.clone(),
+                                command: cmd,
                                 ok: false,
                                 output: out.clone(),
                                 secs: 0.0,
@@ -690,13 +697,17 @@ impl Agent {
                 let hung = plan.runs.iter().find_map(|r| {
                     self.check_timeouts
                         .iter()
-                        .find(|(cmd, seq, secs)| {
+                        .find(|(cmd, seq, secs, dir)| {
                             *seq == self.edit_seq
                                 && *secs >= timeout.as_secs().min(300)
-                                && (crate::guardrails::covers(&r.command, cmd)
-                                    || crate::guardrails::covers(cmd, &r.command))
+                                && crate::guardrails::at_root(cmd, dir, &verify_root).is_some_and(
+                                    |cmd| {
+                                        crate::guardrails::covers(&r.command, &cmd)
+                                            || crate::guardrails::covers(&cmd, &r.command)
+                                    },
+                                )
                         })
-                        .map(|(_, _, secs)| crate::guardrails::CheckResult {
+                        .map(|(_, _, secs, _)| crate::guardrails::CheckResult {
                             command: r.command.clone(),
                             ok: false,
                             output: format!("timed out after {secs}s (your own run)"),
@@ -971,9 +982,10 @@ impl Agent {
                         .filter(|r| r.command != r.full)
                         .map(|r| r.command.as_str())
                         .filter(|cmd| {
-                            !self.check_runs.iter().any(|(run, seq, ok, _)| {
+                            !self.check_runs.iter().any(|(run, seq, ok, _, dir)| {
                                 *ok && *seq == self.edit_seq
-                                    && (crate::guardrails::covers(run, cmd)
+                                    && (crate::guardrails::at_root(run, dir, &verify_root)
+                                        .is_some_and(|run| crate::guardrails::covers(&run, cmd))
                                         || !scoped_to_tests(run))
                             })
                         })
@@ -1209,7 +1221,7 @@ impl Agent {
                         .rev()
                         .find(|m| m.role == Role::Tool)
                 {
-                    m.content
+                    std::sync::Arc::make_mut(&mut m.content)
                         .push_str(&format!("\n\n<system-reminder>\n{c}\n</system-reminder>"));
                 }
             }
@@ -1232,8 +1244,8 @@ impl Agent {
                 else {
                     continue;
                 };
-                m.content.push_str("\n\n");
-                m.content
+                std::sync::Arc::make_mut(&mut m.content).push_str("\n\n");
+                std::sync::Arc::make_mut(&mut m.content)
                     .push_str(&crate::loopwatch::off_project_note(&what));
             }
             // Loop guard: identical calls in a row, the same failure again and
@@ -1247,7 +1259,7 @@ impl Agent {
                     (
                         m.tool_call_id.clone().unwrap_or_default(),
                         m.content.starts_with("Error") || m.content.starts_with("Blocked"),
-                        m.content.clone(),
+                        String::clone(&m.content),
                     )
                 })
                 .collect();

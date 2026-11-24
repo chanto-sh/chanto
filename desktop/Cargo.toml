@@ -1,6 +1,6 @@
 [package]
 name = "chanto-desktop"
-version = "0.1.7"
+version = "0.1.25"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,7 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 muda = "0.21"
-rfd = "0.17"
+rfd = "0.18"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tao = "0.37"

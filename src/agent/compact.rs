@@ -156,8 +156,9 @@ impl Agent {
                     .chars()
                     .take(120)
                     .collect::<String>();
-                m.content =
-                    format!("[old tool result cleared to save context; first line was: {first}]");
+                m.set_content(format!(
+                    "[old tool result cleared to save context; first line was: {first}]"
+                ));
                 cleared = true;
                 self.reads.clear();
             }
@@ -171,7 +172,8 @@ impl Agent {
         for m in self.messages[..last_user].iter_mut() {
             if !m.images.is_empty() {
                 m.images.clear();
-                m.content.push_str(" [image removed to save context]");
+                std::sync::Arc::make_mut(&mut m.content)
+                    .push_str(" [image removed to save context]");
                 cleared = true;
             }
         }
@@ -233,7 +235,7 @@ impl Agent {
             Some(m) if m.role == Role::User && self.messages.len() > 2 => {
                 let mut m = m.clone();
                 if m.content.len() > budget_chars / 2 {
-                    m.content = crate::util::truncate_middle(&m.content, budget_chars / 2);
+                    m.set_content(crate::util::truncate_middle(&m.content, budget_chars / 2));
                 }
                 Some(m)
             }
@@ -267,7 +269,7 @@ impl Agent {
                 if (m.role == Role::Tool || m.content.len() > per_tool * 2)
                     && m.content.len() > per_tool
                 {
-                    m.content = crate::util::truncate_middle(&m.content, per_tool);
+                    m.set_content(crate::util::truncate_middle(&m.content, per_tool));
                 }
             }
             per_tool /= 2;
@@ -323,7 +325,7 @@ impl Agent {
                 // images (and any other fields) are preserved.
                 cont.push_str("\n\nThe user's latest message follows.\n\n");
                 cont.push_str(&p.content);
-                p.content = cont;
+                p.set_content(cont);
                 self.messages.push(p);
             }
             None => {

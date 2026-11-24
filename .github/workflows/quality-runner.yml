@@ -1,0 +1,74 @@
+name: quality runner
+# Offers free runner capacity to Chanto cloud for the agents in
+# .chanto/agents/: the queue lives in cloud, the work happens here. The
+# repository is public, so these minutes cost nothing, and unlike
+# cloud-hosted runners these VMs can reach OpenCode Go.
+#
+# Each job keeps taking runs for 24 minutes, so a queued run starts within
+# about a quarter of an hour and a run is never interrupted by the window. The
+# concurrency group below means only one job holds the runner at a time; the
+# next one starts as soon as it ends. Runs themselves are reported in the cloud
+# dashboard, not here, so this workflow is not a required check.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+concurrency:
+  # One job per runner identity: two processes claiming with the same token
+  # would take the same run twice.
+  group: quality-runner
+  cancel-in-progress: false
+permissions:
+  contents: read
+env:
+  CHANTO_CLOUD_URL: ${{ vars.CHANTO_CLOUD_URL || 'https://api.chanto.sh' }}
+  # What the agents think with. The key never reaches their shell commands:
+  # the runner masks it and withholds it from anything a run starts.
+  CHANTO_MODEL: ${{ vars.CHANTO_MODEL || 'opencode-go/deepseek-v4.1-flash' }}
+jobs:
+  take-runs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The release binary, checked against its signature by install.sh.
+      - name: Install chanto
+        run: sh install.sh
+      # The agents' checks are `cargo fmt`, `clippy` and `test`, so the pinned
+      # toolchain and its components are installed before a run needs them.
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # A registered runner's own token, from the `chanto runner connect
+      # --registration-token` sign-up (see .chanto/agents/README.md).
+      - name: Restore the runner's registration
+        env:
+          CONNECTIONS: ${{ secrets.CHANTO_RUNNER_CONNECTIONS }}
+        run: |
+          if [ -z "$CONNECTIONS" ]; then
+            echo "::error::set the CHANTO_RUNNER_CONNECTIONS secret to the contents of ~/.chanto/runner/connections.json"
+            exit 1
+          fi
+          install -d -m 700 "$HOME/.chanto/runner"
+          (umask 077; printf '%s\n' "$CONNECTIONS" > "$HOME/.chanto/runner/connections.json")
+      - name: Take runs
+        env:
+          # OpenCode Go's Console key, which the provider reads as
+          # OPENCODE_API_KEY (Zen and Go share it).
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_GO_API_KEY }}
+        run: |
+          set +e
+          # SIGINT, not the default SIGTERM: the runner stops the run it holds
+          # and leaves it for the next window instead of dying with it.
+          timeout -s INT 24m "$HOME/.local/bin/chanto" runner connect "$CHANTO_CLOUD_URL" \
+            --label gha --own-model --mode bypassPermissions
+          code=$?
+          set -e
+          # 124: the window ended, with the run (if any) back in the queue.
+          [ "$code" = 0 ] || [ "$code" = 124 ] || exit "$code"

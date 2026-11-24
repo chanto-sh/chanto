@@ -365,7 +365,17 @@ fn authorize_url(
     if let Some(s) = scope {
         params.push(("scope", s));
     }
-    Ok(reqwest::Url::parse_with_params(&meta.authorization_endpoint, &params)?.to_string())
+    let url = reqwest::Url::parse_with_params(&meta.authorization_endpoint, &params)?;
+    // It goes to the system's URL opener, and a server chooses it: `file:` or an
+    // app's own scheme would open something else entirely.
+    let loopback = matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"));
+    if !(url.scheme() == "https" || (url.scheme() == "http" && loopback)) {
+        bail!(
+            "the server's authorization address isn't https: {}",
+            meta.authorization_endpoint
+        );
+    }
+    Ok(url.to_string())
 }
 
 const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>chanto</title><body style=\"font-family:system-ui;padding:3em\"><h2>Logged in</h2><p>You can close this tab and return to the terminal.</p>";
@@ -636,56 +646,7 @@ pub(crate) fn try_open_browser(url: &str) -> std::io::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn www_authenticate_params() {
-        let h = r#"Bearer realm="mcp", resource_metadata="https://x.dev/.well-known/oauth-protected-resource", scope=read"#;
-        assert_eq!(
-            www_auth_param(h, "resource_metadata").as_deref(),
-            Some("https://x.dev/.well-known/oauth-protected-resource")
-        );
-        assert_eq!(www_auth_param(h, "scope").as_deref(), Some("read"));
-        assert_eq!(www_auth_param(h, "error"), None);
-    }
-
-    #[test]
-    fn pkce_is_s256() {
-        use base64::Engine;
-        use sha2::Digest;
-        let (v, c) = pkce();
-        assert!(v.len() >= 43);
-        assert_eq!(
-            c,
-            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                .encode(sha2::Sha256::digest(v.as_bytes()))
-        );
-    }
-
-    /// Live check against a real server (discovery + registration, no login):
-    /// `MCP_DISCOVER_URL=https://… cargo test live_discovery -- --ignored --nocapture`
-    #[tokio::test]
-    #[ignore]
-    async fn live_discovery() {
-        let url = std::env::var("MCP_DISCOVER_URL").expect("set MCP_DISCOVER_URL");
-        let http = crate::http::client();
-        let www = probe(&http, &url).await;
-        println!("WWW-Authenticate: {www:?}");
-        let meta = discover(&http, &url, www.as_deref()).await.unwrap();
-        println!("{meta:#?}");
-        if let Some(reg) = &meta.registration_endpoint {
-            let r = register(
-                &http,
-                reg,
-                "http://127.0.0.1:53682/callback",
-                meta.scopes.as_deref(),
-            )
-            .await;
-            println!(
-                "registration: {:?}",
-                r.map(|(id, secret)| (id, secret.is_some()))
-            );
-        }
-    }
-}
+#[cfg(test)]
+mod callback_tests;

@@ -26,6 +26,10 @@
 # GitHub gives the repository one budget shared by every ref, so a pull
 # request that stored its own copy evicted the one it and the other pull
 # requests restored, and each run started from an empty target directory.
+#
+# That push also keeps its release binary, keyed by commit and compiler, so a
+# pull request based on it restores its base instead of building it again.
+# A miss (a merge that changed no Rust, an evicted entry) builds it as before.
 name: perf
 on:
   push:
@@ -47,12 +51,13 @@ jobs:
   changes:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
     outputs:
       rust: ${{ steps.diff.outputs.rust }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -115,14 +120,16 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.MEASURE == 'true'
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
         if: env.MEASURE == 'true'
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         if: env.MEASURE == 'true'
         with:
           key: perf
@@ -146,7 +153,21 @@ jobs:
             echo "BENCH_TEMP=$temp"
             echo "BENCH_TARGET=$target"
             echo "BENCH_BIN=$bin"
+            # Part of the saved binary's key: a new stable Rust between main's
+            # build and the pull request's would otherwise be measured as a
+            # change in the pull request.
+            echo "RUSTC_VERSION=$(rustc --version | cut -d' ' -f2)"
           } >> "$GITHUB_ENV"
+      # The base is usually a commit main's own run already built: reuse that
+      # binary rather than spend the job's other half building it again.
+      # Measuring still happens here, on this runner, next to the head.
+      - name: Restore the base build
+        id: base-bin
+        if: ${{ env.MEASURE == 'true' && (env.BASE_SHA != '') }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/perf-bin
+          key: perf-bin-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ env.BASE_SHA }}
       # The gate's own tests are pure Python: run them before the builds.
       - name: Test the gate
         if: env.MEASURE == 'true'
@@ -156,10 +177,24 @@ jobs:
         run: |
           cargo build --release --locked ${{ matrix.cargo_flags }}
           cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-head"
+      # A push to main keeps its build for the pull requests based on it.
+      - name: Keep the build for pull requests
+        if: ${{ env.MEASURE == 'true' && github.event_name == 'push' }}
+        run: |
+          mkdir -p "$BENCH_TEMP/perf-bin"
+          cp "$BENCH_TEMP/chanto-head" "$BENCH_TEMP/perf-bin/chanto"
+      - if: ${{ env.MEASURE == 'true' && github.event_name == 'push' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/perf-bin
+          key: perf-bin-${{ matrix.os }}-${{ env.RUSTC_VERSION }}-${{ github.sha }}
+      - name: Use the saved base build
+        if: steps.base-bin.outputs.cache-hit == 'true'
+        run: cp "$BENCH_TEMP/perf-bin/chanto" "$BENCH_TEMP/chanto-base"
       # Built second, in the same target directory: the dependencies are
       # already compiled, so this is mostly the crate itself.
       - name: Build the base commit
-        if: ${{ env.MEASURE == 'true' && (env.BASE_SHA != '') }}
+        if: ${{ env.MEASURE == 'true' && (env.BASE_SHA != '') && steps.base-bin.outputs.cache-hit != 'true' }}
         run: |
           git worktree add --detach "$BENCH_TEMP/base" "$BASE_SHA"
           cargo build --release --locked ${{ matrix.cargo_flags }} \
@@ -167,6 +202,10 @@ jobs:
           cp "$BENCH_TARGET/release/$BENCH_BIN" "$BENCH_TEMP/chanto-base"
       # A warm run has nothing to compare: the head measures only against the
       # fixed ceilings, and that is what the pull request's own run does.
+      # Shared runners have noisy moments: a batch of samples can look
+      # significantly slower with nothing changed (macOS most of all). A
+      # failure is measured once more from scratch, and only a second
+      # failure fails the job; a real regression fails both times.
       - name: Measure
         if: ${{ env.MEASURE == 'true' && (github.event_name != 'push') }}
         run: |
@@ -174,11 +213,44 @@ jobs:
           if [ -f "$BENCH_TEMP/chanto-base" ]; then
             base=(--base "$BENCH_TEMP/chanto-base")
           fi
-          $PYTHON tests/perf/gate.py \
-            --head "$BENCH_TEMP/chanto-head" "${base[@]}" \
-            ${{ matrix.extra_args }} \
-            --json "$BENCH_TEMP/perf.json" \
-            --summary-md "$BENCH_TEMP/perf.md"
+          measure() {
+            $PYTHON tests/perf/gate.py \
+              --head "$BENCH_TEMP/chanto-head" "${base[@]}" \
+              ${{ matrix.extra_args }} \
+              --json "$BENCH_TEMP/perf.json" \
+              --summary-md "$BENCH_TEMP/perf.md"
+          }
+          if ! measure; then
+            echo "::notice title=Performance::Measuring again: a single failed comparison can be runner noise."
+            measure
+          fi
+      # Instruction counts and the prompt's size (tests/perf/exact.py): small
+      # changes that CPU time on a shared runner can't show. Linux only, since
+      # that's where valgrind runs.
+      - name: Exact costs
+        if: ${{ env.MEASURE == 'true' && github.event_name != 'push' && runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update -qq -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o DPkg::Lock::Timeout=120 valgrind >/dev/null
+          base=()
+          if [ -f "$BENCH_TEMP/chanto-base" ]; then
+            base=(--base "$BENCH_TEMP/chanto-base")
+          fi
+          # Instruction counts move about a percent between runs (thread
+          # scheduling, hash seeds), past the 0.5% tolerance: as with Measure,
+          # a failure is measured again before it fails the job.
+          if ! $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"; then
+            echo "::notice title=Exact costs::Measuring again: instruction counts vary a little between runs."
+            $PYTHON tests/perf/exact.py --head "$BENCH_TEMP/chanto-head" "${base[@]}"
+          fi
+      - name: Responsiveness
+        if: ${{ env.MEASURE == 'true' && github.event_name != 'push' }}
+        run: |
+          # Its ceilings are per runner; a failed comparison is measured again
+          # before it fails the job, as Measure and Exact costs already do.
+          if ! $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"; then
+            echo "::notice title=Responsiveness::Measuring again: a busy runner can cross a CPU ceiling."
+            $PYTHON tests/perf/responsive.py --bin "$BENCH_TEMP/chanto-head"
+          fi
       # A very long session and a very large tree (tests/perf/stress.py),
       # against the fake model. ripgrep and clangd make its Grep and
       # language-server checks real; it needs POSIX tools, so not Windows.
@@ -188,18 +260,26 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
           if [ "$RUNNER_OS" = "Linux" ]; then
-            sudo apt-get update -qq && sudo apt-get install -y -qq ripgrep clangd >/dev/null
+            sudo apt-get update -qq -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq -o DPkg::Lock::Timeout=120 ripgrep clangd >/dev/null
           else
             brew install ripgrep >/dev/null
           fi
-          $PYTHON tests/perf/stress.py --bin "$BENCH_TEMP/chanto-head" \
-            --json "$BENCH_TEMP/stress.json" --summary-md "$BENCH_TEMP/stress.md"
+          stress() {
+            $PYTHON tests/perf/stress.py --bin "$BENCH_TEMP/chanto-head" \
+              --json "$BENCH_TEMP/stress.json" --summary-md "$BENCH_TEMP/stress.md"
+          }
+          # Its checks sample processes by timing; as with Measure, one
+          # failure is run again before it fails the job.
+          if ! stress; then
+            echo "::notice title=Stress::Running again: a single failed run can be runner timing."
+            stress
+          fi
       - if: ${{ env.MEASURE == 'true' && !cancelled() && github.event_name != 'push' && runner.os != 'Windows' }}
         run: |
           if [ -f "$BENCH_TEMP/stress.md" ]; then cat "$BENCH_TEMP/stress.md" >> "$GITHUB_STEP_SUMMARY"; fi
       - name: Upload the report
         if: ${{ env.MEASURE == 'true' && (!cancelled() && github.event_name != 'push') }}
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: chanto-perf-${{ matrix.os }}
           path: ${{ runner.temp }}/perf.json

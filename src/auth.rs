@@ -58,22 +58,47 @@ fn path() -> PathBuf {
     crate::config::home_dir().join("auth.json")
 }
 
-fn load_all() -> BTreeMap<String, Credential> {
-    let mut all: BTreeMap<String, Credential> = std::fs::read(path())
+/// `auth.json` as stored: keychain entries are still placeholders.
+fn load_file() -> BTreeMap<String, Credential> {
+    std::fs::read(path())
         .ok()
         .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
-    // A placeholder is resolved from the keychain; one that can't be resolved
-    // (keychain wiped, or a copy on another machine) is treated as absent.
-    for (key, cred) in all.iter_mut() {
-        if matches!(cred, Credential::Keychain)
-            && let Some(real) = keychain::load(key).and_then(|b| serde_json::from_slice(&b).ok())
-        {
-            *cred = real;
+        .unwrap_or_default()
+}
+
+/// The real credential for `key`: a placeholder is resolved from the
+/// keychain, and one that can't be (keychain wiped, or a copy on another
+/// machine) is treated as absent.
+fn resolve(key: &str, cred: Credential) -> Option<Credential> {
+    match cred {
+        Credential::Keychain => keychain::load(key).and_then(|b| serde_json::from_slice(&b).ok()),
+        c => Some(c),
+    }
+}
+
+/// Every saved credential, resolved.
+fn load_all() -> BTreeMap<String, Credential> {
+    load_file()
+        .into_iter()
+        .filter_map(|(k, c)| resolve(&k, c).map(|c| (k, c)))
+        .collect()
+}
+
+/// `provider`'s login in use and the key it's saved under: the chosen named
+/// account when it's saved, else the default one. Only that entry is read
+/// from the keychain; each read is a round trip to the system's keychain
+/// service, and other logins don't matter here.
+fn active(provider: &str) -> Option<(String, Credential)> {
+    let mut file = load_file();
+    if let Some(a) = chosen_account(provider).filter(|a| a != DEFAULT_ACCOUNT) {
+        let key = account_key(provider, Some(&a));
+        if let Some(c) = file.remove(&key).and_then(|c| resolve(&key, c)) {
+            return Some((key, c));
         }
     }
-    all.retain(|_, c| !matches!(c, Credential::Keychain));
-    all
+    let key = provider.to_string();
+    let c = file.remove(&key).and_then(|c| resolve(&key, c))?;
+    Some((key, c))
 }
 
 fn save_all(all: &BTreeMap<String, Credential>) -> Result<()> {
@@ -273,9 +298,7 @@ pub fn accounts_table() -> String {
 }
 
 pub fn get(provider: &str) -> Option<Credential> {
-    let mut all = load_all();
-    let key = active_key(&all, provider);
-    all.remove(&key)
+    active(provider).map(|(_, c)| c)
 }
 
 /// Save a login as `provider`'s default, or as a named account.
@@ -438,8 +461,11 @@ pub async fn token(provider: &str) -> Result<String> {
 async fn token_inner(provider: &str) -> Result<String> {
     static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
     let _g = LOCK.lock().await;
-    let key = active_key(&load_all(), provider);
-    match load_all().remove(&key) {
+    let (key, cred) = match active(provider) {
+        Some((key, cred)) => (key, Some(cred)),
+        None => (provider.to_string(), None),
+    };
+    match cred {
         Some(Credential::ApiKey { key }) => Ok(key.expose().to_string()),
         Some(Credential::Oauth {
             access, expires, ..
@@ -582,13 +608,20 @@ pub fn providers_table() -> String {
 }
 
 /// `chanto login [provider]` / `chanto logout <provider>` / `chanto providers`.
-pub async fn cli(args: &[String]) -> Result<String> {
+///
+/// `print` gets what the command has to tell the user, so the only text that
+/// leaves here is written for that, never a value from the login itself.
+pub async fn cli(args: &[String], print: &(dyn Fn(&str) + Send + Sync)) -> Result<()> {
     let say = |m: &str| eprintln!("{m}");
+    let done = |m: String| -> Result<()> {
+        print(&m);
+        Ok(())
+    };
     if args
         .get(1)
         .is_some_and(|a| matches!(a.as_str(), "--help" | "-h" | "help"))
     {
-        return Ok(match args.first().map(String::as_str) {
+        return done(match args.first().map(String::as_str) {
             Some("logout") => "Usage: chanto logout <provider> [--as <name>]\n\nRemove credentials Chanto saved for a provider (`--as`: a named account). `chanto providers` lists them.".into(),
             _ => "Usage: chanto login <provider> [--as <name>] [--with-api-key]\n\nLog in to a provider: in the browser where it supports that, otherwise by pasting an API key (`--with-api-key` reads it from stdin). `--as <name>` saves it as a separate account (e.g. work and personal); pick one with `account = \"<name>\"` in the config or `/login <provider> <name>` in a session. `chanto providers` lists the providers and saved logins.".into(),
         });
@@ -635,23 +668,23 @@ pub async fn cli(args: &[String]) -> Result<String> {
             if let Some(extra) = args.get(1) {
                 anyhow::bail!("unknown argument `{extra}`; usage: chanto providers");
             }
-            Ok(format!("{}\n{}", providers_table(), accounts_table()))
+            done(format!("{}\n{}", providers_table(), accounts_table()))
         }
         Some("logout") => {
             let id = args
                 .get(1)
                 .context("usage: chanto logout <provider> [--as <name>]")?;
             if remove(&account_key(id, account))? {
-                return Ok(format!("Logged out of {id}{as_note}."));
+                return done(format!("Logged out of {id}{as_note}."));
             }
             if crate::providers::find(id).is_none() {
                 anyhow::bail!("unknown provider {id}; see `chanto providers`");
             }
-            Ok(format!("Wasn't logged in to {id}{as_note}."))
+            done(format!("Wasn't logged in to {id}{as_note}."))
         }
         Some("login") => {
             let Some(id) = args.get(1) else {
-                return Ok(format!(
+                return done(format!(
                     "{}\n{}\nUsage: chanto login <provider> [--as <name>]",
                     providers_table(),
                     accounts_table()
@@ -674,7 +707,7 @@ pub async fn cli(args: &[String]) -> Result<String> {
                     bail!("{}", VERTEX_LOGIN);
                 }
                 set_as(h.id, account, Credential::ApiKey { key: key.into() })?;
-                return Ok(format!("Saved key for {}{as_note}.", h.id));
+                return done(format!("Saved key for {}{as_note}.", h.id));
             }
             match h.id {
                 "vertex" => bail!("{}", VERTEX_LOGIN),
@@ -696,193 +729,22 @@ pub async fn cli(args: &[String]) -> Result<String> {
                 }
             }
             if let Some(a) = account {
-                return Ok(format!(
+                return done(format!(
                     "Logged in to {}{as_note}. Use it with `account = \"{a}\"` in the config, or `/login {} {a}` in a session.",
                     h.name, h.id
                 ));
             }
-            Ok(format!(
+            done(format!(
                 "Logged in to {}. Use it as `{}/<model>` (for example `chanto --model {}/<model>`), or list models with /models.",
                 h.name, h.id, h.id
             ))
         }
-        _ => Ok(providers_table()),
+        _ => done(providers_table()),
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
+mod tests;
 
-    #[test]
-    fn credentials_round_trip_with_private_permissions() {
-        let _g = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let d = std::env::temp_dir().join(format!("chanto-auth-{}", std::process::id()));
-        // SAFETY: test-only, serialized by TEST_HOME_LOCK.
-        let previous = std::env::var_os("CHANTO_HOME");
-        unsafe { std::env::set_var("CHANTO_HOME", &d) };
-        set(
-            "groq",
-            Credential::ApiKey {
-                key: "gsk_test".into(),
-            },
-        )
-        .unwrap();
-        assert!(
-            matches!(get("groq"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_test")
-        );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            assert_eq!(
-                std::fs::metadata(path()).unwrap().permissions().mode() & 0o777,
-                0o600
-            );
-        }
-        assert!(remove("groq").unwrap() && get("groq").is_none());
-        let id = device_id().unwrap();
-        assert_eq!(id, device_id().unwrap(), "device id is stable");
-        unsafe {
-            if let Some(previous) = previous {
-                std::env::set_var("CHANTO_HOME", previous);
-            } else {
-                std::env::remove_var("CHANTO_HOME");
-            }
-        }
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn keychain_keeps_secrets_out_of_the_file() {
-        let _g = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let d = std::env::temp_dir().join(format!("chanto-keychain-{}", std::process::id()));
-        let prev_home = std::env::var_os("CHANTO_HOME");
-        let prev_kc = std::env::var_os("CHANTO_KEYCHAIN");
-        // SAFETY: test-only, serialized by TEST_HOME_LOCK.
-        unsafe {
-            std::env::set_var("CHANTO_HOME", &d);
-            std::env::set_var("CHANTO_KEYCHAIN", "1");
-        }
-        keychain::reset();
-        set(
-            "groq",
-            Credential::ApiKey {
-                key: "gsk_secret".into(),
-            },
-        )
-        .unwrap();
-        let raw = std::fs::read_to_string(path()).unwrap();
-        assert!(
-            !raw.contains("gsk_secret"),
-            "the secret must not be in the file: {raw}"
-        );
-        assert!(raw.contains("keychain"), "a placeholder is written: {raw}");
-        assert!(
-            matches!(get("groq"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_secret")
-        );
-        assert!(remove("groq").unwrap() && get("groq").is_none());
-        // SAFETY: test-only, serialized by TEST_HOME_LOCK.
-        unsafe {
-            match prev_home {
-                Some(v) => std::env::set_var("CHANTO_HOME", v),
-                None => std::env::remove_var("CHANTO_HOME"),
-            }
-            match prev_kc {
-                Some(v) => std::env::set_var("CHANTO_KEYCHAIN", v),
-                None => std::env::remove_var("CHANTO_KEYCHAIN"),
-            }
-        }
-        keychain::reset();
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[tokio::test]
-    async fn named_accounts_sit_beside_the_default_login() {
-        let _g = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let d =
-            std::env::temp_dir().join(format!("chanto-accounts-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&d).unwrap();
-        // An auth.json from before accounts existed.
-        std::fs::write(d.join("auth.json"), r#"{"groqtest": {"type": "api_key", "key": "gsk_personal"}, "remote:box": {"type": "remote", "url": "https://x", "token": "t"}}"#).unwrap();
-        let previous = std::env::var_os("CHANTO_HOME");
-        // SAFETY: test-only, serialized by TEST_HOME_LOCK.
-        unsafe { std::env::set_var("CHANTO_HOME", &d) };
-        assert!(
-            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_personal")
-        );
-        assert_eq!(
-            account_label("groqtest"),
-            None,
-            "no named accounts: nothing to show"
-        );
-        assert!(
-            cli(&[
-                "login".into(),
-                "groqtest".into(),
-                "--as".into(),
-                "bad name".into()
-            ])
-            .await
-            .is_err()
-        );
-        set_as(
-            "groqtest",
-            Some("work"),
-            Credential::ApiKey {
-                key: "gsk_work".into(),
-            },
-        )
-        .unwrap();
-        // The file keeps the old shape: the default login is still a plain entry.
-        let raw: Value =
-            serde_json::from_slice(&std::fs::read(d.join("auth.json")).unwrap()).unwrap();
-        assert_eq!(raw["groqtest"]["key"], "gsk_personal");
-        assert_eq!(raw["groqtest@work"]["key"], "gsk_work");
-        assert_eq!(
-            accounts().get("groqtest").unwrap(),
-            &vec!["default".to_string(), "work".to_string()]
-        );
-        assert!(!accounts().contains_key("remote:box"));
-        assert_eq!(account_label("groqtest").as_deref(), Some("default"));
-        assert!(
-            switch_account("groqtest", "nope")
-                .unwrap_err()
-                .to_string()
-                .contains("default, work")
-        );
-        switch_account("groqtest", "work").unwrap();
-        assert!(
-            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_work")
-        );
-        assert_eq!(token("groqtest").await.unwrap(), "gsk_work");
-        assert_eq!(account_label("groqtest").as_deref(), Some("work"));
-        // No table in the failure messages: if it is wrong it may hold a key.
-        let table = accounts_table();
-        assert!(table.contains("*work"), "the table marks `work` active");
-        assert!(!table.contains("gsk_"), "the table shows a key");
-        switch_account("groqtest", DEFAULT_ACCOUNT).unwrap();
-        assert!(
-            matches!(get("groqtest"), Some(Credential::ApiKey { key }) if key.expose() == "gsk_personal")
-        );
-        let msg = cli(&["logout".into(), "groqtest".into(), "--as=work".into()])
-            .await
-            .unwrap();
-        assert_eq!(msg, "Logged out of groqtest as account \"work\".");
-        assert!(get("groqtest").is_some() && !accounts()["groqtest"].contains(&"work".to_string()));
-        SESSION_ACCOUNTS.lock().unwrap().remove("groqtest");
-        unsafe {
-            if let Some(previous) = previous {
-                std::env::set_var("CHANTO_HOME", previous);
-            } else {
-                std::env::remove_var("CHANTO_HOME");
-            }
-        }
-        let _ = std::fs::remove_dir_all(&d);
-    }
-}
+#[cfg(test)]
+mod cli_tests;

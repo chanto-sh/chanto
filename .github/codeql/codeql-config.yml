@@ -1,0 +1,11 @@
+# CodeQL reads product code. Test files pass model-controlled strings into
+# panic messages and fixture logs, which the security queries treat as sinks,
+# so a change to a helper surfaces as an alert in a test that ships nowhere.
+# Coverage leaves test files out for the same reason. Everything else stays in:
+# fuzz targets are excluded because they are harnesses, not shipped code.
+name: chanto
+paths-ignore:
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/tests/**"
+  - "fuzz/**"

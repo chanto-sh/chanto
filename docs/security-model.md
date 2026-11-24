@@ -64,11 +64,17 @@ Every tool call the model makes goes through one decision point before it runs.
   `--file`) and `git remote add`. Chanto follows `cd`, `pushd`, wrappers such
   as `env -C`, `sudo` and `timeout`, `sh -c` scripts, command substitutions
   and brace expansion. A target the shell computes when it runs (`$var`,
-  `$(…)`, `$'…'`) can't be checked, so it asks too. An allow rule that covers
+  `$(…)`, `$'…'`) can't be checked, and asks as well. An allow rule that covers
   the command still applies. In auto mode, extracting an archive or applying
   a patch (`tar x`, `unzip`, `patch`, `git apply`, `git am`) asks, because
   its input names the files it writes. Files that a script or program writes
   (an interpreter, a build, `cp -r dir/. .`) rely on the sandbox.
+- **Reading from outside tightens auto mode.** Once a session has used the web or
+  an MCP tool, commands that send data out (`curl -d`, `scp`, `nc` and the like) to
+  another machine need a human, because what came in can steer the model and the classifier
+  doesn't see it. Matching is by pattern, so this raises the bar rather than
+  closing the channel: only `sandbox.network` does that. Commands that hand out a
+  saved login, such as `gh auth token`, always need a human except in bypass.
 - **The auto-mode classifier** judges an action against what you typed: your
   prompts and the messages you send while the agent works, without the files
   you mention or the context Chanto adds to them. Only input a frontend
@@ -119,25 +125,27 @@ Landlock and seccomp on Linux, a write-restricted token on Windows):
   Maven and Gradle jars) are writable, like the project's own `node_modules`;
   toolchains, installed tools and their settings are not;
 - on macOS, paths inside those trees whose contents run later outside the
-  sandbox stay read-only: the project's `.git` (pinned, so it can't be renamed
-  away or created), its hooks, config and submodule/worktree git dirs, nested
+  sandbox stay read-only: the project's `.git` (pinned against renaming or
+  recreation), its hooks, config and submodule/worktree git dirs, nested
   repositories' hooks and config, agent and editor settings that carry hooks
   (`.chanto/`, `.claude/`, `.mcp.json`, `.husky/`, `.githooks/`,
   `.vscode/{settings,tasks}.json`), Chanto's own home, shell startup files and
   toolchain bins and settings;
-- on Linux those in-project guards are **not** enforced: Landlock can only
-  grant, and carving `.git` or `.chanto` out of the project would also take
-  away the right to create files at its root or in `.git`, which breaks
-  `git commit` and every build. Shell commands can write them; the
-  permission layer still keeps the file tools from changing them without
-  asking. The home guards apply only where a widened tree (`allow_write`,
-  `--add-dir`) covers them;
+- on Linux Landlock can only grant, and carving `.git` or `.chanto` out of the
+  project would also take away the right to create files at its root or in
+  `.git`, which breaks `git commit` and every build. So those files are compared
+  around each sandboxed command in the project, and a change is put
+  back and reported. The check runs when the command ends, so a process it
+  leaves running can change them afterwards, and nested repositories' hooks
+  aren't covered. The permission layer still keeps the file tools from changing
+  them without asking. The home guards apply only where a widened tree
+  (`allow_write`, `--add-dir`) covers them;
 - on macOS and Linux, reads of known credential locations are denied (private
   keys, cloud and registry logins, Chanto's own token files), and network
   access can be turned off or limited to an allowlist of domains (on Windows
-  the sandbox confines writes only). The macOS keychain stays reachable, so
-  credential helpers (`git credential-osxkeychain`, `gh auth token`) can still
-  hand out tokens;
+  the sandbox confines writes only). On macOS the keychain
+  is denied too, so credential helpers (`git credential-osxkeychain`, `gh auth
+  token`) can't hand out tokens inside the sandbox;
 - on macOS, local IPC that would reach a process outside the sandbox is
   blocked: no controlling terminal, no access to Chanto's or other terminal
   windows' ttys, no Apple Events, LaunchServices, clipboard or Shortcuts, and
@@ -176,7 +184,9 @@ servers, status-line and key-helper commands, environment variables, sandbox
 settings, allow rules, guardrail commands, plugins, language servers, the
 auto-mode classifier's `classifier_model` and `optimize.token_classifier`) are
 ignored until you trust the folder at a prompt. New `.mcp.json` servers also
-need approval. Installing a plugin asks first when it has hooks, MCP or
+need approval, and trusting a folder approves the servers it holds then: a server
+that's added or changed later doesn't start until you approve it with
+`/mcp enable`, unless you've set `enableAllProjectMcpServers` yourself. Installing a plugin asks first when it has hooks, MCP or
 language servers, or skills and commands that run `` !`cmd` `` blocks, register
 `hooks` or pre-approve `allowed-tools`; plugins with symlinks are refused.
 
@@ -228,7 +238,7 @@ unverified. Releases before v0.1.2 aren't signed, so the scripts no longer
 install them. A signature doesn't prove a release is the newest one, so a
 hostile host could serve an older signed release as "latest": `chanto upgrade`
 refuses to downgrade, and the scripts refuse a "latest" older than a floor
-they carry (v0.1.5, raised with each security release). Within the floor, or
+they carry (v0.1.6, raised with each security release). Within the floor, or
 for a version asked for by name, rollback remains possible. See [Verifying a
 release](reference.md#verifying-a-release).
 

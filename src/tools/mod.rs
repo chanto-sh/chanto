@@ -211,7 +211,16 @@ impl Registry {
     }
 
     pub fn specs(&self, filter: &dyn Fn(&str) -> bool) -> Vec<ToolSpec> {
-        self.tools
+        Self::specs_of(&self.tools, filter)
+    }
+
+    /// The hidden tools' definitions, for advertising some after all.
+    pub fn hidden_specs(&self, filter: &dyn Fn(&str) -> bool) -> Vec<ToolSpec> {
+        Self::specs_of(&self.hidden, filter)
+    }
+
+    fn specs_of(tools: &[Arc<dyn Tool>], filter: &dyn Fn(&str) -> bool) -> Vec<ToolSpec> {
+        tools
             .iter()
             .filter(|t| filter(&t.name()))
             .map(|t| ToolSpec {
@@ -238,60 +247,7 @@ pub fn arg_str<'a>(args: &'a Value, key: &str) -> Result<&'a str> {
         .ok_or_else(|| anyhow::anyhow!("missing required string parameter `{key}`"))
 }
 
-pub fn arg_bool(args: &Value, key: &str) -> bool {
-    match args.get(key) {
-        Some(Value::Bool(b)) => *b,
-        Some(Value::String(s)) => s == "true",
-        _ => false,
-    }
-}
-
-pub fn arg_u64(args: &Value, key: &str) -> Option<u64> {
-    match args.get(key) {
-        Some(Value::Number(n)) => n.as_u64().or_else(|| n.as_f64().map(|f| f as u64)),
-        Some(Value::String(s)) => s.parse().ok(),
-        _ => None,
-    }
-}
+pub use chanto_core::tools::{arg_bool, arg_u64};
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Advertised tool definitions ride along with every request, so their size
-    /// is a standing cost on every turn. Run with `--nocapture` for the
-    /// per-tool table; the budget keeps a new tool from quietly adding a couple
-    /// of hundred tokens to every call.
-    #[test]
-    fn advertised_tools_stay_within_a_prompt_budget() {
-        let reg = Registry::builtin();
-        let mut rows: Vec<(usize, String)> = reg
-            .tools
-            .iter()
-            .map(|t| {
-                let spec = crate::llm::ToolSpec {
-                    name: t.name(),
-                    description: t.description(),
-                    parameters: t.schema(),
-                };
-                let bytes = serde_json::to_string(&spec).map(|s| s.len()).unwrap_or(0);
-                (bytes, t.name())
-            })
-            .collect();
-        rows.sort_by_key(|a| std::cmp::Reverse(a.0));
-        let total: usize = rows.iter().map(|(bytes, _)| bytes).sum();
-        for (bytes, name) in &rows {
-            println!("{bytes:6}  {name}");
-        }
-        println!(
-            "{total:6}  total ({} tools, ~{} tokens)",
-            rows.len(),
-            total.div_ceil(4)
-        );
-        assert!(
-            total <= 22_000,
-            "advertised tools take {total} bytes (~{} tokens)",
-            total.div_ceil(4)
-        );
-    }
-}
+mod tests;

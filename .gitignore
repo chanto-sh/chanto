@@ -13,3 +13,10 @@ classifier/sources/gtfobins.jsonl
 
 # The TypeScript SDK type-check tools (sdk/typescript/package.json).
 sdk/typescript/node_modules/
+# wasm-bindgen's output for the browser build (web/README.md).
+/web/pkg/
+/sdk/typescript/dist/
+/sdk/typescript/package/
+/sdk/python/dist/
+/sdk/python/build/
+/sdk/python/*.egg-info/

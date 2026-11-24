@@ -1049,3 +1049,76 @@ fn a_local_servers_read_only_hint_is_only_advisory() {
         );
     }
 }
+
+/// A stdio server that waits `delay` seconds before answering, with tools
+/// and resources.
+pub(crate) fn slow_server(delay: f64) -> McpServerConfig {
+    let script = format!(
+        r#"sleep {delay}
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+*'"method":"initialize"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2025-06-18","capabilities":{{"tools":{{}},"resources":{{}}}},"serverInfo":{{"name":"sh"}}}}}}\n' "$id" ;;
+*'"method":"tools/list"'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[{{"name":"echo","inputSchema":{{"type":"object"}}}}]}}}}\n' "$id" ;;
+*'"id":'*) printf '{{"jsonrpc":"2.0","id":%s,"result":{{}}}}\n' "$id" ;;
+  esac
+done"#
+    );
+    McpServerConfig {
+        command: "sh".into(),
+        args: vec!["-c".into(), script],
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn servers_are_listed_at_once_and_gain_their_tools_as_they_connect() {
+    let servers: std::collections::BTreeMap<String, McpServerConfig> = [
+        ("slow".to_string(), slow_server(0.5)),
+        (
+            "off".to_string(),
+            McpServerConfig {
+                disabled: true,
+                ..slow_server(0.0)
+            },
+        ),
+    ]
+    .into();
+    let t = std::time::Instant::now();
+    let (clients, connecting) = start_all(&servers);
+    assert!(
+        t.elapsed() < Duration::from_millis(200),
+        "{:?}",
+        t.elapsed()
+    );
+    let status = |n: &str| clients.iter().find(|c| c.name == n).unwrap().status();
+    assert_eq!(status("slow"), Status::Connecting);
+    assert!(matches!(status("off"), Status::Off(_)));
+    let slow = clients.iter().find(|c| c.name == "slow").unwrap().clone();
+    assert!(slow.tool_names().is_empty() && !slow.has_resources());
+    let errs = connecting.await;
+    assert!(errs.is_empty(), "{errs:?}");
+    assert_eq!(slow.status(), Status::Connected);
+    assert_eq!(slow.tool_names(), vec!["mcp__slow__echo"]);
+    assert!(slow.has_resources());
+    slow.shutdown(Status::Off("test over".into()));
+}
+
+#[tokio::test]
+async fn a_server_that_misses_its_startup_limit_is_failed_and_reported() {
+    let servers: std::collections::BTreeMap<String, McpServerConfig> = [(
+        "late".to_string(),
+        McpServerConfig {
+            startup_timeout_sec: Some(0.3),
+            ..slow_server(30.0)
+        },
+    )]
+    .into();
+    let (clients, connecting) = start_all(&servers);
+    let errs = connecting.await;
+    assert_eq!(errs, vec!["MCP server `late` timed out during startup"]);
+    assert_eq!(
+        clients[0].status(),
+        Status::Failed("timed out after 0.3s during startup".into())
+    );
+}

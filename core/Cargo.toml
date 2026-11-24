@@ -1,0 +1,26 @@
+[package]
+name = "chanto-core"
+version = "0.1.25"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The parts of the chanto agent that build for every target, WebAssembly included. Released with chanto under the same version; no stable API of its own."
+homepage = "https://chanto.sh"
+keywords = ["chanto"]
+
+[dependencies]
+anyhow = "1.0.104"
+futures = { version = "0.3.34", default-features = false, features = ["std", "executor"] }
+globset = "0.4.20"
+ignore = "0.4.33"
+memchr = "2.8.3"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive", "rc"] }
+serde_json = "1.0.152"
+similar = "3.2.0"
+uuid = { version = "1.28.0", features = ["v4"] }
+
+# Tool call ids are random: in the browser the randomness comes from crypto.getRandomValues.
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
+uuid = { version = "1.28.0", features = ["v4", "js"] }

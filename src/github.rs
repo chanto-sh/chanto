@@ -4,7 +4,7 @@
 use anyhow::{Context, Result, bail};
 use std::path::Path;
 
-const WORKFLOWS: [(&str, &str); 2] = [
+const WORKFLOWS: [(&str, &str); 3] = [
     (
         ".github/workflows/chanto-review.yml",
         include_str!("../integrations/github/review.yml"),
@@ -12,6 +12,10 @@ const WORKFLOWS: [(&str, &str); 2] = [
     (
         ".github/workflows/chanto.yml",
         include_str!("../integrations/github/chanto.yml"),
+    ),
+    (
+        ".github/workflows/chanto-quality.yml",
+        include_str!("../integrations/github/quality.yml"),
     ),
 ];
 const POLICY: (&str, &str) = (
@@ -61,59 +65,13 @@ pub fn install(root: &Path) -> Result<String> {
          \n\
          Next:\n\
          \x20 - Commit these files to the default branch; review policy is read from each PR's base commit.\n\
-         \x20 - Pin chanto-sh/chanto/action@main to a reviewed commit.\n\
+         \x20 - The workflows pin chanto-sh/chanto-action to a release commit; update the pin to upgrade.\n\
          \x20 - Set `checks` in .chanto/review.toml if your project checks aren't detected; fixes need passing checks.\n\
+         \x20 - chanto-quality.yml needs no secret: run `chanto prime` and commit .chanto/quality.toml, and it checks every PR against it.\n\
          \x20 - Fork PRs are not reviewed (no secrets on `pull_request` from forks); see docs/reference.md, \"GitHub review bot\".",
     );
     Ok(out)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn tmp() -> std::path::PathBuf {
-        let nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("chanto-github-{}-{nanos}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn install_and_preserve_existing_workflows() {
-        let tmp = tmp();
-        let out = install(&tmp).unwrap();
-        assert!(out.contains("ANTHROPIC_API_KEY") && out.contains("Created .chanto/review.toml"));
-        let path = tmp.join(".github/workflows/chanto-review.yml");
-        let before = std::fs::read_to_string(&path).unwrap();
-        assert!(before.contains("pull_request:"));
-        assert!(!before.contains("pull_request_target"));
-        assert!(before.contains("permissions:") && before.contains("contents: read"));
-        let commands = std::fs::read_to_string(tmp.join(".github/workflows/chanto.yml")).unwrap();
-        assert!(
-            commands.contains("author_association")
-                && commands.contains("persist-credentials: false")
-        );
-        assert!(install(&tmp).is_err());
-        assert_eq!(std::fs::read_to_string(path).unwrap(), before);
-        std::fs::remove_dir_all(tmp).unwrap();
-    }
-
-    #[test]
-    fn keeps_existing_policy() {
-        let tmp = tmp();
-        std::fs::create_dir_all(tmp.join(".chanto")).unwrap();
-        std::fs::write(tmp.join(".chanto/review.toml"), "strictness = \"all\"\n").unwrap();
-        let out = install(&tmp).unwrap();
-        assert!(out.contains("Kept existing .chanto/review.toml"));
-        assert_eq!(
-            std::fs::read_to_string(tmp.join(".chanto/review.toml")).unwrap(),
-            "strictness = \"all\"\n"
-        );
-        std::fs::remove_dir_all(tmp).unwrap();
-    }
-}
+mod tests;

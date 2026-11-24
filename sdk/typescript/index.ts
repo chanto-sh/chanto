@@ -10,8 +10,14 @@
 //   const run = await h.startRun({ task: "add retries", cwd: "/path/to/repo" });
 //   for await (const ev of h.runEvents(run.id)) if (ev.type === "permission_request") await h.respondRun(run.id, { decision: "allow" });
 
-export type ChantoEvent = { type: string; [k: string]: any };
-export type Decision = "allow" | "allow_always" | "deny";
+import type { Decision, Mode, PermissionRequestEvent, QuestionEvent, StreamEvent } from "./types.js";
+
+// The API's types, generated from sdk/schema.json (the server's own wire types).
+export type * from "./types.js";
+/** An event on a session's stream. */
+export type ChantoEvent = StreamEvent;
+/** An event on a background run's stream (its own format: see sdk/README.md). */
+export type RunEvent = { type: string; [k: string]: any };
 
 export interface Tool {
   name: string;
@@ -29,11 +35,11 @@ export interface SessionOptions {
   cwd?: string;
   tools?: Tool[];
   model?: string;
-  mode?: string;
+  mode?: Mode;
   resume?: string;
   /** Default: deny, so nothing runs unattended unless you opt in. */
-  onPermission?: (ev: ChantoEvent) => Decision | Promise<Decision>;
-  onQuestion?: (ev: ChantoEvent) => string | Promise<string>;
+  onPermission?: (ev: PermissionRequestEvent) => Decision | Promise<Decision>;
+  onQuestion?: (ev: QuestionEvent) => string | Promise<string>;
 }
 
 export interface RunOptions {
@@ -52,9 +58,92 @@ export interface RunOptions {
   max_minutes?: number;
 }
 
+/** The oldest `chanto` these bindings work with. */
+export const MIN_SERVER_VERSION = "0.1.12";
+
+const versionParts = (v: string) => v.split("-")[0].split(".").slice(0, 3).map(Number);
+
+/** Whether `version` is older than `min`; false when it can't be read. */
+export function olderThan(version: string, min: string): boolean {
+  const [a, b] = [versionParts(version), versionParts(min)];
+  if (a.length < 3 || a.some(Number.isNaN)) return false;
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i];
+  return false;
+}
+
 export class Chanto {
+  /** The server `start` began; `close` stops it. */
+  private process?: { kill(): unknown };
+
   constructor(public url: string, public token: string) {
     this.url = url.replace(/\/$/, "");
+  }
+
+  /** Start a private `chanto serve` on a free port (Node only). Stop it with
+   * `close()`. It doesn't touch ~/.chanto/server.json, so a server you're running
+   * keeps working. */
+  static async start(options: { binary?: string; cwd?: string; model?: string; timeoutMs?: number } = {}): Promise<Chanto> {
+    const { spawn } = await import("node:child_process");
+    const { randomUUID } = await import("node:crypto");
+    const binary = options.binary ?? "chanto";
+    const token = randomUUID().replaceAll("-", "");
+    const args = ["serve", "--port", "0", ...(options.model ? ["--model", options.model] : [])];
+    const child = spawn(binary, args, {
+      cwd: options.cwd,
+      env: { ...process.env, CHANTO_SERVER_TOKEN: token, CHANTO_PRIVATE_SERVER: "1" },
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    const url = await new Promise<string>((resolve, reject) => {
+      let seen = "";
+      const fail = (why: string) => reject(new Error(`\`${binary} serve\` didn't start: ${why}`));
+      const timer = setTimeout(() => {
+        child.kill();
+        fail("timed out");
+      }, options.timeoutMs ?? 30_000);
+      child.on("error", (e) => {
+        clearTimeout(timer);
+        fail(e.message);
+      });
+      child.on("exit", () => {
+        clearTimeout(timer);
+        fail(seen.slice(-500));
+      });
+      child.stderr!.on("data", (d) => {
+        seen += d;
+        const m = seen.match(/listening on (\S+)/);
+        if (m) {
+          clearTimeout(timer);
+          resolve(m[1]);
+        }
+      });
+    });
+    const client = new Chanto(url, token);
+    client.process = child;
+    try {
+      await client.checkVersion();
+    } catch (e) {
+      client.close();
+      throw e;
+    }
+    return client;
+  }
+
+  /** Stop the server `start` began; does nothing after `connect`. */
+  close(): void {
+    this.process?.kill();
+    this.process = undefined;
+  }
+
+  /** The server's version, after checking it's new enough for this SDK. */
+  async checkVersion(): Promise<string> {
+    const r = await fetch(this.url + "/health").catch((e) => {
+      throw new Error(`no Chanto server at ${this.url}: ${e.message}`);
+    });
+    const { version = "" } = (await r.json()) as { version?: string };
+    if (olderThan(version, MIN_SERVER_VERSION)) {
+      throw new Error(`chanto ${version} is older than this SDK needs (${MIN_SERVER_VERSION}); run \`chanto upgrade\``);
+    }
+    return version;
   }
 
   /** Defaults come from ~/.chanto/server.json (Node only). */
@@ -68,7 +157,9 @@ export class Chanto {
       url ??= info.url;
       token ??= info.token;
     }
-    return new Chanto(url!, token!);
+    const client = new Chanto(url!, token!);
+    await client.checkVersion();
+    return client;
   }
 
   async request(method: string, p: string, body?: unknown): Promise<any> {
@@ -110,7 +201,7 @@ export class Chanto {
     return (await (await this.raw("POST", "/runs/bundles", bytes)).json()).bundle_id;
   }
   /** Logged events after `since`, then live ones; ends when the run finishes. */
-  async *runEvents(id: string, since = 0): AsyncGenerator<ChantoEvent> {
+  async *runEvents(id: string, since = 0): AsyncGenerator<RunEvent> {
     const r = await this.raw("GET", `/runs/${id}/events?since=${since}`);
     const reader = r.body!.getReader();
     const decoder = new TextDecoder();
@@ -195,7 +286,8 @@ export class Session {
       for (;;) {
         const { value, done } = await reader.read().catch(() => ({ value: undefined, done: true }));
         if (done) {
-          this.queue.push({ type: "turn_done", error: "event stream closed" });
+          // Ends the turn like the server's own turn_done; the cost so far is unknown.
+          this.queue.push({ type: "turn_done", error: "event stream closed", total_cost_usd: 0, price_unknown: true });
           this.wake?.();
           return;
         }
@@ -250,7 +342,7 @@ export class Session {
       yield ev;
       if (ev.type === "turn_done") {
         if (ev.error) throw new Error(ev.error);
-        this.lastResult = ev.result ?? ev.output;
+        this.lastResult = ev.result ?? ev.output ?? undefined;
         return;
       }
     }

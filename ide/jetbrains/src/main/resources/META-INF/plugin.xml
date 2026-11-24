@@ -1,5 +1,5 @@
 <idea-plugin>
-    <id>dev.chanto.ide</id>
+    <id>sh.chanto.ide</id>
     <name>Chanto</name>
     <vendor>chanto</vendor>
     <description><![CDATA[

@@ -30,6 +30,11 @@ class PublishedReleaseTests(unittest.TestCase):
                 "optionalDependencies": {"@chanto/cli-" + p: "1.2.3" for p in PLATFORMS},
             }
         self.records["https://registry.npmjs.org/@chanto%2fcli/latest"] = {"version": "1.2.3"}
+        self.records["https://registry.npmjs.org/@chanto%2fweb/1.2.3"] = {
+            "name": "@chanto/web",
+            "version": "1.2.3",
+            "dist": {"attestations": {"url": "https://registry.npmjs.org/attestations"}},
+        }
         self.records["https://crates.io/api/v1/crates/chanto/1.2.3"] = {
             "version": {"num": "1.2.3", "yanked": False},
         }
@@ -55,6 +60,14 @@ class PublishedReleaseTests(unittest.TestCase):
     def test_missing_npm_provenance_is_rejected(self):
         self.records["https://registry.npmjs.org/@chanto%2fcli/1.2.3"]["dist"] = {}
         self.assertTrue(any("provenance" in f for f in self.failures()))
+
+    def test_web_package_must_be_published_with_provenance(self):
+        del self.records["https://registry.npmjs.org/@chanto%2fweb/1.2.3"]
+        self.assertTrue(any("%2fweb" in f for f in self.failures()))
+        self.records["https://registry.npmjs.org/@chanto%2fweb/1.2.3"] = {
+            "name": "@chanto/web", "version": "1.2.3", "dist": {},
+        }
+        self.assertTrue(any("@chanto/web: missing provenance" in f for f in self.failures()))
 
     def test_stale_npm_latest_is_rejected(self):
         self.records["https://registry.npmjs.org/@chanto%2fcli/latest"]["version"] = "1.2.2"

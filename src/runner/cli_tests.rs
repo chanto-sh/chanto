@@ -268,9 +268,8 @@ async fn a_job_never_overlaps_itself_and_bad_jobs_are_refused() {
     .unwrap();
     let http = crate::http::client();
     let trigger = |job: &str| {
-        http.post(format!("{}/runs/jobs/{job}/trigger", d.url))
+        http.post(format!("{}/runs/jobs/{job}/trigger?trigger=api", d.url))
             .bearer_auth(SERVER_TOKEN)
-            .json(&json!({"trigger": "api"}))
             .send()
     };
     let r = trigger("waits").await.unwrap();

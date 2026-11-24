@@ -9,6 +9,12 @@ impl Agent {
         cancel: &CancellationToken,
     ) -> Result<Option<llm::ChatResponse>> {
         crate::util::timing("model call");
+        self.env.settle_model_info().await;
+        // The system prompt was written before they connected: it names the
+        // servers and carries their instructions.
+        if self.env.settle_mcp().await {
+            self.refresh_system();
+        }
         // Also recover an interrupted turn in the current process, without
         // requiring the user to reload the session from disk.
         crate::session::repair_tool_pairs(&mut self.messages);
@@ -17,6 +23,14 @@ impl Agent {
             return Ok(None);
         }
         let mut tools = self.env.tools.specs(&|n| self.tool_allowed(n));
+        // Startup hides the resource tools when no server it connected has
+        // resources; one that connected since (in the background, or after a
+        // login) may have.
+        if self.env.mcp.iter().any(|c| c.has_resources()) {
+            tools.extend(self.env.tools.hidden_specs(&|n| {
+                crate::mcp::RESOURCE_TOOLS.contains(&n) && self.tool_allowed(n)
+            }));
+        }
         let mut mcp_tools: Vec<(llm::ToolSpec, bool)> = Vec::new();
         for c in self.env.mcp.iter().chain(&self.sub.mcp) {
             c.refresh_if_stale().await;
@@ -69,8 +83,8 @@ impl Agent {
                 let note = crate::tools::tool_search::announcement(&new);
                 match self.messages.last_mut() {
                     Some(m) if matches!(m.role, Role::User | Role::Tool) => {
-                        m.content.push_str("\n\n");
-                        m.content.push_str(&note);
+                        std::sync::Arc::make_mut(&mut m.content).push_str("\n\n");
+                        std::sync::Arc::make_mut(&mut m.content).push_str(&note);
                     }
                     _ => self.messages.push(Message::user(note)),
                 }
@@ -162,7 +176,20 @@ impl Agent {
         let mut display = (!quiet && crate::hooks::has(&self.env, "MessageDisplay"))
             .then(|| crate::hooks::message_display(&self.env));
         let display_tx = Mutex::new(display.as_ref().map(|(tx, _)| tx.clone()));
+        let bash_allowed = self.tool_allowed("Bash");
         let mut on_delta = |d: Delta| {
+            if let Delta::ToolCall(name) = &d {
+                // A session's first shell command waits for the shell snapshot
+                // (the user's startup files: seconds on a busy setup). Starting
+                // it as soon as the model begins a Bash call hides some of that
+                // behind the rest of the reply. Sessions that never run Bash
+                // never start the login shell.
+                if bash_allowed && name == "Bash" && !env.shell_snapshot.initialized() {
+                    let env = env.clone();
+                    tokio::spawn(async move { crate::shell::snapshot::ensure(&env).await });
+                }
+                return;
+            }
             {
                 let mut ft = first_token.lock().unwrap();
                 if ft.is_none() {
@@ -186,6 +213,7 @@ impl Agent {
                     None => env.emit(Event::Text(t)),
                 },
                 Delta::Reasoning(t) => env.emit(Event::Reasoning(t)),
+                Delta::ToolCall(_) => {}
             }
         };
         // Show what the MessageDisplay hooks still hold, before the message ends.
@@ -213,7 +241,7 @@ impl Agent {
         let mut images_dropped = false;
         // Times this request waited out a usage limit (a reset that doesn't take mustn't loop forever).
         let mut limit_waits = 0;
-        let resp = loop {
+        let mut resp = loop {
             // Masked above (`message_redactor`).
             let fut = provider.chat_masked(&req, &mut on_delta);
             let r = tokio::select! {
@@ -391,13 +419,26 @@ impl Agent {
         } else {
             0.0
         };
+        // Whatever a provider reports: everything downstream adds these up.
+        const MOST_TOKENS: u64 = 1 << 40;
+        for n in [
+            &mut resp.usage.prompt_tokens,
+            &mut resp.usage.completion_tokens,
+            &mut resp.usage.cached_tokens,
+            &mut resp.usage.cache_write_tokens,
+        ] {
+            *n = (*n).min(MOST_TOKENS);
+        }
         if resp.usage.prompt_tokens > 0 {
-            self.last_prompt_tokens = resp.usage.prompt_tokens + resp.usage.completion_tokens;
+            self.last_prompt_tokens = resp
+                .usage
+                .prompt_tokens
+                .saturating_add(resp.usage.completion_tokens);
             self.msgs_at_last_usage = self.messages.len() + 1;
         }
-        self.total_in += resp.usage.prompt_tokens;
-        self.total_out += resp.usage.completion_tokens;
-        self.total_cached += resp.usage.cached_tokens;
+        self.total_in = self.total_in.saturating_add(resp.usage.prompt_tokens);
+        self.total_out = self.total_out.saturating_add(resp.usage.completion_tokens);
+        self.total_cached = self.total_cached.saturating_add(resp.usage.cached_tokens);
         let prefill = first_token
             .lock()
             .unwrap()

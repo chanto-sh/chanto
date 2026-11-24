@@ -228,23 +228,63 @@ fn picker_area(screen: ratatui::layout::Rect, labels: &[String]) -> ratatui::lay
     )
 }
 
+/// How to pick a model by hand when setup can't offer one.
+fn model_hint(provider: &str) -> String {
+    format!(
+        "Run `chanto models {provider}` to see its models, then `chanto setup --model {provider}/<model>`."
+    )
+}
+
+/// A provider's account models, or the reason setup can't offer them.
+async fn account_models(
+    provider: crate::llm::Provider,
+    p: &str,
+    name: &str,
+) -> Result<Vec<String>> {
+    let hint = model_hint(p);
+    let listed =
+        tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models()).await;
+    let models = match listed {
+        Ok(Ok(models)) => models,
+        Ok(Err(e)) => {
+            return Err(e).context(format!("{name} couldn't list its models. {hint}"));
+        }
+        Err(_) => bail!("{name} timed out listing its models. {hint}"),
+    };
+    if models.is_empty() {
+        bail!("{name} listed no models. {hint}");
+    }
+    Ok(models)
+}
+
 async fn choose_account_model(mut candidate: Candidate, plain: bool) -> Result<Candidate> {
-    if matches!(candidate.provider.as_str(), "chatgpt" | "chanto") && candidate.model.is_none() {
-        let (p, name) = if candidate.provider == "chatgpt" {
-            ("chatgpt", "ChatGPT")
-        } else {
-            ("chanto", "chanto cloud")
-        };
-        let provider = crate::llm::builtin_provider(p, "").with_context(|| {
+    if candidate.model.is_none() {
+        let p = candidate.provider.clone();
+        let hosted = crate::providers::find(&p);
+        let name = hosted.map(|h| h.name).unwrap_or(p.as_str());
+        // A cloud platform's endpoint comes from the account, not the catalog,
+        // so there is nothing to ask.
+        if hosted.is_some_and(|h| {
+            matches!(
+                h.kind,
+                crate::llm::ProviderKind::Bedrock
+                    | crate::llm::ProviderKind::Vertex
+                    | crate::llm::ProviderKind::Azure
+                    | crate::llm::ProviderKind::Foundry
+            )
+        }) {
+            bail!(
+                "{name} needs its endpoint in the config. {}",
+                model_hint(&p)
+            );
+        }
+        let provider = crate::llm::builtin_provider(&p, "").with_context(|| {
             format!(
                 "Run chanto login {} first",
-                if p == "chanto" { "cloud" } else { p }
+                if p == "chanto" { "cloud" } else { p.as_str() }
             )
         })?;
-        let models =
-            tokio::time::timeout(std::time::Duration::from_secs(10), provider.list_models())
-                .await
-                .with_context(|| format!("{name} catalog timed out; rerun chanto setup"))??;
+        let models = account_models(provider, &p, name).await?;
         let i = choose(
             &format!("Choose a {name} model from your account"),
             &models,
@@ -255,34 +295,31 @@ async fn choose_account_model(mut candidate: Candidate, plain: bool) -> Result<C
     Ok(candidate)
 }
 
+/// A picker row for one detected provider: its model, or the kind of catalog
+/// its account has, followed by where the credential came from.
+fn candidate_label(c: &Candidate) -> String {
+    format!(
+        "{}{} — {} ({})",
+        if c.recommended { "Recommended: " } else { "" },
+        c.model.as_deref().unwrap_or(match c.provider.as_str() {
+            "chanto" => "chanto cloud models",
+            "chatgpt" => "ChatGPT account catalog",
+            p => crate::providers::find(p).map(|h| h.name).unwrap_or(p),
+        }),
+        c.note,
+        c.source
+    )
+}
+
 pub async fn picker(plain: bool) -> Result<Candidate> {
     {
         let candidates = detect::detect().await;
         let mut usable: Vec<_> = candidates
             .into_iter()
-            .filter(|c| {
-                c.model.is_some()
-                    || (matches!(c.provider.as_str(), "chatgpt" | "chanto")
-                        && c.note == "Credential available")
-            })
+            .filter(|c| c.model.is_some() || c.note == "Credential available")
             .collect();
         usable.sort_by_key(|c| !matches!(c.provider.as_str(), "ollama" | "lmstudio" | "llamacpp"));
-        let mut labels: Vec<_> = usable
-            .iter()
-            .map(|c| {
-                format!(
-                    "{}{} — {} ({})",
-                    if c.recommended { "Recommended: " } else { "" },
-                    c.model.as_deref().unwrap_or(if c.provider == "chanto" {
-                        "chanto cloud models"
-                    } else {
-                        "ChatGPT account catalog"
-                    }),
-                    c.note,
-                    c.source
-                )
-            })
-            .collect();
+        let mut labels: Vec<_> = usable.iter().map(candidate_label).collect();
         labels.extend([
             "Log in with ChatGPT",
             "Log in with OpenRouter",
@@ -330,7 +367,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                 } else {
                     "openrouter"
                 };
-                crate::auth::cli(&["login".into(), p.into()]).await?;
+                crate::auth::cli(&["login".into(), p.into()], &|_| {}).await?;
                 let c = Candidate {
                     source: config::home_dir().join("auth.json").display().to_string(),
                     provider: p.into(),
@@ -350,7 +387,7 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                     .map(|h| h.id.to_string())
                     .collect::<Vec<_>>();
                 let p = &labels[choose("API key provider", &labels, plain)?];
-                crate::auth::cli(&["login".into(), p.clone(), "--key".into()]).await?;
+                crate::auth::cli(&["login".into(), p.clone(), "--key".into()], &|_| {}).await?;
                 let c = Candidate {
                     source: config::home_dir().join("auth.json").display().to_string(),
                     provider: p.clone(),
@@ -358,11 +395,12 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                     note: "Key saved".into(),
                     recommended: true,
                 };
+                let c = choose_account_model(c, plain).await?;
                 save_candidate(&c)?;
                 Ok(c)
             }
             3 => {
-                crate::auth::cli(&["login".into(), "openrouter".into()]).await?;
+                crate::auth::cli(&["login".into(), "openrouter".into()], &|_| {}).await?;
                 let free = openrouter_free_models().await?;
                 if free.is_empty() {
                     bail!(
@@ -389,7 +427,8 @@ pub async fn picker(plain: bool) -> Result<Candidate> {
                 println!(
                     "Create a free key at https://aistudio.google.com/apikey, then paste it below."
                 );
-                crate::auth::cli(&["login".into(), "gemini".into(), "--key".into()]).await?;
+                crate::auth::cli(&["login".into(), "gemini".into(), "--key".into()], &|_| {})
+                    .await?;
                 let provider = crate::llm::builtin_provider("gemini", "")
                     .context("The Gemini key wasn't saved; rerun chanto setup")?;
                 let mut models: Vec<String> = tokio::time::timeout(
@@ -877,80 +916,7 @@ async fn verify_connection(spec: &str) -> Verify {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn free_models_are_filtered_for_agents() {
-        let list = serde_json::json!({"data": [
-            {"id": "a/big:free", "context_length": 1_000_000, "supported_parameters": ["tools"]},
-            {"id": "b/coder:free", "context_length": 128_000, "supported_parameters": ["tools", "temperature"], "expiration_date": "2026-11-01T00:00:00Z"},
-            {"id": "c/no-tools:free", "context_length": 200_000, "supported_parameters": ["temperature"]},
-            {"id": "d/tiny-ctx:free", "context_length": 8_192, "supported_parameters": ["tools"]},
-            {"id": "e/content-safety:free", "context_length": 128_000, "supported_parameters": ["tools"]},
-            {"id": "f/paid", "context_length": 200_000, "supported_parameters": ["tools"]},
-        ]});
-        let got = free_agent_models(&list);
-        assert_eq!(
-            got.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
-            ["b/coder:free", "a/big:free"]
-        );
-        assert_eq!(
-            got[0].label(),
-            "b/coder:free — 128k context, free until 2026-11-01"
-        );
-        assert!(
-            gemini_chat_model("gemini-3-flash")
-                && !gemini_chat_model("gemini-embedding-001")
-                && !gemini_chat_model("gemini-2.5-flash-preview-tts")
-        );
-    }
-
-    #[test]
-    fn picker_is_centered_and_fits_content() {
-        let area = picker_area(
-            ratatui::layout::Rect::new(0, 0, 160, 50),
-            &["model".into(), "Sign in\nChatGPT".into()],
-        );
-        assert_eq!(area.width, 78);
-        assert_eq!(area.height, 5);
-        assert_eq!(area.x, 41);
-        assert_eq!(area.y, 22);
-        // A label wider than the screen wraps instead of being cut off.
-        let long = "x ".repeat(100);
-        assert_eq!(
-            picker_area(ratatui::layout::Rect::new(0, 0, 100, 50), &[long]).height,
-            5
-        );
-        assert_eq!(split_label("Free\nGemini"), (vec!["Free"], "Gemini"));
-        assert_eq!(split_label("model"), (vec![], "model"));
-    }
-
-    #[test]
-    fn saving_default_preserves_keys_comments_and_tables() {
-        let dir = std::env::temp_dir().join(format!("chanto-save-{}", uuid::Uuid::new_v4()));
-        let path = dir.join("config.toml");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(&path, "# my config\nmodel = \"old\" # keep this comment\nnum_ctx = 65536\n[compat]\nclaude = false\n").unwrap();
-        save_to(&path, "groq/openai/gpt-oss-120b", None, None).unwrap();
-        let text = std::fs::read_to_string(&path).unwrap();
-        let table: toml::Table = toml::from_str(&text).unwrap();
-        assert_eq!(table["model"].as_str(), Some("groq/openai/gpt-oss-120b"));
-        assert_eq!(table["num_ctx"].as_integer(), Some(65536));
-        assert_eq!(table["compat"]["claude"].as_bool(), Some(false));
-        assert!(text.contains("# my config") && text.contains("# keep this comment"));
-        save_to(
-            &path,
-            "local",
-            Some("openai"),
-            Some("http://localhost:1234/v1"),
-        )
-        .unwrap();
-        save_to(&path, "openai/gpt-5", Some("ollama"), None).unwrap();
-        let table: toml::Table = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert!(!table.contains_key("base_url"));
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-}
+mod tests;
 
 #[cfg(test)]
 mod setup_tests;

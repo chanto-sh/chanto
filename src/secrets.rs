@@ -82,13 +82,42 @@ impl std::fmt::Debug for Secret {
     }
 }
 
-/// Names of variables (and `.env` keys) that hold secrets.
+/// Names of variables (and `.env` keys) that hold secrets: any of these
+/// words anywhere in the name, ignoring case. Plain substring checks rather
+/// than a regex, since this runs for every environment variable at startup
+/// and compiling a case-insensitive Unicode regex costs more than all of them.
 fn strong_secret_name(name: &str) -> bool {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    let re = RE.get_or_init(|| {
-        Regex::new(r"(?i)(secret|token|passw(or)?d|passwd|pwd|api_?key|access_?key|private_?key|credential|auth|cookie|session_?key|signing_?key|client_?secret|webhook|dsn|database_url|conn(ection)?_?str)").unwrap()
-    });
-    re.is_match(name)
+    const WORDS: &[&str] = &[
+        "secret",
+        "token",
+        "password",
+        "passwd",
+        "pwd",
+        "api_key",
+        "apikey",
+        "access_key",
+        "accesskey",
+        "private_key",
+        "privatekey",
+        "credential",
+        "auth",
+        "cookie",
+        "session_key",
+        "sessionkey",
+        "signing_key",
+        "signingkey",
+        "webhook",
+        "dsn",
+        "database_url",
+        "conn_str",
+        "connstr",
+        "connection_str",
+        "connectionstr",
+    ];
+    // Case-insensitive matching folds the long s and the Kelvin sign to `s`
+    // and `k`; fold them the same way so neither slips a name past.
+    let lower = name.to_lowercase().replace('\u{17f}', "s");
+    WORDS.iter().any(|w| lower.contains(w))
 }
 
 pub fn is_secret_name(name: &str) -> bool {
@@ -312,26 +341,26 @@ type Walk = (
 static LAST_WALK: std::sync::Mutex<Option<Walk>> = std::sync::Mutex::new(None);
 
 /// Do the first prompt's refresh ahead of time, in the background: its env
-/// files, and the pattern set compiled, which otherwise costs the first
-/// redaction a couple of milliseconds on the turn's own thread.
+/// files, and the literals that decide which token patterns to run. Each
+/// pattern itself compiles the first time a text could match it.
 pub fn warm(root: &Path) {
-    for (_, re, _) in patterns() {
-        let _ = re.is_match("");
-    }
-    let _ = assignment().is_match("");
+    let _ = candidates("");
     refresh(root);
 }
 
 fn project_env_files(root: &Path) -> Vec<PathBuf> {
     let mtime = |d: &Path| std::fs::metadata(d).and_then(|m| m.modified()).ok();
-    if let Some((r, dirs, files)) = LAST_WALK.lock().unwrap().as_ref()
+    // Held through the walk: the first turn's refresh waits for the background
+    // one and reuses its result instead of walking the project a second time.
+    let mut last = LAST_WALK.lock().unwrap();
+    if let Some((r, dirs, files)) = last.as_ref()
         && r == root
         && dirs.iter().all(|(d, t)| mtime(d) == *t)
     {
         return files.clone();
     }
     let (seen, out) = walk_env_files(root);
-    *LAST_WALK.lock().unwrap() = Some((root.to_path_buf(), seen, out.clone()));
+    *last = Some((root.to_path_buf(), seen, out.clone()));
     out
 }
 
@@ -423,6 +452,13 @@ fn env_file_values(text: &str) -> Vec<(String, String)> {
 
 /// Collect known secret values: environment, Chanto's config and the project's env files.
 pub fn init(cfg: &crate::config::Config, root: &Path) {
+    init_known(cfg);
+    refresh(root);
+}
+
+/// Collect the secret values that need no walk of the project: environment and
+/// Chanto's config. [`refresh`] adds the project's env files.
+pub fn init_known(cfg: &crate::config::Config) {
     ENABLED.store(cfg.secrets.redact, std::sync::atomic::Ordering::Relaxed);
     *SESSION_CONFIG.write().unwrap_or_else(|e| e.into_inner()) = Some(cfg.secrets.clone());
     let mut values: BTreeMap<String, String> = BTreeMap::new();
@@ -477,9 +513,6 @@ pub fn init(cfg: &crate::config::Config, root: &Path) {
         }
     }
     *st = Arc::new(build(base, vec![], BTreeMap::new()));
-    drop(st);
-    drop(learned);
-    refresh(root);
 }
 
 /// Pick up new or changed env files in the project (cheap when nothing changed).
@@ -508,43 +541,237 @@ pub fn refresh(root: &Path) {
     *st = Arc::new(build(cur.base.clone(), extra, stamps));
 }
 
-/// Token formats worth masking wherever they appear: (label, regex, group to mask).
-/// A token whose alphabet has `-` can end in one, where `\b` can't match, so
-/// those end at the first character outside the alphabet instead.
-fn patterns() -> &'static [(&'static str, Regex, usize)] {
-    static P: OnceLock<Vec<(&'static str, Regex, usize)>> = OnceLock::new();
-    P.get_or_init(|| {
-        let p = |label: &'static str, re: &str, group: usize| (label, Regex::new(re).unwrap(), group);
-        vec![
-            p("PRIVATE_KEY", r"-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY( BLOCK)?-----|$)", 0),
-            p("AWS_ACCESS_KEY", r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", 0),
-            p("AWS_SECRET", r#"(?i)aws_?secret_?access_?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})"#, 1),
-            p("GITHUB_TOKEN", r"\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})\b", 0),
-            p("GITLAB_TOKEN", r"\bglpat-[A-Za-z0-9_-]{20,}", 0),
-            p("SLACK_TOKEN", r"\bxox[abposr]-[A-Za-z0-9-]{10,}", 0),
-            p("SLACK_WEBHOOK", r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+", 0),
-            p("STRIPE_KEY", r"\b(sk|rk)_(live|test)_[A-Za-z0-9]{16,}\b", 0),
-            p("ANTHROPIC_KEY", r"\bsk-ant-[A-Za-z0-9_-]{20,}", 0),
-            p("OPENAI_KEY", r"\bsk-(proj-|svcacct-)?[A-Za-z0-9_-]{32,}", 0),
-            p("GOOGLE_API_KEY", r"\b(AIza[0-9A-Za-z_-]{35})(?:[^0-9A-Za-z_-]|$)", 1),
-            p("NPM_TOKEN", r"\bnpm_[A-Za-z0-9]{36}\b", 0),
-            p("PYPI_TOKEN", r"\bpypi-AgE[A-Za-z0-9_-]{50,}", 0),
-            p("HF_TOKEN", r"\bhf_[A-Za-z]{34,}\b", 0),
-            p("SENDGRID_KEY", r"\b(SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)", 1),
-            p("DIGITALOCEAN_TOKEN", r"\bdop_v1_[a-f0-9]{64}\b", 0),
-            p("JWT", r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}", 0),
-            p("URL_PASSWORD", r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@", 1),
-            p("BEARER_TOKEN", r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{20,}=*)", 1),
-        ]
-    })
+/// Token formats worth masking wherever they appear: (label, regex, group to
+/// mask, literals). A token whose alphabet has `-` can end in one, where `\b`
+/// can't match, so those end at the first character outside the alphabet
+/// instead.
+///
+/// The literals are what a match can't do without, compared ignoring ASCII
+/// case: text with none of them can't match, so the regex isn't run (or even
+/// compiled). `ASSIGNMENT` has its own entry, the last one.
+const PATTERNS: [(&str, &str, usize, &[&str]); 20] = [
+    (
+        "PRIVATE_KEY",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----[\s\S]*?(-----END [A-Z ]*PRIVATE KEY( BLOCK)?-----|$)",
+        0,
+        &["-----BEGIN "],
+    ),
+    (
+        "AWS_ACCESS_KEY",
+        r"\b(AKIA|ASIA)[0-9A-Z]{16}\b",
+        0,
+        &["AKIA", "ASIA"],
+    ),
+    (
+        "AWS_SECRET",
+        r#"(?i)aws_?secret_?access_?key["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})"#,
+        1,
+        &["aws"],
+    ),
+    (
+        "GITHUB_TOKEN",
+        r"\b(gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{50,})\b",
+        0,
+        &["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_"],
+    ),
+    (
+        "GITLAB_TOKEN",
+        r"\bglpat-[A-Za-z0-9_-]{20,}",
+        0,
+        &["glpat-"],
+    ),
+    (
+        "SLACK_TOKEN",
+        r"\bxox[abposr]-[A-Za-z0-9-]{10,}",
+        0,
+        &["xox"],
+    ),
+    (
+        "SLACK_WEBHOOK",
+        r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+",
+        0,
+        &["hooks.slack.com/services/"],
+    ),
+    (
+        "STRIPE_KEY",
+        r"\b(sk|rk)_(live|test)_[A-Za-z0-9]{16,}\b",
+        0,
+        &["_live_", "_test_"],
+    ),
+    (
+        "ANTHROPIC_KEY",
+        r"\bsk-ant-[A-Za-z0-9_-]{20,}",
+        0,
+        &["sk-ant-"],
+    ),
+    (
+        "OPENAI_KEY",
+        r"\bsk-(proj-|svcacct-)?[A-Za-z0-9_-]{32,}",
+        0,
+        &["sk-"],
+    ),
+    (
+        "GOOGLE_API_KEY",
+        r"\b(AIza[0-9A-Za-z_-]{35})(?:[^0-9A-Za-z_-]|$)",
+        1,
+        &["AIza"],
+    ),
+    ("NPM_TOKEN", r"\bnpm_[A-Za-z0-9]{36}\b", 0, &["npm_"]),
+    (
+        "PYPI_TOKEN",
+        r"\bpypi-AgE[A-Za-z0-9_-]{50,}",
+        0,
+        &["pypi-AgE"],
+    ),
+    ("HF_TOKEN", r"\bhf_[A-Za-z]{34,}\b", 0, &["hf_"]),
+    (
+        "SENDGRID_KEY",
+        r"\b(SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43})(?:[^A-Za-z0-9_-]|$)",
+        1,
+        &["SG."],
+    ),
+    (
+        "DIGITALOCEAN_TOKEN",
+        r"\bdop_v1_[a-f0-9]{64}\b",
+        0,
+        &["dop_v1_"],
+    ),
+    (
+        "JWT",
+        r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}",
+        0,
+        &["eyJ"],
+    ),
+    (
+        "URL_PASSWORD",
+        r"\b[a-z][a-z0-9+.-]*://[^\s:/@]+:([^\s@/]{3,})@",
+        1,
+        &["://"],
+    ),
+    (
+        "BEARER_TOKEN",
+        r"(?i)\bbearer\s+([A-Za-z0-9._~+/-]{20,}=*)",
+        1,
+        &["bearer"],
+    ),
+    // `NAME_SECRET=value` / `"api_key": "value"` with a credential-looking value.
+    (
+        "ASSIGNMENT",
+        r#"(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY)[A-Z0-9_]*)["']?\s*[=:]\s*["']?([A-Za-z0-9/+_.=-]{16,})"#,
+        0,
+        &[
+            "secret",
+            "token",
+            "passw",
+            "apikey",
+            "api_key",
+            "accesskey",
+            "access_key",
+            "privatekey",
+            "private_key",
+        ],
+    ),
+];
+/// How many of `PATTERNS` are token formats; `ASSIGNMENT` follows them.
+const TOKENS: usize = 19;
+const ASSIGNMENT: usize = TOKENS;
+
+/// Pattern `i`, compiled the first time it's needed. Unless `text` holds a
+/// character that case-insensitive matching folds into ASCII (`ſ`, the Kelvin
+/// sign), its word boundaries are ASCII ones. Every `\b` in `PATTERNS` sits
+/// next to an ASCII word character, where an ASCII boundary is found wherever
+/// a Unicode one is, and also between it and a non-ASCII letter (so a token
+/// glued to `é` is masked too); on ASCII text the two are identical. A
+/// Unicode `\b` also stops the regex's DFAs on any non-ASCII text (a single
+/// em dash), leaving the slowest engine to scan the whole message.
+fn pattern(i: usize, text: &str) -> &'static Regex {
+    static ASCII: [OnceLock<Regex>; PATTERNS.len()] = [const { OnceLock::new() }; PATTERNS.len()];
+    static UNICODE: [OnceLock<Regex>; PATTERNS.len()] = [const { OnceLock::new() }; PATTERNS.len()];
+    #[cfg(test)]
+    let text = if tests::UNICODE_BOUNDARIES.with(|u| u.get()) {
+        "\u{17f}"
+    } else {
+        text
+    };
+    if folds_to_ascii(text) {
+        UNICODE[i].get_or_init(|| Regex::new(PATTERNS[i].1).unwrap())
+    } else {
+        ASCII[i].get_or_init(|| Regex::new(&PATTERNS[i].1.replace(r"\b", r"(?-u:\b)")).unwrap())
+    }
 }
 
-/// `NAME_SECRET=value` / `"api_key": "value"` with a credential-looking value.
-fn assignment() -> &'static Regex {
-    static R: OnceLock<Regex> = OnceLock::new();
-    R.get_or_init(|| {
-        Regex::new(r#"(?i)\b([A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_?KEY|ACCESS_?KEY|PRIVATE_?KEY)[A-Z0-9_]*)["']?\s*[=:]\s*["']?([A-Za-z0-9/+_.=-]{16,})"#).unwrap()
-    })
+/// Whether `s` has a character that case-insensitive matching folds into
+/// ASCII: `ſ` (to `s`) or the Kelvin sign (to `k`). Substring searches, which
+/// skip through the text, rather than a scan that decodes every character:
+/// this runs for each pattern on every message.
+fn folds_to_ascii(s: &str) -> bool {
+    s.contains('\u{17f}') || s.contains('\u{212a}')
+}
+
+/// Which of `PATTERNS` could match `s`: those whose literals appear in it.
+fn candidates(s: &str) -> [bool; PATTERNS.len()] {
+    static AC: OnceLock<(AhoCorasick, Vec<usize>)> = OnceLock::new();
+    let (ac, owner) = AC.get_or_init(|| {
+        let mut lits = Vec::new();
+        let mut owner = Vec::new();
+        for (i, (_, _, _, l)) in PATTERNS.iter().enumerate() {
+            for lit in l.iter() {
+                lits.push(*lit);
+                owner.push(i);
+            }
+        }
+        let ac = AhoCorasick::builder()
+            .ascii_case_insensitive(true)
+            .build(&lits)
+            .unwrap();
+        (ac, owner)
+    });
+    let mut hit = [false; PATTERNS.len()];
+    #[cfg(test)]
+    if tests::UNFILTERED.with(|u| u.get()) {
+        return [true; PATTERNS.len()];
+    }
+    // Case-insensitive regexes fold `ſ` to `s` and the Kelvin sign to `k`,
+    // which no ASCII comparison sees: text with either runs every pattern.
+    if folds_to_ascii(s) {
+        return [true; PATTERNS.len()];
+    }
+    for m in ac.find_overlapping_iter(s) {
+        let i = owner[m.pattern().as_usize()];
+        // A keyword or `://` alone is common in prose (the system prompt
+        // talks about secrets and tokens); these patterns also need what
+        // must follow it, checked here so their regexes, which are the
+        // costliest to compile, aren't built for text they can't match.
+        hit[i] |= match PATTERNS[i].0 {
+            "AWS_SECRET" | "ASSIGNMENT" => assignment_follows(&s[m.end()..]),
+            "URL_PASSWORD" => password_follows(&s[m.end()..]),
+            _ => true,
+        };
+    }
+    hit
+}
+
+/// Whether `rest`, just after a credential keyword, can go on as
+/// `ASSIGNMENT` and `AWS_SECRET` require: more of the name, an optional
+/// quote, then `=` or `:`.
+fn assignment_follows(rest: &str) -> bool {
+    let rest = rest.trim_start_matches(|c: char| c.is_ascii_alphanumeric() || c == '_');
+    let rest = rest.strip_prefix(['"', '\'']).unwrap_or(rest);
+    rest.trim_start().starts_with(['=', ':'])
+}
+
+/// Whether `rest`, just after `://`, starts with `user:password@` as
+/// `URL_PASSWORD` requires.
+fn password_follows(rest: &str) -> bool {
+    let user_end = rest.find(|c: char| c.is_whitespace() || matches!(c, ':' | '/' | '@'));
+    let Some(pw) = user_end
+        .filter(|&i| i > 0 && rest[i..].starts_with(':'))
+        .map(|i| &rest[i + 1..])
+    else {
+        return false;
+    };
+    pw.find(|c: char| c.is_whitespace() || matches!(c, '@' | '/'))
+        .is_some_and(|j| pw[j..].starts_with('@') && pw[..j].chars().count() >= 3)
 }
 
 /// Mask secrets in `s`. Returns the text and the labels of what was masked.
@@ -581,13 +808,20 @@ fn redact_impl(s: &str) -> (Cow<'_, str>, Vec<String>) {
         buf.push_str(&out[last..]);
         out = Cow::Owned(buf);
     }
-    for (label, re, group) in patterns() {
+    // Which patterns could match; worked out again whenever a replacement
+    // changes the text, since later patterns run on the result.
+    let mut hit = candidates(out.as_ref());
+    for (i, &(label, _, group, _)) in PATTERNS[..TOKENS].iter().enumerate() {
+        if !hit[i] {
+            continue;
+        }
+        let re = pattern(i, out.as_ref());
         if re.is_match(out.as_ref()) {
             let replaced = re
                 .replace_all(out.as_ref(), |c: &regex::Captures| {
                     labels.push(label.to_string());
                     let whole = c.get(0).unwrap();
-                    match c.get(*group).filter(|_| *group > 0) {
+                    match c.get(group).filter(|_| group > 0) {
                         Some(g) => format!(
                             "{}[REDACTED:{label}]{}",
                             &whole.as_str()[..g.start() - whole.start()],
@@ -598,10 +832,13 @@ fn redact_impl(s: &str) -> (Cow<'_, str>, Vec<String>) {
                 })
                 .into_owned();
             out = Cow::Owned(replaced);
+            hit = candidates(out.as_ref());
         }
     }
-    let re = assignment();
-    if re.is_match(out.as_ref()) {
+    // Fetched only when it could match: compiling it is the costliest step.
+    let re = || pattern(ASSIGNMENT, out.as_ref());
+    if hit[ASSIGNMENT] && re().is_match(out.as_ref()) {
+        let re = re();
         let replaced = re
             .replace_all(out.as_ref(), |c: &regex::Captures| {
                 let whole = c.get(0).unwrap().as_str();
@@ -629,9 +866,13 @@ pub fn redact_always(s: &str) -> Cow<'_, str> {
 /// Storage checks remain enabled even when display redaction is disabled.
 pub fn contains_secret(s: &str) -> bool {
     let r = state().read().unwrap().clone();
+    let hit = candidates(s);
     r.ac.as_ref().is_some_and(|ac| ac.is_match(s))
-        || patterns().iter().any(|(_, re, _)| re.is_match(s))
-        || assignment().captures_iter(s).any(|c| high_entropy(&c[2]))
+        || (0..TOKENS).any(|i| hit[i] && pattern(i, s).is_match(s))
+        || (hit[ASSIGNMENT]
+            && pattern(ASSIGNMENT, s)
+                .captures_iter(s)
+                .any(|c| high_entropy(&c[2])))
 }
 
 /// Sharing must redact even when local transcript redaction is disabled.
@@ -716,7 +957,7 @@ pub fn redact_request_messages(msgs: &[crate::llm::Message]) -> Option<Vec<crate
         }
         let out = out.get_or_insert_with(|| msgs.to_vec());
         if let Some(c) = content {
-            out[i].content = c;
+            out[i].set_content(c);
         }
         for (j, a) in args.into_iter().enumerate() {
             if let Some(a) = a {
@@ -734,7 +975,7 @@ pub fn redact_messages(msgs: &mut [crate::llm::Message]) {
     }
     for m in msgs {
         if let Cow::Owned(r) = redact(&m.content) {
-            m.content = r;
+            m.set_content(r);
         }
         for c in &mut m.tool_calls {
             redact_value(&mut c.arguments);
@@ -742,64 +983,31 @@ pub fn redact_messages(msgs: &mut [crate::llm::Message]) {
     }
 }
 
-/// Reuse redaction for unchanged messages. A message counts as unchanged
-/// only when its length and a GMAC tag of its content match: a keyed MAC
-/// (AES-256-GCM over the content as associated data, under a random key that
-/// never leaves the process), so no input can be crafted to look unchanged,
-/// and the chance of two different messages matching is under 2^-100 even
-/// for megabytes of text. That keeps a 16-byte tag per message instead of a
-/// copy of the whole conversation. Tool-call arguments are small, so they're
-/// compared with their exact originals.
+/// Reuse redaction for unchanged messages. Each entry holds a reference to
+/// the content it was made from (an `Arc`, not a copy). While it does, that
+/// text can't change: an edit makes a new allocation, or copies one that's
+/// shared. So a message whose content is the same allocation is unchanged,
+/// at no cost per turn, and no input can be crafted to look unchanged; a
+/// different allocation counts as unchanged only when its text is equal.
+/// Tool-call arguments are small, so they're compared with their exact
+/// originals.
 #[derive(Default)]
 pub struct MessageRedactor {
     state: Option<Arc<Redactor>>,
     contents: Vec<Redacted>,
 }
 
-/// One message as last sent: what identifies its content, and its content
-/// and tool-call arguments redacted, when that differs.
+/// One message as last sent: its content, and its content and tool-call
+/// arguments redacted, when that differs.
 struct Redacted {
-    content: Seen,
-    redacted: Option<String>,
+    content: Arc<String>,
+    redacted: Option<Arc<String>>,
     arguments: Vec<(serde_json::Value, Option<serde_json::Value>)>,
 }
 
-#[derive(PartialEq)]
-enum Seen {
-    Tag(usize, [u8; 16]),
-    /// No key could be made: the content itself, compared exactly.
-    Exact(String),
-}
-
-impl Seen {
-    fn of(content: &str) -> Self {
-        use aws_lc_rs::aead::{AES_256_GCM, Aad, LessSafeKey, Nonce, UnboundKey};
-        static KEY: std::sync::OnceLock<Option<LessSafeKey>> = std::sync::OnceLock::new();
-        let key = KEY.get_or_init(|| {
-            // Straight from the OS: aws-lc's own generator spends ~30 ms of
-            // CPU seeding itself on first use, which a plain-HTTP session
-            // otherwise never pays.
-            let mut k = [0u8; 32];
-            getrandom::fill(&mut k).ok()?;
-            Some(LessSafeKey::new(UnboundKey::new(&AES_256_GCM, &k).ok()?))
-        });
-        // The fixed nonce is safe here: a GCM nonce must not repeat when
-        // tags are seen by someone who could forge one, and these tags never
-        // leave this process.
-        key.as_ref()
-            .and_then(|key| {
-                key.seal_in_place_separate_tag(
-                    Nonce::assume_unique_for_key([0; 12]),
-                    Aad::from(content.as_bytes()),
-                    &mut [],
-                )
-                .ok()
-            })
-            .and_then(|tag| tag.as_ref().try_into().ok())
-            .map_or_else(
-                || Seen::Exact(content.to_owned()),
-                |t| Seen::Tag(content.len(), t),
-            )
+impl Redacted {
+    fn holds(&self, content: &Arc<String>) -> bool {
+        Arc::ptr_eq(&self.content, content) || self.content == *content
     }
 }
 
@@ -821,14 +1029,13 @@ impl MessageRedactor {
         }
         self.contents.truncate(msgs.len());
         for (i, m) in msgs.iter_mut().enumerate() {
-            let seen = Seen::of(&m.content);
-            if i >= self.contents.len() || self.contents[i].content != seen {
+            if self.contents.get(i).is_none_or(|e| !e.holds(&m.content)) {
                 let redacted = match redact(&m.content) {
-                    Cow::Owned(s) => Some(s),
+                    Cow::Owned(s) => Some(Arc::new(s)),
                     Cow::Borrowed(_) => None,
                 };
                 let entry = Redacted {
-                    content: seen,
+                    content: m.content.clone(),
                     redacted,
                     arguments: Vec::new(),
                 };
@@ -840,7 +1047,7 @@ impl MessageRedactor {
             }
             let entry = &mut self.contents[i];
             if let Some(s) = &entry.redacted {
-                m.content.clone_from(s);
+                m.content = s.clone();
             }
             entry.arguments.truncate(m.tool_calls.len());
             for (j, c) in m.tool_calls.iter_mut().enumerate() {
@@ -928,7 +1135,14 @@ pub fn is_secret_path(p: &Path) -> bool {
         "/.aws/",
         "/.gnupg/",
         "/.config/gh/",
-        "/.docker/config.json",
+        // The whole directory: a search that names it must ask for its
+        // config.json, which holds registry credentials.
+        "/.docker/",
+        "/.m2/",
+        "/.gradle/",
+        "/.vault-token",
+        "/.terraform.d/",
+        "/.config/heroku/",
         "/.kube/",
         "/Library/Keychains/",
         "/.azure/",
@@ -1010,6 +1224,122 @@ fn known_secret_files() -> Vec<PathBuf> {
     .map(|f| h.join(f))
     .chain(std::iter::once(crate::config::home_dir().join("auth.json")))
     .collect()
+}
+
+/// Whether a glob a read tool was given could match a credential file. Grep
+/// takes a `glob`, and matching it against the known stores (plus the
+/// secret-shaped names) lets the permission check ask, as it already does for
+/// a named path.
+pub fn glob_matches_secret(pattern: &str) -> Option<String> {
+    let glob = globset::GlobBuilder::new(pattern)
+        .case_insensitive(true)
+        .literal_separator(true)
+        .build()
+        .ok()?;
+    let matcher = glob.compile_matcher();
+    let mut candidates = known_secret_files();
+    // Names that need not exist under the home directory (a project's own key
+    // or env file); the `x/` prefix gives a separator for `**/…` patterns.
+    for name in [
+        "key.pem",
+        "id_rsa",
+        "id_ed25519",
+        ".env",
+        ".env.local",
+        ".pgpass",
+        ".netrc",
+        ".git-credentials",
+        ".npmrc",
+        ".pypirc",
+        ".htpasswd",
+        "credentials",
+        "credentials.json",
+        "service-account-a.json",
+        "secrets.json",
+        ".docker/config.json",
+        ".kube/config",
+        ".vault-token",
+    ] {
+        candidates.push(PathBuf::from(format!("x/{name}")));
+    }
+    if let Some(hit) = candidates.into_iter().find(|p| matcher.is_match(p)) {
+        return Some(hit.display().to_string());
+    }
+    // A pattern whose own name is credential-shaped (`**/service-account-*.json`,
+    // `**/*.pem`), whatever directory prefix it carries.
+    let base = pattern.rsplit('/').next().unwrap_or(pattern).to_lowercase();
+    let base = base.trim_start_matches(['*', '?']);
+    let secret_name = base.starts_with(".env")
+        || matches!(
+            base,
+            ".pgpass"
+                | ".netrc"
+                | ".git-credentials"
+                | ".npmrc"
+                | ".pypirc"
+                | ".htpasswd"
+                | ".vault-token"
+                | "credentials"
+                | "credentials.json"
+                | "secret.json"
+        )
+        || base.starts_with("id_rsa")
+        || base.starts_with("id_ed25519")
+        || base.starts_with("id_ecdsa")
+        || base.starts_with("id_dsa")
+        || base.starts_with("secrets.")
+        || (base.contains("service-account") && base.contains(".json"))
+        || [
+            ".pem",
+            ".key",
+            ".p12",
+            ".pfx",
+            ".jks",
+            ".keystore",
+            ".kdbx",
+            ".ppk",
+        ]
+        .iter()
+        .any(|e| base.ends_with(e));
+    secret_name.then(|| pattern.to_string())
+}
+
+/// Globs kept out of a search's results. A credential file is read through
+/// `Read`, which asks for it; a search never hands one to the model.
+pub fn search_excludes() -> &'static [&'static str] {
+    &[
+        "**/.env",
+        "**/.env.*",
+        "**/*.pem",
+        "**/*.key",
+        "**/*.p12",
+        "**/*.pfx",
+        "**/*.jks",
+        "**/*.keystore",
+        "**/*.kdbx",
+        "**/*.ppk",
+        "**/id_rsa*",
+        "**/id_ed25519*",
+        "**/id_ecdsa*",
+        "**/id_dsa*",
+        "**/.netrc",
+        "**/.npmrc",
+        "**/.pypirc",
+        "**/.git-credentials",
+        "**/.pgpass",
+        "**/.htpasswd",
+        "**/.vault-token",
+        "**/credentials",
+        "**/credentials.json",
+        "**/service-account*.json",
+        "**/secrets.json",
+        "**/secrets.yaml",
+        "**/secrets.yml",
+        "**/secrets.toml",
+        "**/secret.json",
+        "**/.docker/config.json",
+        "**/.kube/config",
+    ]
 }
 
 /// Mentions of secret files in a shell command (`cat .env`, `grep KEY ~/.aws/credentials`).
@@ -1100,551 +1430,4 @@ pub fn withheld_env_names() -> Vec<String> {
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn plain_key_values_need_entropy_and_public_keys_are_not_secret() {
-        // Withheld from commands either way, but only a random-looking value
-        // is masked: `APP_KEY=my-app` is a name.
-        for name in ["APP_KEY", "ENCRYPTION_KEY"] {
-            assert!(is_secret_name(name));
-            assert!(!secret_value(name, "ordinary-config-value"));
-            assert!(secret_value(name, "aB2cD3eF4gH5iJ6kL7mN8"));
-        }
-        // Names of keys, not keys.
-        for name in [
-            "MONKEY",
-            "SSH_PUBLIC_KEY",
-            "service_pubkey",
-            "CACHE_KEY",
-            "SORT_KEY",
-            "PRIMARY_KEY",
-            "TURBO_KEY",
-        ] {
-            assert!(!is_secret_name(name));
-        }
-        assert!(secret_value("API_KEY", "opaque-credential"));
-    }
-
-    #[test]
-    fn json_images_exclusion_does_not_hide_nested_arguments() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[("TEST_TOKEN", "nested-secret-value")]);
-        let mut value = serde_json::json!({
-            "images": ["nested-secret-value"],
-            "arguments": {"images": "nested-secret-value"}
-        });
-        redact_json(&mut value);
-        assert_eq!(value["images"][0], "nested-secret-value");
-        assert_eq!(value["arguments"]["images"], "[REDACTED:TEST_TOKEN]");
-    }
-
-    #[test]
-    fn registration_deduplicates_batch_and_preserves_existing_base() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[("BASE_TOKEN", "registration-base-value")]);
-        register_all(vec![
-            ("BASE_TOKEN".into(), "registration-base-value".into()),
-            ("NEW_TOKEN".into(), "registration-new-value".into()),
-            ("OTHER_TOKEN".into(), "registration-new-value".into()),
-        ]);
-        let st = state().read().unwrap();
-        for value in ["registration-base-value", "registration-new-value"] {
-            assert_eq!(st.base.iter().filter(|(_, v)| v == value).count(), 1);
-        }
-    }
-
-    /// Warming compiles the pattern set ahead of the first prompt; what that
-    /// prompt masks must be the same either way.
-    #[test]
-    fn warming_the_patterns_still_masks_secrets() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[]);
-        warm(&std::env::temp_dir().join("chanto-warm-no-such-project"));
-        let (out, labels) = redact_with_labels("export KEY_ID=AKIAIOSFODNN7EXAMPLE");
-        assert!(out.contains("[REDACTED:AWS_ACCESS_KEY]"), "{out}");
-        assert_eq!(labels, vec!["AWS_ACCESS_KEY".to_string()]);
-    }
-
-    fn with_values(vals: &[(&str, &str)]) {
-        let m: Vec<(String, String)> = vals
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect();
-        *state().write().unwrap() = Arc::new(build(m, vec![], BTreeMap::new()));
-        ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[test]
-    fn run_secrets_reach_commands_and_are_masked() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let cfg = SecretsConfig::default();
-        // SAFETY: TEST_LOCK serializes the tests that touch these variables.
-        unsafe {
-            std::env::set_var("ORG_DEPLOY_TOKEN", "deploy-token-value-1");
-            std::env::set_var("ORG_STAGING_HOST", "staging-host-value-2");
-            std::env::remove_var("CHANTO_RUN_SECRETS");
-        }
-        assert!(
-            withhold_env("ORG_DEPLOY_TOKEN", &cfg),
-            "secret-named: withheld by default"
-        );
-        unsafe {
-            std::env::set_var(
-                "CHANTO_RUN_SECRETS",
-                "ORG_DEPLOY_TOKEN, ORG_STAGING_HOST,CHANTO_API_KEY",
-            )
-        };
-        assert_eq!(
-            run_secret_names(),
-            ["ORG_DEPLOY_TOKEN", "ORG_STAGING_HOST"],
-            "CHANTO_* never counts"
-        );
-        assert!(
-            !withhold_env("ORG_DEPLOY_TOKEN", &cfg),
-            "org secrets reach the run's commands"
-        );
-        assert!(
-            withhold_env("CHANTO_API_KEY", &cfg),
-            "the model key never does"
-        );
-        assert!(withhold_env("OTHER_API_KEY", &cfg));
-
-        let root = std::env::temp_dir().join(format!(
-            "chanto-run-secrets-{}",
-            uuid::Uuid::new_v4().simple()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        init(&crate::config::Config::default(), &root);
-        let masked = redact("deploy-token-value-1 staging-host-value-2");
-        assert!(
-            !masked.contains("deploy-token-value-1") && !masked.contains("staging-host-value-2"),
-            "{masked}"
-        );
-        unsafe {
-            std::env::remove_var("CHANTO_RUN_SECRETS");
-            std::env::remove_var("ORG_DEPLOY_TOKEN");
-            std::env::remove_var("ORG_STAGING_HOST");
-        }
-        with_values(&[]);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn message_cache_tracks_edits_and_secret_changes() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[]);
-        let mut cache = MessageRedactor::default();
-        let mut msgs = vec![
-            crate::llm::Message::user("ordinary text"),
-            crate::llm::Message::user("later-known-secret"),
-        ];
-        let check = |cache: &mut MessageRedactor, msgs: &[crate::llm::Message]| {
-            let mut expected = msgs.to_vec();
-            redact_messages(&mut expected);
-            let mut actual = msgs.to_vec();
-            cache.redact(&mut actual);
-            assert_eq!(
-                serde_json::to_value(actual).unwrap(),
-                serde_json::to_value(expected).unwrap()
-            );
-        };
-        check(&mut cache, &msgs);
-        check(&mut cache, &msgs);
-        with_values(&[("NEW_KEY", "later-known-secret")]);
-        check(&mut cache, &msgs);
-        msgs[0].content = "changed later-known-secret".into();
-        msgs[0].tool_calls.push(crate::llm::ToolCall {
-            id: "1".into(),
-            name: "Bash".into(),
-            arguments: serde_json::json!({"command": "later-known-secret"}),
-        });
-        check(&mut cache, &msgs);
-        msgs[0].tool_calls[0].arguments = serde_json::json!({"nested": ["later-known-secret"]});
-        check(&mut cache, &msgs);
-        // Unchanged arguments holding a secret learned since: masked now too.
-        msgs[0].tool_calls.push(crate::llm::ToolCall {
-            id: "2".into(),
-            name: "Read".into(),
-            arguments: serde_json::json!({"file_path": "/x/second-secret-value"}),
-        });
-        check(&mut cache, &msgs);
-        with_values(&[
-            ("NEW_KEY", "later-known-secret"),
-            ("SECOND", "second-secret-value"),
-        ]);
-        check(&mut cache, &msgs);
-        msgs[0].tool_calls.truncate(1);
-        check(&mut cache, &msgs);
-        msgs.remove(0);
-        check(&mut cache, &msgs);
-        msgs.clear();
-        check(&mut cache, &msgs);
-        msgs.push(crate::llm::Message::user("later-known-secret"));
-        ENABLED.store(false, std::sync::atomic::Ordering::Relaxed);
-        check(&mut cache, &msgs);
-        ENABLED.store(true, std::sync::atomic::Ordering::Relaxed);
-        check(&mut cache, &msgs);
-        with_values(&[]);
-    }
-
-    #[test]
-    fn a_message_counts_as_unchanged_only_with_the_same_content() {
-        let a = Seen::of("token = abc123");
-        assert!(matches!(a, Seen::Tag(14, _)));
-        assert!(a == Seen::of("token = abc123"));
-        // Same length, one byte different.
-        assert!(a != Seen::of("token = abc124"));
-        assert!(Seen::of("") != Seen::of("\0"));
-        // A same-length edit to an earlier message is scanned again.
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[("KEY", "secret-value-1")]);
-        let mut cache = MessageRedactor::default();
-        let mut msgs = vec![crate::llm::Message::user("plain-value-1 here")];
-        cache.redact(&mut msgs.clone());
-        msgs[0].content = "secret-value-1 her".into();
-        assert_eq!(msgs[0].content.len(), "plain-value-1 here".len());
-        let mut sent = msgs.clone();
-        cache.redact(&mut sent);
-        assert!(
-            !sent[0].content.contains("secret-value-1"),
-            "{}",
-            sent[0].content
-        );
-        with_values(&[]);
-    }
-
-    #[test]
-    #[ignore = "manual per-call redaction benchmark"]
-    fn benchmark_message_redaction() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[("KEY", "known-secret-value")]);
-        let text =
-            "A typical tool result contains source code, paths, and ordinary prose.\n".repeat(32);
-        let msgs: Vec<_> = (0..500)
-            .map(|_| crate::llm::Message::user(text.clone()))
-            .collect();
-        let mut cache = MessageRedactor::default();
-        cache.redact(&mut msgs.clone());
-        let start = std::time::Instant::now();
-        for _ in 0..30 {
-            let mut copy = msgs.clone();
-            redact_messages(&mut copy);
-            std::hint::black_box(copy);
-        }
-        let regular = start.elapsed();
-        let start = std::time::Instant::now();
-        for _ in 0..30 {
-            let mut copy = msgs.clone();
-            cache.redact(&mut copy);
-            std::hint::black_box(copy);
-        }
-        eprintln!(
-            "500 messages, {} bytes, clone + redact per call: regular {:.3} ms, cached {:.3} ms",
-            text.len() * msgs.len(),
-            regular.as_secs_f64() * 1000.0 / 30.0,
-            start.elapsed().as_secs_f64() * 1000.0 / 30.0
-        );
-        with_values(&[]);
-    }
-
-    #[test]
-    fn masks_known_values_and_their_encodings() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[
-            ("STRIPE_KEY", "rk_live_51Habcdefghijklmnop"),
-            ("DB_PASSWORD", "hunter2-correct-horse"),
-        ]);
-        let b64 = base64::engine::general_purpose::STANDARD.encode("hunter2-correct-horse");
-        let text = format!("key rk_live_51Habcdefghijklmnop and {b64}");
-        let (out, labels) = redact_with_labels(&text);
-        assert!(
-            !out.contains("rk_live_51H") && !out.contains(b64.trim_end_matches('=')),
-            "{out}"
-        );
-        assert!(
-            out.contains("[REDACTED:STRIPE_KEY]") && out.contains("[REDACTED:DB_PASSWORD]"),
-            "{out}"
-        );
-        assert_eq!(labels, vec!["DB_PASSWORD", "STRIPE_KEY"]);
-        with_values(&[]);
-    }
-
-    #[test]
-    fn a_secret_debug_prints_masked_and_serializes_plain() {
-        let cred = crate::auth::Credential::Oauth {
-            access: "at-123".into(),
-            refresh: "rt-456".into(),
-            expires: 1,
-            client_id: "app".into(),
-        };
-        let shown = format!("{cred:?}");
-        assert!(shown.contains("Secret(***)") && shown.contains("app"));
-        assert!(!shown.contains("at-123") && !shown.contains("rt-456"));
-        assert_eq!(format!("{:?}", Secret::from("")), "Secret(\"\")");
-        // `auth.json` and the keychain keep the plain value.
-        let json = serde_json::to_value(&cred).unwrap();
-        assert_eq!(json["access"], "at-123");
-        let back: crate::auth::Credential = serde_json::from_value(json).unwrap();
-        let crate::auth::Credential::Oauth { refresh, .. } = back else {
-            panic!("not an OAuth credential");
-        };
-        assert_eq!(refresh.expose(), "rt-456");
-    }
-
-    #[test]
-    fn learned_values_survive_init_and_refresh() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let tmp = |n: &str| {
-            let d = std::env::temp_dir().join(format!(
-                "chanto-learned-{n}-{}",
-                uuid::Uuid::new_v4().simple()
-            ));
-            std::fs::create_dir_all(&d).unwrap();
-            d
-        };
-        let (worktree, source) = (tmp("worktree"), tmp("source"));
-        std::fs::write(
-            source.join(".env"),
-            "DB_PASSWORD=source-only-pw-7c6b5a
-",
-        )
-        .unwrap();
-        let cfg = crate::config::Config::default();
-        init(&cfg, &worktree);
-        register("SIGNIN_TOKEN", "learned-token-5f4e3d2c1b");
-        register("SHORT", "abc");
-        add_project(&source);
-        // Starting over (a worker's setup) and rescanning the worktree keep them.
-        init(&cfg, &worktree);
-        refresh(&worktree);
-        let out = redact("learned-token-5f4e3d2c1b source-only-pw-7c6b5a abc");
-        assert_eq!(
-            out, "[REDACTED:SIGNIN_TOKEN] [REDACTED:DB_PASSWORD] abc",
-            "too short to mask safely: abc"
-        );
-        with_values(&[]);
-        let _ = std::fs::remove_dir_all(&worktree);
-        let _ = std::fs::remove_dir_all(&source);
-    }
-
-    #[test]
-    fn plain_key_names_are_secret() {
-        for name in ["STRIPE_KEY", "ENCRYPTION_KEY", "master_key", "KEY"] {
-            assert!(is_secret_name(name), "{name}");
-        }
-        for name in [
-            "MONKEY",
-            "KEYBOARD",
-            "TURKEY_COUNT",
-            "SSH_KEY_PATH",
-            "KEYCHAIN",
-            "CACHE_KEY",
-            "SORT_KEY",
-            "PRIMARY_KEY",
-            "SSH_PUBLIC_KEY",
-            "GPG_PUBKEY",
-        ] {
-            assert!(!is_secret_name(name), "{name}");
-        }
-    }
-
-    #[test]
-    fn requests_and_events_are_masked_but_images_kept() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[("DEPLOY_TOKEN", "event-secret-9a8b7c6d")]);
-        let clean = vec![crate::llm::Message::user("nothing here")];
-        assert!(redact_request_messages(&clean).is_none());
-        let mut call = crate::llm::Message::assistant("");
-        call.tool_calls.push(crate::llm::ToolCall {
-            id: "1".into(),
-            name: "Bash".into(),
-            arguments: serde_json::json!({"command": "echo event-secret-9a8b7c6d"}),
-        });
-        let msgs = vec![clean[0].clone(), call];
-        let masked = redact_request_messages(&msgs).unwrap();
-        assert_eq!(masked[0].content, "nothing here");
-        assert_eq!(
-            masked[1].tool_calls[0].arguments["command"],
-            "echo [REDACTED:DEPLOY_TOKEN]"
-        );
-        // Masking what's already masked changes nothing (a stable prefix).
-        assert!(redact_request_messages(&masked).is_none());
-
-        let mut ev = serde_json::json!({"type": "tool_end", "output": "event-secret-9a8b7c6d",
-            "nested": [{"label": "x event-secret-9a8b7c6d"}], "images": ["event-secret-9a8b7c6d"]});
-        redact_json(&mut ev);
-        assert_eq!(ev["output"], "[REDACTED:DEPLOY_TOKEN]");
-        assert_eq!(ev["nested"][0]["label"], "x [REDACTED:DEPLOY_TOKEN]");
-        assert_eq!(ev["images"][0], "event-secret-9a8b7c6d");
-        with_values(&[]);
-    }
-
-    #[test]
-    fn masks_token_formats_but_not_ordinary_code() {
-        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        with_values(&[]);
-        // A failure names the format; the sample itself stays out of the log.
-        for (format, sample) in [
-            ("AWS access key", "AKIAIOSFODNN7EXAMPLE"),
-            ("GitHub token", "ghp_0123456789abcdefghijklmnopqrstuvwxyzAB"),
-            ("Slack token", "xoxb-1234567890-abcdefghij"),
-            // Formats whose last character can be `-`.
-            ("Slack token ending in -", "xoxb-123456789-"),
-            ("GitLab token ending in -", "glpat-abcdefghij012345678-"),
-            (
-                "Google API key ending in -",
-                // Split so secret scanners don't take the fake for a real key.
-                concat!("AIza", "SyA0123456789abcdefghijklmnopqrstu-"),
-            ),
-            (
-                "SendGrid key ending in -",
-                "SG.abcdefghij0123456789ab.abcdefghij0123456789abcdefghij0123456789ab-",
-            ),
-            ("Anthropic key", "sk-ant-api03-abcdefghijklmnopqrstuv"),
-            (
-                "JWT",
-                "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U",
-            ),
-            (
-                "OpenSSH private key",
-                "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----",
-            ),
-        ] {
-            assert!(
-                redact(sample).starts_with("[REDACTED:"),
-                "{format} not redacted"
-            );
-        }
-        assert_eq!(
-            redact("postgres://app:s3cretPass@db:5432/x"),
-            "postgres://app:[REDACTED:URL_PASSWORD]@db:5432/x"
-        );
-        assert_eq!(
-            redact("API_KEY=Zm9vYmFyMTIzNDU2Nzg5MGFiY2Rl"),
-            "API_KEY=[REDACTED:API_KEY]"
-        );
-        for fine in [
-            "const token = getToken();",
-            "PASSWORD_MIN_LENGTH=12",
-            "api_key = os.environ[\"API_KEY\"]",
-            "let secret_name = \"database-password\";",
-            "git commit -m 'Rotate tokens' && cargo test",
-            "SESSION_TIMEOUT=3600",
-        ] {
-            assert_eq!(redact(fine), fine);
-        }
-    }
-
-    #[test]
-    fn secret_paths_ignore_case_trailing_slashes_links_and_globs() {
-        let home = dirs::home_dir().unwrap();
-        // Directories themselves, any case.
-        for p in [
-            "/Users/a/.aws",
-            "/Users/a/.SSH/id_rsa",
-            "/Users/a/.Kube/config",
-            "/Users/a/.GNUPG",
-        ] {
-            assert!(is_secret_path(Path::new(p)), "{p}");
-        }
-        // Searching the home folder (or above) reaches every credential store.
-        assert!(is_secret_target(&home));
-        // An ancestor of the home directory also reaches its credential stores.
-        if let Some(parent) = home.parent() {
-            assert!(is_secret_target(parent), "{}", parent.display());
-        }
-        assert!(!is_secret_target(&home.join("projects/app/src")));
-        // A project file that links to a key is the key.
-        let d =
-            std::env::temp_dir().join(format!("chanto-secret-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(d.join(".ssh")).unwrap();
-        std::fs::write(d.join(".ssh/id_ed25519"), "k").unwrap();
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink(d.join(".ssh/id_ed25519"), d.join("notes.txt")).unwrap();
-            assert!(is_secret_target(&d.join("notes.txt")));
-        }
-        assert!(!is_secret_target(&d.join("README.md")));
-        let _ = std::fs::remove_dir_all(&d);
-        // Shell globs are judged by the credential files they could match.
-        for c in [
-            "cat ~/.d*/config.json",
-            "cat ~/.ss?/id_*",
-            "grep -r . ~/.kube",
-            "cat ~/.AWS/credentials",
-        ] {
-            assert!(command_touches_secret_file(c).is_some(), "{c}");
-        }
-        for c in ["cat src/*.rs", "ls ~/projects/*", "grep -r TODO ."] {
-            assert_eq!(command_touches_secret_file(c), None, "{c}");
-        }
-        // Our own credentials wherever the Chanto home is.
-        assert!(is_secret_path(&crate::config::home_dir().join("auth.json")));
-    }
-
-    #[test]
-    fn env_files_and_secret_paths() {
-        let vals = env_file_values(
-            "# comment\nexport API_KEY=\"abc123def456ghi7\"\nPORT=3000\nNODE_ENV=production\nSESSION=Q2hhbmdlTWVQbGVhc2UxMjM0NTY3OA\nDEBUG=true\n",
-        );
-        let keys: Vec<&str> = vals.iter().map(|(k, _)| k.as_str()).collect();
-        assert_eq!(keys, vec!["API_KEY", "SESSION"]);
-        for p in [
-            ".env",
-            "app/.env.local",
-            ".dev.vars",
-            "certs/server.key",
-            "/Users/a/.ssh/id_ed25519",
-            "/Users/a/.aws/credentials",
-            "x/service-account-prod.json",
-        ] {
-            assert!(is_secret_path(Path::new(p)), "{p}");
-        }
-        for p in [
-            ".env.example",
-            "src/env.ts",
-            "id_ed25519.pub",
-            "keys.rs",
-            "README.md",
-            ".envrc.sample",
-        ] {
-            assert!(!is_secret_path(Path::new(p)), "{p}");
-        }
-        assert_eq!(
-            command_touches_secret_file("cat .env | grep KEY").as_deref(),
-            Some(".env")
-        );
-        assert!(command_touches_secret_file("grep -n token ~/.aws/credentials").is_some());
-        assert!(command_touches_secret_file("cp .env.example .env").is_some());
-        assert!(command_touches_secret_file("cargo test && cat .env.example").is_none());
-        let cfg = SecretsConfig {
-            pass_env: vec!["GH_TOKEN".into(), "AWS_*".into()],
-            ..Default::default()
-        };
-        assert!(
-            withhold_env("OPENAI_API_KEY", &cfg)
-                && !withhold_env("GH_TOKEN", &cfg)
-                && !withhold_env("AWS_SECRET_ACCESS_KEY", &cfg)
-                && !withhold_env("PATH", &cfg)
-        );
-        // A cloud run's commands get its run-tools token, never its model key.
-        let cfg = SecretsConfig::default();
-        assert!(!withhold_env("CHANTO_RUN_TOKEN", &cfg) && withhold_env("CHANTO_API_KEY", &cfg));
-        // Chanto's own token files, wherever its home is.
-        let home = crate::config::home_dir();
-        for f in [
-            "auth.json",
-            "server.json",
-            "mcp-auth",
-            "mcp-auth/github-0123456789abcdef.json",
-            "runner/tokens.json",
-            "runner/connections.json",
-        ] {
-            assert!(is_secret_path(&home.join(f)), "{f}");
-        }
-        assert!(!is_secret_path(&home.join("config.toml")));
-        assert!(!is_secret_path(&home.join("runs/abc/run.json")));
-    }
-}
+mod tests;

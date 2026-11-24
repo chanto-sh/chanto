@@ -7,7 +7,7 @@
 # and apt, so an image built FROM this one can add a project's toolchain with
 # the usual packages, and Debian's security updates for git and its
 # libraries. The chanto binary itself is static and doesn't depend on it.
-FROM debian:stable-slim@sha256:a717a33469731894e77e912ea7d714e27c2dc38ee6554fd1a3102e92999cfc66
+FROM debian:stable-slim@sha256:fbfb4059d2127120aa05b6e6064523d2102552f0cf0026ddf0701c12f1f8f3e0
 
 # What the agent's tools use: git for checkpoints, diffs and worktrees,
 # ripgrep for Grep, and the CA bundle for HTTPS to model providers. bash and

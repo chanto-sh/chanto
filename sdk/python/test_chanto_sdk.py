@@ -1,7 +1,9 @@
 import queue
 import unittest
 from unittest.mock import Mock, patch
-from chanto_sdk import Chanto, Session, tool
+import os
+import tempfile
+from chanto_sdk import Chanto, ChantoError, Session, tool
 
 
 class ToolDispatchTests(unittest.TestCase):
@@ -74,6 +76,55 @@ class RunHelperTests(unittest.TestCase):
         self.assertEqual(h.apply_run('r1', pr=True), 'Applied')
         h._request.assert_called_with('POST', '/runs/r1/apply', {'pr': True})
         self.assertEqual(h.runs(), [])
+
+
+class StartTests(unittest.TestCase):
+    def fake_server(self, version, tmp):
+        """A `chanto` that serves /health on a free port and says where."""
+        import stat, sys, textwrap
+        path = os.path.join(tmp, 'chanto')
+        with open(path, 'w') as f:
+            f.write(f'#!{sys.executable}\n' + textwrap.dedent(f"""
+                import http.server, json, sys
+                class H(http.server.BaseHTTPRequestHandler):
+                    def log_message(self, *a): pass
+                    def do_GET(self):
+                        b = json.dumps({{'ok': True, 'version': '{version}'}}).encode()
+                        self.send_response(200); self.send_header('Content-Length', str(len(b))); self.end_headers(); self.wfile.write(b)
+                s = http.server.HTTPServer(('127.0.0.1', 0), H)
+                print('chanto server listening on http://127.0.0.1:%d' % s.server_port, file=sys.stderr, flush=True)
+                s.serve_forever()
+            """))
+        os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+        return path
+
+    @unittest.skipIf(os.name == 'nt', 'runs a script directly')
+    def test_start_connects_and_close_stops_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with Chanto.start(self.fake_server('9.9.9', tmp)) as client:
+                self.assertEqual(client.check_version(), '9.9.9')
+                process = client._process
+            self.assertIsNotNone(process.poll())
+            client.close()
+
+    @unittest.skipIf(os.name == 'nt', 'runs a script directly')
+    def test_start_refuses_an_old_server_and_stops_it(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(ChantoError, 'chanto upgrade'):
+                Chanto.start(self.fake_server('0.0.1', tmp))
+
+    def test_start_says_when_the_binary_is_missing(self):
+        with self.assertRaisesRegex(ChantoError, "couldn't start"):
+            Chanto.start('/no/such/chanto')
+
+    def test_connect_says_when_no_server_answers(self):
+        with self.assertRaisesRegex(ChantoError, 'no Chanto server'):
+            Chanto.connect('http://127.0.0.1:9', 't')
+
+    def test_a_version_it_cant_read_is_allowed(self):
+        client = Chanto('http://x', 't')
+        with patch.object(client, 'health', return_value={'version': 'dev'}):
+            self.assertEqual(client.check_version(), 'dev')
 
 
 if __name__ == '__main__':

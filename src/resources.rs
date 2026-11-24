@@ -6,14 +6,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
-use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System};
 use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ResourcesConfig {
-    /// Subagents running at the same time (default 3); more wait their turn.
+    /// Subagents running at the same time (default 6); more wait their turn.
     pub max_parallel_agents: Option<usize>,
+    /// How deep subagents can nest: 1 (default) lets only the main agent
+    /// start them, and more lets them start their own, up to 3.
+    pub max_agent_depth: Option<usize>,
     /// Background agents alive at once, running or queued (default 8).
     pub max_background_agents: Option<usize>,
     /// Shell commands running at the same time across all agents (default 4).
@@ -33,6 +35,7 @@ impl ResourcesConfig {
         }
         m!(
             max_parallel_agents,
+            max_agent_depth,
             max_background_agents,
             max_parallel_commands,
             min_free_memory_mb,
@@ -53,10 +56,11 @@ static LIMITS: OnceLock<Limits> = OnceLock::new();
 /// Process groups the watchdog killed (so the tool result can say why).
 static KILLED: Mutex<Option<HashSet<u32>>> = Mutex::new(None);
 
+// Where memory or processes can't be read (crate::procs gives None), each
+// use below falls back to what never blocks work or kills anything.
+
 fn total_mb() -> u64 {
-    let mut s = System::new();
-    s.refresh_memory();
-    s.total_memory() / 1_048_576
+    crate::procs::total_memory().map_or(0, |b| b / 1_048_576)
 }
 
 fn limits() -> &'static Limits {
@@ -66,7 +70,7 @@ fn limits() -> &'static Limits {
 fn init_limits(c: &ResourcesConfig) -> Limits {
     let total = total_mb();
     Limits {
-        agents: Semaphore::new(c.max_parallel_agents.unwrap_or(3).max(1)),
+        agents: Semaphore::new(c.max_parallel_agents.unwrap_or(6).max(1)),
         commands: Semaphore::new(c.max_parallel_commands.unwrap_or(4).max(1)),
         max_background: c.max_background_agents.unwrap_or(8).max(1),
         min_free: c.min_free_memory_mb.unwrap_or((total / 20).max(1024)),
@@ -94,18 +98,16 @@ pub fn max_background_agents() -> usize {
 
 /// Memory available for new work, in MB.
 pub fn available_mb() -> u64 {
-    let mut s = System::new();
-    s.refresh_memory();
+    // On macOS, the kernel's own free percentage, which memory pressure is
+    // based on: a plain "available" count leaves out compressible and
+    // inactive memory and reads close to zero.
     #[cfg(target_os = "macos")]
-    {
-        // sysinfo's "available" is ~0 on macOS (it ignores compressible and
-        // inactive memory); the kernel's own free percentage is what memory
-        // pressure is based on.
-        if let Some(pct) = macos_free_percent() {
-            return s.total_memory() / 1_048_576 * pct / 100;
-        }
-    }
-    s.available_memory() / 1_048_576
+    return match (crate::procs::total_memory(), macos_free_percent()) {
+        (Some(total), Some(pct)) => total / 1_048_576 * pct / 100,
+        _ => u64::MAX,
+    };
+    #[cfg(not(target_os = "macos"))]
+    crate::procs::available_memory().map_or(u64::MAX, |b| b / 1_048_576)
 }
 
 #[cfg(target_os = "macos")]
@@ -145,6 +147,38 @@ pub async fn wait_for_memory(what: &str, patience: Duration) -> Result<(), Strin
 }
 
 /// A slot for running a subagent; held until it finishes.
+/// Nested subagents alive at once, across the whole tree.
+const MAX_NESTED_AGENTS: usize = 20;
+static NESTED_AGENTS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts a nested subagent while it lives.
+pub struct NestedAgent;
+
+impl Drop for NestedAgent {
+    fn drop(&mut self) {
+        NESTED_AGENTS.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Room for one more nested subagent, or None at the limit. They don't take an
+/// `agent_slot`: their parent holds one while it waits for them, so a tree
+/// that filled every slot with parents would wait on itself forever. This cap
+/// is what stops a tree fanning out without end instead.
+pub fn nested_agent() -> Option<NestedAgent> {
+    use std::sync::atomic::Ordering::Relaxed;
+    NESTED_AGENTS
+        .try_update(Relaxed, Relaxed, |n| {
+            (n < MAX_NESTED_AGENTS).then_some(n + 1)
+        })
+        .ok()
+        .map(|_| NestedAgent)
+}
+
+/// The nesting a config allows, from 1 to 3.
+pub fn agent_depth(c: &ResourcesConfig) -> usize {
+    c.max_agent_depth.unwrap_or(1).clamp(1, 3)
+}
+
 pub async fn agent_slot() -> tokio::sync::SemaphorePermit<'static> {
     limits().agents.acquire().await.expect("semaphore closed")
 }
@@ -165,26 +199,19 @@ pub fn was_killed(pgid: u32) -> bool {
 
 /// Whether a process is still running. Used to reap stale IDE bridge locks.
 pub fn pid_alive(pid: u32) -> bool {
-    let p = Pid::from_u32(pid);
-    let mut sys = System::new();
-    sys.refresh_processes_specifics(
-        ProcessesToUpdate::Some(&[p]),
-        true,
-        ProcessRefreshKind::nothing(),
-    );
-    sys.process(p).is_some()
+    crate::procs::state(pid).is_none_or(|s| s != crate::procs::State::Gone)
 }
 
 /// Memory a process really uses. On macOS resident size leaves out compressed
 /// and swapped pages, which is exactly where a runaway process's memory goes
 /// under pressure; the physical footprint (Activity Monitor's "Memory") doesn't.
-fn footprint(pid: Pid) -> Option<u64> {
+fn footprint(pid: u32) -> Option<u64> {
     #[cfg(target_os = "macos")]
     {
         let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
         let r = unsafe {
             libc::proc_pid_rusage(
-                pid.as_u32() as i32,
+                pid as i32,
                 libc::RUSAGE_INFO_V2,
                 &mut info as *mut _ as *mut libc::rusage_info_t,
             )
@@ -197,62 +224,94 @@ fn footprint(pid: Pid) -> Option<u64> {
     None
 }
 
+/// What the watchdog found on one look at the process table.
+#[derive(Debug, PartialEq)]
+struct Verdict {
+    /// Memory Chanto's descendants use, in bytes.
+    used: u64,
+    kids: usize,
+    /// The biggest descendant (pid, bytes, name), when they use too much:
+    /// `limit_pct` of `total` or more, or over 512 MB while the system is
+    /// nearly out (`critical`).
+    victim: Option<(u32, u64, String)>,
+}
+
+fn judge(
+    me: u32,
+    list: Vec<crate::procs::Proc>,
+    total: u64,
+    limit_pct: u64,
+    critical: bool,
+    memory: impl Fn(&crate::procs::Proc) -> u64,
+) -> Verdict {
+    let procs: std::collections::HashMap<u32, crate::procs::Proc> =
+        list.into_iter().map(|p| (p.pid, p)).collect();
+    // Up a parent chain to `me`; bounded, in case the table has a cycle.
+    let descends = |mut p: u32| {
+        for _ in 0..64 {
+            match procs.get(&p).and_then(|x| x.parent) {
+                Some(parent) if parent == me => return true,
+                Some(parent) => p = parent,
+                None => return false,
+            }
+        }
+        false
+    };
+    let kids: Vec<(u32, u64)> = procs
+        .iter()
+        .filter(|(pid, _)| **pid != me && descends(**pid))
+        .map(|(pid, p)| (*pid, memory(p)))
+        .collect();
+    let used: u64 = kids.iter().map(|(_, m)| m).sum();
+    let over = used * 100 / total.max(1) >= limit_pct;
+    let victim = (over || critical && used > 512 * 1_048_576)
+        .then(|| kids.iter().max_by_key(|(_, m)| *m).copied())
+        .flatten()
+        .map(|(pid, mem)| {
+            let name = procs.get(&pid).map(|p| p.name.clone()).unwrap_or_default();
+            (pid, mem, name)
+        });
+    Verdict {
+        used,
+        kids: kids.len(),
+        victim,
+    }
+}
+
 /// Every few seconds: if Chanto's descendants use too much memory (or the
 /// system is nearly out), kill the biggest descendant's process group.
 async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
-    let me = Pid::from_u32(std::process::id());
-    let mut sys = System::new();
+    let me = std::process::id();
+    let Some(total) = crate::procs::total_memory() else {
+        return;
+    };
+    let total = total.max(1);
     loop {
         tokio::time::sleep(Duration::from_secs(3)).await;
-        sys.refresh_memory();
-        let total = sys.total_memory().max(1);
         let critical = available_mb() < limits().min_free / 2;
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_memory(),
-        );
-        let procs = sys.processes();
-        let descends = |mut p: Pid| {
-            for _ in 0..64 {
-                match procs.get(&p).and_then(|x| x.parent()) {
-                    Some(parent) if parent == me => return true,
-                    Some(parent) => p = parent,
-                    None => return false,
-                }
-            }
-            false
+        let Some(list) = crate::procs::processes() else {
+            continue;
         };
-        let kids: Vec<(Pid, u64)> = procs
-            .iter()
-            .filter(|(pid, _)| **pid != me && descends(**pid))
-            .map(|(pid, p)| (*pid, footprint(*pid).unwrap_or(p.memory())))
-            .collect();
-        let used: u64 = kids.iter().map(|(_, m)| m).sum();
+        let seen = list.len();
+        let v = judge(me, list, total, limits().limit_pct, critical, |p| {
+            footprint(p.pid).unwrap_or(p.memory)
+        });
         if std::env::var_os("CHANTO_DEBUG_WATCHDOG").is_some() {
             eprintln!(
-                "[watchdog] procs={} kids={} used={}MB avail={}MB",
-                procs.len(),
-                kids.len(),
-                used / 1_048_576,
+                "[watchdog] procs={seen} kids={} used={}MB avail={}MB",
+                v.kids,
+                v.used / 1_048_576,
                 available_mb()
             );
         }
-        let over = used * 100 / total >= limits().limit_pct;
-        if !(over || critical && used > 512 * 1_048_576) {
-            continue;
-        }
-        let Some((pid, mem)) = kids.iter().max_by_key(|(_, m)| *m).copied() else {
+        let Some((pid, mem, name)) = v.victim else {
             continue;
         };
-        let name = procs
-            .get(&pid)
-            .map(|p| p.name().to_string_lossy().to_string())
-            .unwrap_or_default();
+        let used = v.used;
         #[cfg(unix)]
         {
             // Kill the whole process group (a build's compiler workers too).
-            let pgid = unsafe { libc::getpgid(pid.as_u32() as i32) };
+            let pgid = unsafe { libc::getpgid(pid as i32) };
             if pgid > 0 && pgid as u32 != std::process::id() && unsafe { libc::getpgid(0) } != pgid
             {
                 KILLED
@@ -262,13 +321,11 @@ async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
                     .insert(pgid as u32);
                 unsafe { libc::killpg(pgid, libc::SIGKILL) };
             } else {
-                unsafe { libc::kill(pid.as_u32() as i32, libc::SIGKILL) };
+                unsafe { libc::kill(pid as i32, libc::SIGKILL) };
             }
         }
         #[cfg(not(unix))]
-        if let Some(p) = procs.get(&pid) {
-            p.kill();
-        }
+        crate::procs::kill(pid);
         on_kill(format!(
             "Memory watchdog killed `{name}` (pid {pid}, {} MB): Chanto's processes were using {}% of RAM{}.",
             mem / 1_048_576,
@@ -283,20 +340,4 @@ async fn watchdog(on_kill: impl Fn(String) + Send + Sync + 'static) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn memory_queries_work() {
-        assert!(total_mb() > 0);
-        assert!(available_mb() > 0);
-        let _a = agent_slot().await;
-        let _c = command_slot().await;
-        assert!(
-            wait_for_memory("test", Duration::from_millis(1))
-                .await
-                .is_ok()
-                || available_mb() < limits().min_free
-        );
-    }
-}
+mod tests;

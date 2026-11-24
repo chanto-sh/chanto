@@ -5,6 +5,12 @@
 //! PowerShell, then cmd.exe. `CHANTO_SHELL` overrides the choice; everything
 //! that needs to run a command goes through here so there is one place to get
 //! it right.
+//!
+//! The one exception is on Windows with the sandbox on: Git Bash can't start
+//! under its restricted token (its runtime creates objects only the user's own
+//! SID may write, which is what the token must not have), so the shell tool
+//! uses PowerShell there; see [`tool_shell`]. Hooks and other commands the
+//! user wrote run unsandboxed and keep [`shell`].
 
 use std::path::{Path, PathBuf};
 
@@ -16,17 +22,14 @@ pub fn is_exec(p: &Path) -> bool {
     let Ok(md) = p.metadata() else {
         return false;
     };
-    if !md.is_file() {
-        return false;
-    }
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        md.permissions().mode() & 0o111 != 0
+        md.is_file() && md.permissions().mode() & 0o111 != 0
     }
     #[cfg(windows)]
     {
-        true
+        md.is_file()
     }
 }
 
@@ -103,17 +106,47 @@ pub fn shell() -> (String, Vec<&'static str>) {
         if let Some(p) = windows_bash() {
             return (p.display().to_string(), vec!["-c"]);
         }
-        if let Some(p) = find_on_path("pwsh.exe") {
-            return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
-        }
-        if let Some(p) = find_on_path("powershell.exe") {
-            return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
-        }
-        (
-            std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
-            vec!["/C"],
-        )
+        windows_native_shell()
     }
+}
+
+#[cfg(windows)]
+fn windows_native_shell() -> (String, Vec<&'static str>) {
+    if let Some(p) = find_on_path("pwsh.exe") {
+        return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
+    }
+    if let Some(p) = find_on_path("powershell.exe") {
+        return (p.display().to_string(), vec!["-NoProfile", "-Command"]);
+    }
+    (
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into()),
+        vec!["/C"],
+    )
+}
+
+/// Set at startup from `[sandbox] enabled`. Not changed by `/sandbox`, so the
+/// shell the model was told about stays the shell for the whole session.
+static SANDBOXED_TOOL_SHELL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_sandboxed_tool_shell(on: bool) {
+    SANDBOXED_TOOL_SHELL.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The shell the model's commands run in.
+pub fn tool_shell() -> (String, Vec<&'static str>) {
+    #[cfg(windows)]
+    if SANDBOXED_TOOL_SHELL.load(std::sync::atomic::Ordering::Relaxed)
+        && std::env::var("CHANTO_SHELL").map_or(true, |s| s.trim().is_empty())
+    {
+        return windows_native_shell();
+    }
+    shell()
+}
+
+/// The quoting rules of [`tool_shell`].
+pub fn tool_flavor() -> Flavor {
+    flavor_of(&tool_shell().0)
 }
 
 /// A bash that runs Windows programs in Windows paths: Git Bash (or MSYS2,
@@ -135,7 +168,7 @@ fn windows_bash() -> Option<PathBuf> {
     from_path.or_else(|| {
         ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
             .iter()
-            .filter_map(|k| std::env::var_os(k))
+            .filter_map(std::env::var_os)
             .map(|d| PathBuf::from(d).join("Git").join("bin").join("bash.exe"))
             .find(|p| is_exec(p))
     })
@@ -224,26 +257,4 @@ pub fn std_command(script: &str) -> std::process::Command {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn flavors_and_powershell_quoting() {
-        assert_eq!(flavor_of("/bin/bash"), Flavor::Posix);
-        assert_eq!(
-            flavor_of(r"C:\Program Files\Git\bin\bash.exe"),
-            Flavor::Posix
-        );
-        assert_eq!(
-            flavor_of(r"C:\Program Files\PowerShell\7\pwsh.exe"),
-            Flavor::PowerShell
-        );
-        assert_eq!(flavor_of("powershell.exe"), Flavor::PowerShell);
-        assert_eq!(flavor_of(r"C:\Windows\system32\CMD.EXE"), Flavor::Cmd);
-        assert_eq!(powershell_quote("a $(b) %c%.rs"), "'a $(b) %c%.rs'");
-        assert_eq!(
-            powershell_quote("it's\u{2019}.rs"),
-            "'it''s\u{2019}\u{2019}.rs'"
-        );
-    }
-}
+mod tests;

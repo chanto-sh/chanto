@@ -1,0 +1,170 @@
+use super::*;
+
+fn project(tag: &str) -> PathBuf {
+    let d = std::env::temp_dir().join(format!(
+        "chanto-guard-{tag}-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(d.join(".git/hooks")).unwrap();
+    std::fs::write(d.join(".git/config"), "[core]\n").unwrap();
+    std::fs::write(d.join(".git/HEAD"), "ref\n").unwrap();
+    std::fs::write(d.join("a.txt"), "a\n").unwrap();
+    d
+}
+
+#[test]
+fn nothing_changed_says_nothing() {
+    let d = project("same");
+    let g = ConfigGuard::take(&d);
+    std::fs::write(d.join("a.txt"), "edited\n").unwrap();
+    std::fs::write(d.join(".git/HEAD"), "moved\n").unwrap();
+    assert!(g.restore().is_none(), "ordinary work isn't touched");
+    assert_eq!(
+        std::fs::read_to_string(d.join(".git/HEAD")).unwrap(),
+        "moved\n"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn planted_and_edited_files_are_put_back() {
+    let d = project("plant");
+    std::fs::write(d.join(".mcp.json"), "{}\n").unwrap();
+    let g = ConfigGuard::take(&d);
+    std::fs::write(d.join(".git/hooks/post-commit"), "evil").unwrap();
+    std::fs::write(d.join(".git/config"), "[core]\n\tfsmonitor = evil\n").unwrap();
+    std::fs::write(d.join(".mcp.json"), "evil").unwrap();
+    std::fs::create_dir_all(d.join(".chanto")).unwrap();
+    std::fs::write(d.join(".chanto/config.toml"), "evil").unwrap();
+    let note = g.restore().expect("the changes should be reported");
+    assert!(
+        note.contains(".git/config") && note.contains(".mcp.json"),
+        "{note}"
+    );
+    assert!(!d.join(".git/hooks/post-commit").exists());
+    assert!(!d.join(".chanto").exists());
+    assert_eq!(
+        std::fs::read_to_string(d.join(".git/config")).unwrap(),
+        "[core]\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.join(".mcp.json")).unwrap(),
+        "{}\n"
+    );
+    assert!(g.restore().is_none(), "nothing is left to undo");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn dropping_the_guard_puts_changes_back() {
+    let d = project("drop");
+    {
+        let _g = ConfigGuard::take(&d);
+        std::fs::write(d.join(".git/hooks/pre-commit"), "evil").unwrap();
+        std::fs::write(d.join(".git/config"), "[core]\n\tfsmonitor = evil\n").unwrap();
+    }
+    assert!(
+        !d.join(".git/hooks/pre-commit").exists(),
+        "a planted hook can't outlive the guard"
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.join(".git/config")).unwrap(),
+        "[core]\n"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[test]
+fn an_explicit_restore_makes_the_drop_a_no_op() {
+    let d = project("twice");
+    let g = ConfigGuard::take(&d);
+    std::fs::write(d.join(".git/hooks/pre-commit"), "evil").unwrap();
+    assert!(g.restore().is_some());
+    // Work done after the explicit restore is ordinary, so dropping the guard
+    // must not undo it.
+    std::fs::write(d.join("a.txt"), "after\n").unwrap();
+    drop(g);
+    assert_eq!(std::fs::read_to_string(d.join("a.txt")).unwrap(), "after\n");
+    std::fs::remove_dir_all(&d).unwrap();
+}
+
+#[cfg(windows)]
+#[test]
+fn links_to_a_file_and_a_directory_are_put_back() {
+    let d = project("links");
+    let elsewhere = project("links-elsewhere");
+    std::fs::write(d.join("target.txt"), "real\n").unwrap();
+    std::os::windows::fs::symlink_file(d.join("target.txt"), d.join(".git/hooks/file-link"))
+        .unwrap();
+    std::os::windows::fs::symlink_dir(elsewhere.join(".git/hooks"), d.join(".git/hooks/dir-link"))
+        .unwrap();
+    let g = ConfigGuard::take(&d);
+    std::fs::remove_file(d.join(".git/hooks/file-link")).unwrap();
+    std::fs::remove_dir(d.join(".git/hooks/dir-link")).unwrap();
+    std::fs::write(d.join(".git/hooks/file-link"), "evil").unwrap();
+    std::fs::create_dir(d.join(".git/hooks/dir-link")).unwrap();
+    assert!(g.restore().is_some());
+    assert!(
+        d.join(".git/hooks/file-link")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert!(
+        d.join(".git/hooks/dir-link")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+    std::fs::remove_dir_all(&elsewhere).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_directory_swapped_for_a_link_is_put_back() {
+    let d = project("swap");
+    let elsewhere = project("elsewhere");
+    std::fs::write(d.join(".git/hooks/keep"), "mine").unwrap();
+    let g = ConfigGuard::take(&d);
+    std::fs::remove_dir_all(d.join(".git/hooks")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.join(".git/hooks"), d.join(".git/hooks")).unwrap();
+    assert!(g.restore().is_some());
+    assert!(
+        !d.join(".git/hooks")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(
+        std::fs::read_to_string(d.join(".git/hooks/keep")).unwrap(),
+        "mine"
+    );
+    assert_eq!(
+        std::fs::read_dir(elsewhere.join(".git/hooks"))
+            .unwrap()
+            .count(),
+        0
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+    std::fs::remove_dir_all(&elsewhere).unwrap();
+}
+
+#[test]
+fn chantos_own_working_files_are_left_alone() {
+    let d = project("own");
+    let g = ConfigGuard::take(&d);
+    std::fs::create_dir_all(d.join(".chanto/worktrees/w")).unwrap();
+    std::fs::write(d.join(".chanto/worktrees/w/a"), "x").unwrap();
+    std::fs::write(d.join(".chanto/config.toml"), "evil").unwrap();
+    assert!(g.restore().is_some(), ".chanto itself is new");
+    assert!(!d.join(".chanto/config.toml").exists());
+    assert!(
+        d.join(".chanto/worktrees/w/a").exists(),
+        "a worktree survives"
+    );
+    std::fs::remove_dir_all(&d).unwrap();
+}

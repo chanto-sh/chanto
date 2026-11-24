@@ -1,0 +1,26 @@
+name = "review"
+description = "Reviews a new pull request for bugs it would ship"
+repo = "https://github.com/chanto-sh/chanto"
+placement = "self-hosted"
+model_keys = "own"
+labels = ["gha"]
+triggers = [{ on = "pull_request_opened" }]
+checks = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+]
+instructions = """
+Review the pull request for bugs, not style. Read the diff and the files it
+touches.
+
+Report only findings you can point at a line for and that would change
+behaviour: wrong logic, an unhandled error, a test that cannot fail, a permission
+or sandbox hole, a secret or personal path in output, a wire type change that
+breaks older clients, a docs claim the code does not support. For each one say
+what is wrong, where, and what you would do instead. Keep it under ten findings
+and put the riskiest first.
+
+Do not push to the branch and do not rewrite the change. When you can verify a
+finding by running the test or command in your worktree, do it and say what it
+printed. If the diff is fine, say that in one line.
+"""
