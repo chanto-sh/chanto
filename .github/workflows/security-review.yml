@@ -32,7 +32,7 @@ jobs:
       - name: Skip without a token
         if: env.CHANTO_CLOUD_TOKEN == ''
         run: echo "::notice::Set the CHANTO_CLOUD_TOKEN secret to turn on the security review."
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: env.CHANTO_CLOUD_TOKEN != ''
         with:
           persist-credentials: false
