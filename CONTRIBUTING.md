@@ -16,8 +16,8 @@ cargo build                 # add --release for target/release/chanto
 ```
 
 `cargo build` and `cargo test` at the root build only the `chanto` CLI. The
-desktop app (`desktop/`) and the wire types (`proto/`) are separate workspace
-members so their dependencies never reach the CLI.
+desktop app (`desktop/`), the WebAssembly build (`web/`) and the wire types
+(`proto/`) are separate workspace members so their dependencies never reach the CLI.
 
 ## Before you open a pull request
 
@@ -79,7 +79,12 @@ Public URLs come from `src/site.rs`; route new code through it.
 2. Keep each PR focused on one change; smaller PRs review faster.
 3. Add or update tests for behavior you change. The agent-loop tests use a mock
    model server (`src/agent/tests.rs`), so most changes can be tested without a
-   live model.
+   live model. CI fails a `feat` or `fix` PR that changes code without touching a
+   test, unless its description has a line `Tests: none (<why>)`. At least 80% of
+   the changed lines must run in tests, across Linux and Windows;
+   `python3 scripts/test_gate.py coverage` shows the Linux or macOS figure before
+   you push. The `mutants` check breaks the changed lines to see whether a test
+   notices; it's advisory.
 4. When your change is user-visible, add a changelog fragment,
    `changelog.d/<branch-name>.md`, instead of editing CHANGELOG.md (see
    [changelog.d/README.md](changelog.d/README.md)). Separate files never
@@ -87,6 +92,14 @@ Public URLs come from `src/site.rs`; route new code through it.
 5. Give the pull request a [Conventional Commits](#commit-messages) title. PRs
    are squash-merged, so the title becomes the commit on `main`; CI checks it.
 6. Make sure the three CI checks above pass.
+7. Open it with `scripts/pr.sh create --title "<Conventional Commits title>"
+   --body-file <file>` (or `scripts/pr.sh edit <number> --body-file <file>`
+   to change one). It runs the same title and description checks as CI before
+   it calls `gh`, so a missing `## What this changes` or `## Testing` section
+   fails locally; start the file from
+   [.github/pull_request_template.md](.github/pull_request_template.md).
+   `python3 scripts/check-pr.py --body-file <file>` checks just the
+   description.
 
 ## Commit messages
 

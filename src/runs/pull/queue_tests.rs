@@ -264,6 +264,53 @@ async fn a_model_run_is_pushed_as_a_branch_and_reported() {
 }
 
 #[tokio::test]
+async fn an_unpushed_run_survives_the_next_startup() {
+    let (base, _) = mock_server(write_hello()).await;
+    let (home, m) = runner_home("pull-unpushed", &base);
+    let origin = make_repo(&home);
+    // The origin refuses every push.
+    sh(&origin, &["config", "receive.maxInputSize", "1"]);
+    let q = Queue::new();
+    let c = client(&serve_queue(q.clone()).await);
+    let job = job_for(&origin, "create hello.txt");
+    let status = execute(&c, &m, &job, None, false, true).await.unwrap();
+    assert_eq!(status, RunStatus::Failed, "{}", q.explain(&home));
+    let done = q.complete();
+    assert!(
+        done.result.summary.contains("could not be pushed"),
+        "{}",
+        done.result.summary
+    );
+    let runs = m.list();
+    assert_eq!(runs.len(), 1);
+    let run = runs[0].clone();
+    assert!(m.store.kept(&run.id));
+    m.close().await;
+    drop(m);
+
+    // The next `runner connect` clears out other leftovers but keeps this
+    // run's worktree and the branch holding its commits.
+    let m = Manager::open(Store::new(store_dir()), Launcher::InProcess, 1);
+    let (base, _) = mock_server(vec![]).await;
+    let mut req = crate::runs::tests::new_run(&origin, &base, "old");
+    req.task = "leftover".into();
+    let old = m.create(req).await.unwrap();
+    wait_for(&m, &old.id, "finished", |r| !r.state.is_active()).await;
+    clear_leftovers(&m).await;
+    assert!(m.get(&old.id).is_err(), "other leftovers are removed");
+    assert!(m.get(&run.id).is_ok());
+    assert!(run.worktree.join("hello.txt").exists());
+    assert_eq!(
+        sh(
+            &run.source.path,
+            &["show", &format!("{}:hello.txt", run.branch)]
+        ),
+        "hi"
+    );
+    m.close().await;
+}
+
+#[tokio::test]
 async fn unattended_runs_deny_prompts_and_report_no_changes() {
     let (base, seen) = mock_server(needs_permission()).await;
     let (home, m) = runner_home("pull-deny", &base);

@@ -31,6 +31,7 @@ fn setup() -> (Ctx, Arc<BgShell>, Arc<Capture>, std::path::PathBuf) {
     let shell = Arc::new(BgShell {
         id: "bash_6".into(),
         command: "cd /some/long/path && cargo build --release".into(),
+        cwd: "/some/long/path".into(),
         description: Some("Build release binary".into()),
         monitor: None,
         output: Mutex::new(String::new()),
@@ -60,11 +61,24 @@ fn setup() -> (Ctx, Arc<BgShell>, Arc<Capture>, std::path::PathBuf) {
 }
 
 #[tokio::test]
+async fn stopping_a_job_names_it_without_its_id() {
+    let (ctx, _shell, _, _dir) = setup();
+    assert_eq!(
+        KillShell.label_in(&json!({"shell_id":"bash_6"}), &ctx.env),
+        "KillShell(Build release binary)"
+    );
+    assert_eq!(
+        KillShell.label_in(&json!({"shell_id":"missing"}), &ctx.env),
+        "KillShell(missing)"
+    );
+}
+
+#[tokio::test]
 async fn output_poll_names_the_job_and_previews_only_new_lines() {
     let (ctx, shell, _, dir) = setup();
     assert_eq!(
         BashOutput.label_in(&json!({"bash_id":"bash_6"}), &ctx.env),
-        "BashOutput(Build release binary · bash_6)"
+        "BashOutput(Build release binary)"
     );
     *shell.output.lock().unwrap() = "one\ntwo\nthree\nfour\n".into();
     let out = BashOutput
@@ -124,7 +138,7 @@ async fn output_status_distinguishes_success_failure_and_filtered_silence() {
         assert_eq!(out.is_error, error);
     }
     assert!(capture.0.lock().unwrap().iter().any(
-        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for new output (up to 5s)")
+        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for output to settle (up to 5s)")
     ));
     std::fs::remove_dir_all(dir).unwrap();
 }
@@ -149,7 +163,7 @@ async fn waiting_poll_reports_what_it_is_waiting_for_then_shows_arriving_output(
         _ = tokio::time::sleep(Duration::from_millis(10)) => {}
     }
     assert!(capture.0.lock().unwrap().iter().any(
-        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for new output (up to 5s)")
+        |e| matches!(e,Event::ToolProgress{text,..} if text=="Waiting for output to settle (up to 5s)")
     ));
     *shell.output.lock().unwrap() = "Compiling chanto\n".into();
     let out = tokio::time::timeout(Duration::from_secs(2), poll)
@@ -160,6 +174,35 @@ async fn waiting_poll_reports_what_it_is_waiting_for_then_shows_arriving_output(
         out.display.as_deref(),
         Some("Still running · 1 new line\nCompiling chanto")
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn a_wait_collects_output_until_it_stops_arriving() {
+    // A test run prints a dot per test: the wait must not end on the first one.
+    let (ctx, shell, _, dir) = setup();
+    let writer = shell.clone();
+    let feed = tokio::spawn(async move {
+        for _ in 0..10 {
+            writer.output.lock().unwrap().push('.');
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    });
+    let started = std::time::Instant::now();
+    let out = tokio::time::timeout(
+        Duration::from_secs(4),
+        BashOutput.run(json!({"bash_id":"bash_6","wait_secs":5}), &ctx),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    feed.await.unwrap();
+    assert!(
+        started.elapsed() >= Duration::from_millis(900),
+        "{:?}",
+        started.elapsed()
+    );
+    assert!(out.content.contains(".........."), "{}", out.content);
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -221,5 +264,54 @@ async fn dropping_a_running_command_stops_it() {
     assert!(
         gone(),
         "the command's child {pid} outlived the dropped tool call"
+    );
+}
+
+#[test]
+fn background_shells_get_readable_ids() {
+    assert_eq!(
+        readable_id(Some("Build release binary"), "cargo build", "bash"),
+        "build-release-binary"
+    );
+    assert_eq!(readable_id(None, "npm run dev", "bash"), "npm-run-dev");
+    assert_eq!(
+        readable_id(None, "cd web && PORT=3000 npm run dev", "bash"),
+        "npm-run-dev"
+    );
+    assert_eq!(
+        readable_id(None, "/usr/bin/python3 -m http.server 8000", "bash"),
+        "python3-m-http-server"
+    );
+    assert_eq!(
+        readable_id(Some("  "), "sleep 30; echo done", "bash"),
+        "sleep-30"
+    );
+    assert_eq!(
+        readable_id(Some("Watch CI for PR #234 until it finishes"), "", "x"),
+        "watch-ci-for-pr-234"
+    );
+    assert_eq!(readable_id(None, "$(x)", "monitor"), "monitor");
+    assert_eq!(readable_id(None, "", "monitor"), "monitor");
+    assert!(readable_id(Some(&"a".repeat(60)), "", "x").len() <= MAX_ID);
+}
+
+#[test]
+fn shell_ids_are_never_reused_in_a_session() {
+    let (ctx, ..) = setup();
+    assert_eq!(ctx.env.issue_shell_id("npm-run-dev"), "npm-run-dev");
+    assert_eq!(ctx.env.issue_shell_id("npm-run-dev"), "npm-run-dev-2");
+    assert_eq!(ctx.env.issue_shell_id("npm-run-dev"), "npm-run-dev-3");
+    assert_eq!(ctx.env.issue_shell_id("tests"), "tests");
+}
+
+#[test]
+fn the_start_line_names_the_shell_once() {
+    assert_eq!(
+        started_line("build-release-binary", "Build release binary"),
+        "Started in background · Build release binary (build-release-binary)"
+    );
+    assert_eq!(
+        started_line("npm-run-dev", "cd web && npm run dev"),
+        "Started in background · npm-run-dev\ncd web && npm run dev"
     );
 }

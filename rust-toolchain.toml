@@ -1,0 +1,7 @@
+# The one Rust version CI, release builds and local builds use. Bump it in a
+# pull request with every workflow's `toolchain:` (and release.yml's
+# RELEASE_RUST_VERSION) to match; scripts/check-rust-pin.py checks they do.
+# The weekly rust-next workflow tries the newest stable ahead of time.
+[toolchain]
+channel = "1.100.0"
+components = ["rustfmt", "clippy"]

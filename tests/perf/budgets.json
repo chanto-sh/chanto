@@ -4,40 +4,46 @@
     "over its platform's ceiling, when it is significantly slower than the base",
     "commit at `alpha`, or when it is slower by more than `large_change`.",
     "The ceilings are a backstop for a run with no base to compare with (a",
-    "main push, a manual run). CPU time per run varies by up to 2.6x between",
-    "GitHub's runner instances, so a CPU ceiling sits at about twice the",
-    "slowest measured run (startup / per request: Linux 39 / 3.4 ms, macOS",
-    "37 / 5.1 ms, Windows 78 / 11.4 ms). Peak memory is stable across",
-    "instances (startup / 40 turns: Linux 22 / 26 MB, macOS 20 / 24 MB,",
-    "Windows 16 / 20 MB), so those ceilings sit at 1.5x. Tighter would fail",
-    "pull requests on a slow or noisy runner for no reason; the comparison",
-    "with the base, measured on the same runner, is what holds a change.",
+    "main push, a manual run). They sit close to what the runners do, to keep",
+    "Chanto's lead rather than only catch disasters. CPU time per run varies by",
+    "up to 2.6x between GitHub's runner instances, so CPU ceilings sit about 1.3",
+    "times the slowest run seen (October 30-31, 2026: startup / per request at",
+    "most Linux 21.9 / 2.5 ms, macOS 35 / 4.2 ms, Windows per request 16 ms).",
+    "Windows startup sits at 90 ms: #168 cut it, only a few runs follow (slowest",
+    "46.9 ms, 93.8 ms before it), and its clock ticks every 15.6 ms. Peak memory",
+    "is stable, so about 1.1 times (startup / 40 turns: Linux 18.9 / 20.5 MB,",
+    "macOS 17.1 / 18.8 MB, Windows 14.8 / 17.1 MB). A failure on a change that",
+    "costs nothing means a slower runner than these saw: rerun it before raising",
+    "a ceiling. The comparison with the base, on the same runner, holds a change.",
     "reps: startup runs are cheap and noisy, so there are more of them; the",
     "turn workload is a whole session each but still costs a second, next to",
-    "two eight-minute builds. With 20 and 15 samples the U test reaches",
-    "alpha=0.01 when about 75% of one set sits above the other, so a 10% shift",
-    "against ~1% run-to-run noise is caught with room to spare. warmup runs",
-    "are discarded.",
+    "two eight-minute builds. With 50 and 15 samples the U test reaches",
+    "alpha=0.01 when about 64% (startup) or 75% (turns) of one set sits above",
+    "the other, so a 10% shift",
+    "against ~1% run-to-run noise is caught with room to spare. Startup was 20",
+    "runs, whose median a few milliseconds of jitter on a busy macOS runner",
+    "moved by 15% with the code unchanged. warmup runs are discarded.",
     "tolerance: below this change a metric is never called a regression.",
     "alpha: the one-sided Mann-Whitney U test on the two sample sets.",
-    "large_change: fails even without a significant p-value.",
+    "large_change: fails even without a significant p-value, if p is under",
+    "large_change_p: the sets must at least lean apart. Noise that moved only",
+    "the median gives p near 0.3; a real 10-30% shift, well under 0.001.",
     "device: the same 40-turn workload pinned to `cpus` core against wall-time",
     "and memory ceilings, for a machine with no spare cores and a phone's",
     "memory. It has no base to compare with, since wall time on a shared",
-    "runner measures the runner; the ceilings are deliberately loose first-run",
-    "values, to be tightened from what the runners report.",
+    "runner measures the runner; the ceilings sit about 1.3 times the slowest of",
+    "20 runs (244.5 / 4.6 ms) and 1.1 times for memory (20.7 MB).",
     "binary_mb: the release binary's size, in 10^6 bytes. It is exact, so it",
     "has no tolerance or test: it fails only over its ceiling, and a pull",
     "request that needs more raises the ceiling here, where reviewers see the",
-    "growth. First values, about 15-20% above the opt-level \"s\" builds",
-    "(macOS arm64 20.3 MB; v0.1.7 at opt-level 3 was 25.6 / 31.2 / 40.0 MB on",
-    "macOS / Linux / Windows, about 21% more), to be tightened from what the",
-    "runners report."
+    "growth. About 2.5% above the builds of October 31, 2026",
+    "(macOS 20.3, Linux 24.0, Windows 29.3 MB); Linux is 3.3% above its",
+    "24.0 MB build after reedline 0.53 and rfd 0.18."
   ],
   "alpha": 0.01,
   "warmup": 2,
   "reps": {
-    "startup": 20,
+    "startup": 50,
     "turns": 15
   },
   "workload": {
@@ -46,17 +52,20 @@
   },
   "tolerance": {
     "startup_cpu_ms": 0.04,
-    "startup_rss_mb": 0.08,
+    "startup_rss_mb": 0.03,
     "turn_cpu_ms": 0.04,
-    "turn_rss_mb": 0.08
+    "turn_rss_mb": 0.03
   },
   "large_change": 0.10,
+  "large_change_p": 0.1,
   "stress": {
     "_comment": [
       "tests/perf/stress.py: a long session and a large tree, against the fake",
-      "model. Ceilings from what the Linux and macOS runners report (October",
-      "2026: 26-44 MB, every step under 0.8 s): about twice for memory and",
-      "5-15 times for step times, which vary more on a shared runner. drift:",
+      "model. Ceilings from the last 16 Linux and macOS runs (October 31, 2026:",
+      "long session 39.5 MB, large tree 32 MB, resume 25.5 MB and 0.15 s): about",
+      "1.25 times for memory. Step times swing about 3x between runner instances",
+      "(grep_count: 0.8 s typically, 2.73 s on a slow macOS one), so about 2 times the",
+      "slowest seen. drift:",
       "the last quarter's median gap between model requests may be at most",
       "this times the first quarter's, plus 2 ms.",
       "grep_vs_rg: Grep for paths may take at most this times `rg -l` on the",
@@ -65,48 +74,128 @@
     "long_session": {
       "turns": 2000,
       "files": 400,
-      "rss_mb": 80,
+      "rss_mb": 50,
       "drift": 2.0,
       "timeout_s": 600
     },
     "large_tree": {
       "files": 30000,
-      "rss_mb": 80,
-      "step_s": {"glob_all": 1, "grep_paths": 3, "grep_count": 4, "read_large": 1, "read_c": 1, "edit_c": 1},
+      "rss_mb": 40,
+      "step_s": {"glob_all": 0.6, "grep_paths": 4, "grep_count": 6, "read_large": 0.4, "read_c": 0.4, "edit_c": 1.2},
       "grep_vs_rg": 2.0,
       "timeout_s": 900
     },
-    "resume": {"first_request_s": 3, "rss_mb": 80, "timeout_s": 120},
+    "resume": {"first_request_s": 0.5, "rss_mb": 32, "timeout_s": 120},
     "cleanup": {"grace_s": 3, "timeout_s": 120}
   },
   "device": {
     "cpus": 1,
     "reps": 5,
-    "startup_wall_ms": 1500,
-    "turn_wall_ms": 250,
-    "rss_mb": 256
+    "startup_wall_ms": 320,
+    "turn_wall_ms": 6,
+    "rss_mb": 23
+  },
+  "exact": {
+    "_comment": [
+      "tests/perf/exact.py, on Linux: instruction counts and prompt size. On the",
+      "first run the same binary's runs spread 0.67% (startup) and 0.16% (turns),",
+      "and two builds of the same code differed by 0.04% at most, so a change over",
+      "1% or 0.5% is real. Prompt bytes are exact. Ceilings sit about 2% over that",
+      "run (72.3M and 446M instructions, 23058 bytes), to stop slow creep across",
+      "pull requests. A new Rust version can move instructions: raise them here."
+    ],
+    "reps": 3,
+    "tolerance": {
+      "startup_instructions": 0.01,
+      "turn_instructions": 0.005,
+      "prompt_bytes": 0.01
+    },
+    "ceilings": {
+      "startup_instructions": 74000000,
+      "turn_instructions": 455000000,
+      "prompt_bytes": 23500
+    }
+  },
+  "responsive": {
+    "_comment": [
+      "tests/perf/responsive.py. idle_bytes is exact: an idle app draws nothing.",
+      "Timing ceilings have room: on October 31, 2026 idle was 0.43% of a core on",
+      "Linux and 0.87% on macOS, and a key's first output under 2 ms. A key draws",
+      "58 bytes; a full redraw would pass 200. A shell command took 3-8 ms of CPU",
+      "on Linux and 342-534 ms on Windows across two runs of the same code, and 35",
+      "ms on macOS in one, so runners swing up to 2.6x: ceilings sit about 1.3 times",
+      "the slowest seen, or 2.6 times for macOS's single run. Processes per command",
+      "(3.2 on Windows) don't depend on the runner, so that's the tight guard.",
+      "Six subagents reading 40 KB each cost 0.62 MB and 14 ms of CPU apiece on one",
+      "macOS run. Memory has about 2.4 times the room and CPU 3.5 times, for slower",
+      "runners; these are first values, and Windows' CPU only reports until it has runs.",
+      "fan_out_time_vs_double near 1 would mean the limit on agents stopped holding.",
+      "Windows' cost is starting PowerShell for each command. A 1 MB paste draws",
+      "5-7 KB, whatever its size, including a warning hint's redraws for its 10",
+      "seconds; timing only reports, since most of it is writing to the terminal."
+    ],
+    "linux": {
+      "idle_percent": 2,
+      "idle_bytes": 0,
+      "idle_after_long_percent": 2,
+      "idle_after_long_bytes": 0,
+      "typing_ms": 8,
+      "typing_after_long_ms": 8,
+      "page_up_ms": 50,
+      "typing_bytes": 200,
+      "typing_after_long_bytes": 200,
+      "paste_lines_bytes": 12000,
+      "paste_one_line_bytes": 12000,
+      "shell_cpu_ms": 11,
+      "fan_out_mb_per_agent": 1.5,
+      "fan_out_cpu_ms_per_agent": 50,
+      "fan_out_time_vs_double": 0.8
+    },
+    "darwin": {
+      "idle_percent": 3,
+      "idle_bytes": 0,
+      "idle_after_long_percent": 3,
+      "idle_after_long_bytes": 0,
+      "typing_ms": 16,
+      "typing_after_long_ms": 16,
+      "page_up_ms": 80,
+      "typing_bytes": 200,
+      "typing_after_long_bytes": 200,
+      "paste_lines_bytes": 12000,
+      "paste_one_line_bytes": 12000,
+      "shell_cpu_ms": 100,
+      "fan_out_mb_per_agent": 1.5,
+      "fan_out_cpu_ms_per_agent": 50,
+      "fan_out_time_vs_double": 0.8
+    },
+    "windows": {
+      "shell_cpu_ms": 700,
+      "shell_processes": 3.5,
+      "fan_out_mb_per_agent": 1.5,
+      "fan_out_time_vs_double": 0.8
+    }
   },
   "budgets": {
     "linux": {
-      "startup_cpu_ms": 80,
-      "startup_rss_mb": 34,
-      "turn_cpu_ms": 8,
-      "turn_rss_mb": 40,
-      "binary_mb": 29
+      "startup_cpu_ms": 28,
+      "startup_rss_mb": 21,
+      "turn_cpu_ms": 3.3,
+      "turn_rss_mb": 22.5,
+      "binary_mb": 24.8
     },
     "darwin": {
-      "startup_cpu_ms": 80,
-      "startup_rss_mb": 32,
-      "turn_cpu_ms": 12,
-      "turn_rss_mb": 36,
-      "binary_mb": 24
+      "startup_cpu_ms": 45,
+      "startup_rss_mb": 19,
+      "turn_cpu_ms": 5.5,
+      "turn_rss_mb": 20.5,
+      "binary_mb": 21
     },
     "windows": {
-      "startup_cpu_ms": 160,
-      "startup_rss_mb": 24,
-      "turn_cpu_ms": 24,
-      "turn_rss_mb": 30,
-      "binary_mb": 37
+      "startup_cpu_ms": 90,
+      "startup_rss_mb": 16.5,
+      "turn_cpu_ms": 21,
+      "turn_rss_mb": 19,
+      "binary_mb": 31
     }
   }
 }

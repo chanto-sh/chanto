@@ -369,6 +369,69 @@ impl Store {
     pub fn remove(&self, id: &str) {
         let _ = std::fs::remove_dir_all(self.run_dir(id));
     }
+
+    /// Mark a finished run whose commits exist only here (its push failed),
+    /// so clearing out old runs leaves its worktree and branch alone.
+    pub fn keep(&self, id: &str) -> Result<()> {
+        crate::util::write_private(&self.run_dir(id).join(KEEP_MARKER), b"")?;
+        Ok(())
+    }
+
+    /// The run was marked with [`Store::keep`].
+    pub fn kept(&self, id: &str) -> bool {
+        self.run_dir(id).join(KEEP_MARKER).exists()
+    }
+
+    /// Take the store's host lock: only the process holding it hosts the
+    /// store's runs and scheduled jobs. `None` when another process holds
+    /// it. The operating system releases it when the process exits, however
+    /// it exits, so a crash never leaves a stale lock behind.
+    pub fn lock_host(&self) -> Result<Option<HostLock>> {
+        // A few tries: another process's [`Store::hosted_elsewhere`] check
+        // holds the lock for a moment.
+        for _ in 0..10 {
+            if let Some(l) = self.try_lock_host()? {
+                return Ok(Some(l));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        self.try_lock_host()
+    }
+
+    fn try_lock_host(&self) -> Result<Option<HostLock>> {
+        self.ensure_dir()?;
+        let path = self.dir.join(HOST_LOCK);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("opening {}", path.display()))?;
+        match file.try_lock() {
+            Ok(()) => Ok(Some(HostLock { _file: file })),
+            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+            Err(std::fs::TryLockError::Error(e)) => {
+                Err(anyhow::Error::new(e).context(format!("locking {}", path.display())))
+            }
+        }
+    }
+
+    /// Another process holds the host lock. Only for a process that doesn't
+    /// hold it itself: the check takes the lock for a moment.
+    pub fn hosted_elsewhere(&self) -> bool {
+        matches!(self.try_lock_host(), Ok(None))
+    }
+}
+
+/// The file marking a run kept by [`Store::keep`].
+const KEEP_MARKER: &str = "keep";
+/// The lock file behind [`Store::lock_host`].
+const HOST_LOCK: &str = "host.lock";
+
+/// Held by the one process hosting a store's runs; dropping it releases the lock.
+#[derive(Debug)]
+pub struct HostLock {
+    _file: std::fs::File,
 }
 
 /// Where run worktrees live: `<home>/runs/worktrees/<project-key>/<id>`,
@@ -389,11 +452,31 @@ pub fn split_worktree_path(p: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
     split_in_store(p).map(|(_, wt, inner)| (wt, inner))
 }
 
+/// `dir` resolved through symlinks, or `None` while it doesn't exist. This is
+/// asked for every path checked (permissions, config layers), so a directory
+/// that exists is resolved once; one that doesn't, as for anyone who has never
+/// started a background run, costs a single `stat` rather than a `realpath`.
+fn canonical_store_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    static RESOLVED: std::sync::Mutex<Vec<(PathBuf, PathBuf)>> = std::sync::Mutex::new(Vec::new());
+    if let Some((_, c)) = RESOLVED.lock().unwrap().iter().find(|(d, _)| d == dir) {
+        return Some(c.clone());
+    }
+    if !dir.is_dir() {
+        return None;
+    }
+    let c = dir.canonical().ok()?;
+    RESOLVED
+        .lock()
+        .unwrap()
+        .push((dir.to_path_buf(), c.clone()));
+    Some(c)
+}
+
 /// The run store holding `p`'s worktree, that worktree, and the path within it.
 fn split_in_store(p: &std::path::Path) -> Option<(PathBuf, PathBuf, PathBuf)> {
     run_stores().into_iter().find_map(|store| {
         let root = store.join("worktrees");
-        let canon = root.canonical().ok();
+        let canon = canonical_store_dir(&root);
         let rest = p
             .strip_prefix(&root)
             .ok()

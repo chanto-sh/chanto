@@ -15,6 +15,11 @@ concurrency:
 # Checks only read the repository; nothing here needs a writable token.
 permissions:
   contents: read
+# Debug info for file and line numbers only (backtraces keep them): full debug
+# info made every test binary several times larger, which slowed linking
+# (most on Windows) and grew the build cache each job restores.
+env:
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 # Only main writes a build cache. GitHub gives the repository one budget shared
 # by every ref, and a pull request that stored its own copies (one per job,
 # several hundred megabytes each) evicted main's, which every pull request
@@ -26,15 +31,18 @@ jobs:
   # Windows included, so the whole suite runs on all three platforms.
   macos:
     runs-on: macos-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       # The extension's server is also exercised by the Rust IDE tests.
@@ -50,61 +58,122 @@ jobs:
   # rustfmt, on every push: no build, just the format check.
   fmt:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
+          toolchain: "1.100.0"
           components: rustfmt
       - run: cargo fmt --all --check
       - name: Test release metadata checks
         run: python3 -m unittest discover -s packaging -p 'test_*release*.py'
       - name: Check changelog fragments
         run: python3 packaging/changelog.py --check
+      - name: Test the test gate
+        run: python3 scripts/test_test_gate.py
+      - name: Test the PR description check
+        run: python3 scripts/test_check_pr.py
+      - name: Check the docs name every flag, command, key and tool
+        run: |
+          python3 scripts/test_docs_drift.py
+          python3 scripts/docs_drift.py
+      - name: Check the site's prose (docs/style.md)
+        run: |
+          python3 -m unittest discover -s tests/docs -p 'test_*.py'
+          python3 scripts/docs_style.py
+      - name: Check tests live outside product files
+        run: |
+          python3 scripts/test_inline_tests.py
+          python3 scripts/inline_tests.py
+      - name: Check every workflow builds with the pinned Rust
+        run: python3 scripts/check-rust-pin.py
+      - name: Check every action is pinned to an exact release
+        run: python3 scripts/action-pins.py --check
   # clippy over the whole workspace, on every push. The desktop app needs the
   # same GTK/WebKit packages as `desktop-linux` to build on Linux.
   clippy:
     runs-on: ubuntu-22.04
+    # Clippy takes a couple of minutes cold; this is a backstop for a step that
+    # hangs anyway, well under GitHub's 360-minute default.
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
+          toolchain: "1.100.0"
           components: clippy
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+      # A boot-time apt lock or a flaky mirror can hang this step for the whole
+      # job; wait a bounded time for the lock and retry the index fetches.
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
       - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+  # chanto-core is what the WebAssembly build shares with the CLI: it must keep
+  # building for the browser target, with no OS-only dependency creeping in.
+  core-wasm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+          targets: wasm32-unknown-unknown, wasm32-wasip1
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - run: cargo check --locked -p chanto-core -p chanto-web --target wasm32-unknown-unknown
+      - run: cargo test --locked -p chanto-core
+      # The same tests compiled to WebAssembly and run under Node's WASI,
+      # the agent loop's scripted turn among them: what the browser build
+      # runs has to behave as it does natively.
+      - run: cargo test --locked -p chanto-core --target wasm32-wasip1
+        env:
+          CARGO_TARGET_WASM32_WASIP1_RUNNER: node ${{ github.workspace }}/scripts/wasi-run.mjs
   # The main suite on Linux, on every push (Linux minutes are the cheapest).
   linux:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
       # bubblewrap for the Linux sandbox; ripgrep for Grep. Ubuntu 24.04
       # restricts the unprivileged user namespaces bubblewrap needs.
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
       # The extension's server is also exercised by the Rust IDE tests.
       - run: npm ci && npm test
         working-directory: ide/vscode
-      - run: cargo build --locked
+      # `cargo test` builds the binary the tests run, so no separate build.
       - run: cargo test --locked --quiet
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
       - run: cargo test --locked --quiet -p chanto-proto
+      # sdk/schema.json has to be what src/wire.rs generates: the SDKs' types
+      # come from it.
+      - run: cargo test --locked --quiet --features schema --lib 'wire::'
       # The install script: platforms, curl/wget, checksums and signatures.
       - run: sh tests/install.sh
   # Test coverage (cargo-llvm-cov, the compiler's own instrumentation) of the
@@ -112,36 +181,38 @@ jobs:
   # The summary goes on the run page; Codecov comments on pull requests.
   coverage:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     permissions:
       contents: read
-      id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
+          toolchain: "1.100.0"
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: coverage
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap ripgrep
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 bubblewrap ripgrep
       - run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
-      - uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91 # v2.87.31
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
         with:
-          tool: cargo-llvm-cov@0.6.21
-      - run: cargo llvm-cov --locked --quiet --lcov --output-path lcov.info
+          tool: cargo-llvm-cov@0.9.1
+      # chanto-core's own tests too: code that moved there is tested there.
+      - run: cargo llvm-cov --locked --quiet -p chanto -p chanto-core --lcov --output-path lcov.info
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
       # Product code only: test files would inflate the figure.
       - name: Summary
         run: |
-          cargo llvm-cov report --summary-only \
+          cargo llvm-cov report --summary-only -p chanto -p chanto-core \
             --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' > coverage.txt
           tail -n 1 coverage.txt
           {
@@ -150,42 +221,132 @@ jobs:
             tail -n 1 coverage.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+      # The `codecov` job sends this with the Windows report as one upload.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          files: lcov.info
-          # Only the lcov report; the uploader would also pick up coverage.txt.
-          disable_search: true
-          use_oidc: true
-          fail_ci_if_error: false
+          name: coverage-linux
+          path: lcov.info
+          retention-days: 1
       # After the upload, so a drop is still reported. OpenSSF silver asks
       # for 80% line coverage.
       - name: Coverage floor
         run: |
-          cargo llvm-cov report --summary-only \
+          cargo llvm-cov report --summary-only -p chanto -p chanto-core \
             --ignore-filename-regex '(^|/)(tests|[a-z_]+_tests)\.rs$' \
-            --fail-under-lines 80 > /dev/null
+            --fail-under-lines 83 > /dev/null
+  # The lines only Windows compiles count toward Codecov's patch check too;
+  # the `codecov` job sends this report with the Linux one.
+  coverage-windows:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    # Over rust-toolchain.toml's pin, which would otherwise pick 1.100.
+    env:
+      RUSTUP_TOOLCHAIN: "1.99.1"
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Rust 1.99.1 and cargo-llvm-cov 0.6.21 for now: with Rust 1.100,
+      # cargo-llvm-cov (0.6.21 and 0.9.1 alike) maps almost none of the
+      # Windows test binaries' coverage, and Codecov rejects the near-empty
+      # report. Coverage only measures which lines the tests reach; every
+      # other job builds and tests with the current compiler.
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.99.1" # rust-pin: exempt, see the comment above
+          components: llvm-tools-preview
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
+      - uses: taiki-e/install-action@75a7c0f87bd666af3cdb75c5b9e9d03ab6044e6f # v2.90.6
+        with:
+          tool: cargo-llvm-cov@0.6.21
+      # chanto's tests only: chanto-core's own expect the `/` paths of their
+      # in-memory project, and run on Linux and WASI. A failing test still
+      # gets its report saved (the `windows` job is what judges the tests), so
+      # Codecov's status isn't left waiting.
+      - run: cargo llvm-cov --locked --quiet --ignore-run-fail -p chanto --lcov --output-path lcov.info
+        env:
+          CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
+          CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-windows
+          path: lcov.info
+          retention-days: 1
+  # Both coverage reports go to Codecov as one upload, so it has one report
+  # to process and post. Two separate uploads, with Codecov told to wait for
+  # both, now and then left its pull request status pending for good.
+  codecov:
+    needs: [coverage, coverage-windows]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # The uploader lists the repository's files to map the reports' paths
+      # (Windows ones included) onto it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          path: ${{ runner.temp }}/coverage
+      - name: Reports
+        id: reports
+        env:
+          DIR: ${{ runner.temp }}/coverage
+        run: |
+          files=$(find "$DIR" -name lcov.info | sort | paste -sd, -)
+          echo "found: $files"
+          echo "files=$files" >> "$GITHUB_OUTPUT"
+      - uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7.1.1
+        if: ${{ steps.reports.outputs.files != '' }}
+        with:
+          files: ${{ steps.reports.outputs.files }}
+          disable_search: true
+          use_oidc: true
+          fail_ci_if_error: false
   # Exercise the native sandbox and process-tree tests on Windows.
   windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+          components: clippy
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
-      - run: cargo build --locked -j 2
-      - run: cargo check --locked -p chanto-desktop
-      - run: cargo test --locked -j 2 --quiet
+      - uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
+      # The clippy job runs on Linux, which never compiles the Windows-only
+      # paths and compiles the Unix-only ones; code left unused here would
+      # otherwise only show as warnings in a release build. The desktop app
+      # is part of the workspace, so this also checks it.
+      # Like macOS: all the runner's cores, and `cargo test` builds the binary
+      # rather than a separate `cargo build`.
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+      - run: cargo test --locked --quiet
         env:
           CHANTO_HOME: ${{ runner.temp }}/chanto-test-home
           CHANTO_COMPAT_HOME: ${{ runner.temp }}/chanto-compat-home
   installer-windows:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # install.ps1 under Windows PowerShell 5.1, verified by the OpenSSH
@@ -201,12 +362,15 @@ jobs:
         run: ./tests/install-windows.ps1 -Fixture "$env:RUNNER_TEMP\installer"
   proto:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - run: cargo test --locked -j 2 --quiet -p chanto-proto
@@ -214,38 +378,45 @@ jobs:
   # types change additively only (see the lint levels in proto/Cargo.toml).
   semver:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9
+      - uses: obi1kenobi/cargo-semver-checks-action@6b69fcf40e9b5fb17adeb57e4b6ecd020649a239 # v2.9 zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           package: chanto-proto
   # The desktop app ships in releases, so make sure it builds on every push.
   desktop-linux:
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
       - run: cargo check --locked -p chanto-desktop
   # Computer use on Wayland, in a headless Sway session with grim and ydotool.
   wayland:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: sudo apt-get update && sudo apt-get install -y sway grim ydotool && (ydotool --help 2>&1 | head -5 || true)
+      - run: sudo apt-get update -o Acquire::Retries=3 && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -o DPkg::Lock::Timeout=120 sway grim ydotool && (ydotool --help 2>&1 | head -5 || true)
       - run: sudo modprobe uinput && sudo chmod 666 /dev/uinput
       - name: Start Sway (headless) and ydotoold
         run: |
@@ -263,49 +434,66 @@ jobs:
         run: cat "$RUNNER_TEMP/sway.log" "$RUNNER_TEMP/ydotoold.log" || true
   sdk:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
+      # The SDKs' types have to be what sdk/schema.json generates.
+      - run: python3 sdk/gen_types.py --check
       - run: python3 -m unittest -v test_chanto_sdk
         working-directory: sdk/python
       - run: npm ci --ignore-scripts && npx tsc --noEmit --target es2022 --module nodenext --moduleResolution nodenext --strict --skipLibCheck --types node index.ts
         working-directory: sdk/typescript
+      # Builds the packages as sdk-publish.yml does, and imports the TypeScript one.
+      - run: python3 packaging/sdk.py 0.0.1
+      # Installs them somewhere clean and uses them against a real server.
+      - run: cargo build --locked -j 2
+      - run: python3 packaging/sdk_check.py --binary target/debug/chanto
   # The JetBrains plugin. Gradle's wrapper jar isn't committed (it would be an
   # unreviewable binary), so this installs the version gradle-wrapper.properties
   # names and runs it directly.
   jetbrains:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+      - uses: actions/setup-java@d1374f8ac74474200d16ef8ecee22c7ae7a51880 # v6.3.0
         with:
           distribution: temurin
           java-version: 21
-      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: 9.8.1
       - run: gradle --no-daemon buildPlugin
         working-directory: ide/jetbrains
   action:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: python3 -m unittest discover -s action/tests
   # Dependency policy (deny.toml): licenses, advisories, yanked crates, sources.
   deny:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
+      # Named by its release, not the floating v2 tag: zizmor checks that the
+      # comment matches the pinned commit, and v2 moves with every release.
+      - uses: EmbarkStudios/cargo-deny-action@17aeb3c839e42274e2b8adf721c8c65edfdc74dd # v2.1.3
         with:
           command: check

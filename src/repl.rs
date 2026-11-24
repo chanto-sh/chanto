@@ -16,6 +16,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     let fe = Arc::new(PlainFrontend::new(OutputFormat::Live, true));
     // Between prompts the REPL fires /loop iterations and scheduled tasks.
     crate::cron::set_frontend_drives();
+    crate::mcp::connect_in_background();
     let Setup {
         env,
         mut agent,
@@ -125,7 +126,7 @@ pub async fn run(cli: Cli) -> Result<()> {
                         env.set_mode(env.mode().next());
                         continue;
                     }
-                    Signal::CtrlC => continue,
+                    Signal::CtrlC(_) => continue,
                     Signal::CtrlD => break,
                     _ => continue,
                 }

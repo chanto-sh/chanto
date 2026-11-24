@@ -87,6 +87,12 @@ def check(tag, checksums, fetch=read):
                 dependencies = metadata.get("optionalDependencies", {})
                 require(all(dependencies.get("@chanto/cli-" + p) == version for p in PLATFORMS),
                         "npm wrapper: platform dependency mismatch")
+    web = document(f"https://registry.npmjs.org/@chanto%2fweb/{version}")
+    if web is not None:
+        require(web.get("name") == "@chanto/web" and web.get("version") == version,
+                "npm @chanto/web: version mismatch")
+        require(bool(web.get("dist", {}).get("attestations")),
+                "npm @chanto/web: missing provenance metadata")
     if "-" not in version:
         latest = document("https://registry.npmjs.org/@chanto%2fcli/latest")
         if latest is not None:
@@ -125,7 +131,7 @@ if __name__ == "__main__":
         if not failures:
             if args.npm_binary:
                 verify_npm_binary(args.tag, args.npm_binary)
-            print(f"{args.tag}: npm, crates.io, Homebrew and anonymous container access verified", flush=True)
+            print(f"{args.tag}: npm (CLI and web), crates.io, Homebrew and anonymous container access verified", flush=True)
             break
         print("\n".join(failures), flush=True)
         if time.monotonic() >= deadline:

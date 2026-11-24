@@ -20,7 +20,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         for name in (
-            "Cargo.toml", "Cargo.lock", "desktop/Cargo.toml",
+            "Cargo.toml", "Cargo.lock", "desktop/Cargo.toml", "core/Cargo.toml",
             "ide/vscode/package.json", "ide/jetbrains/build.gradle.kts",
             "CHANGELOG.md", "install.sh", "install.ps1",
         ):
@@ -56,6 +56,17 @@ class ReleaseMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Cargo.lock"):
             check(self.root, self.tag)
 
+    def test_rejects_core_version_drift(self):
+        self.replace("core/Cargo.toml", f'version = "{self.version}"', 'version = "99.0.0"')
+        with self.assertRaisesRegex(ValueError, "core/Cargo.toml"):
+            check(self.root, self.tag)
+
+    def test_rejects_a_loose_core_requirement(self):
+        # chanto has to take exactly the chanto-core released with it.
+        self.replace("Cargo.toml", f'version = "={self.version}"', f'version = "{self.version}"')
+        with self.assertRaisesRegex(ValueError, "chanto-core must be required"):
+            check(self.root, self.tag)
+
     def test_rejects_undated_notes(self):
         self.replace("CHANGELOG.md", f"## {self.tag} (", "## pending (")
         with self.assertRaisesRegex(ValueError, "dated release"):
@@ -84,6 +95,24 @@ class ReleaseMetadataTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "fix-x.md"):
             check(self.root, self.tag)
 
+
+class CratesPublishedTests(unittest.TestCase):
+    def test_every_workspace_crate_chanto_depends_on_is_published(self):
+        """`cargo publish -p chanto` fails on a path dependency crates.io
+        doesn't have (v0.1.9 did, on chanto-core): release.yml publishes each."""
+        import re
+        manifest = (ROOT / "Cargo.toml").read_text()
+        deps = manifest.split("[dependencies]", 1)[1].split("\n[", 1)[0]
+        path_deps = {
+            (m.group(1), m.group(2))
+            for m in re.finditer(r'^([A-Za-z0-9_-]+)\s*=\s*\{[^}]*path\s*=\s*"([^"]+)"', deps, re.M)
+        }
+        self.assertTrue(path_deps, "expected chanto's workspace crates among its dependencies")
+        workflow = (ROOT / ".github/workflows/release.yml").read_text()
+        crates = re.search(r'CRATES="([^"]+)"', workflow)
+        self.assertIsNotNone(crates, "release.yml's crates job lists the crates it publishes in CRATES")
+        listed = {(name, path) for path, name in re.findall(r"(\w+):(chanto-[\w-]+)", crates.group(1))}
+        self.assertEqual(path_deps, listed)
 
 class ChangelogFragmentTests(unittest.TestCase):
     def setUp(self):
@@ -132,6 +161,37 @@ class ChangelogFragmentTests(unittest.TestCase):
         text = (self.root / "CHANGELOG.md").read_text()
         self.assertRegex(text, r"## Unreleased\n\n## v0.2.0 \(October 28, 2026\)\n")
 
+
+
+class RequireFragmentTests(unittest.TestCase):
+    def need(self, title, body="", changed=()):
+        return changelog["require_fragment"](title, body, list(changed))
+
+    def test_user_visible_types_need_a_fragment(self):
+        for title in ["feat: add X", "fix(tui): wrap Y", "perf(http)!: share Z"]:
+            self.assertIsNotNone(self.need(title, changed=["src/x.rs"]), title)
+            self.assertIsNone(self.need(title, changed=["src/x.rs", "changelog.d/x.md"]), title)
+
+    def test_other_types_do_not(self):
+        for title in ["refactor: move X", "ci(perf): tighten Y", "docs: fix a typo",
+                      "chore(release): v0.2.0", "test(core): cover Z", "build(deps): bump w"]:
+            self.assertIsNone(self.need(title, changed=["src/x.rs"]), title)
+
+    def test_the_readme_is_not_a_fragment(self):
+        self.assertIsNotNone(self.need("fix: x", changed=["changelog.d/README.md"]))
+
+    def test_opting_out_takes_a_reason_outside_the_template_comments(self):
+        for body in ["Changelog: none (CI only)", "## Notes\nchangelog: none - Windows-only warnings",
+                     "Changelog: none: a test fix"]:
+            self.assertIsNone(self.need("fix: x", body), body)
+        for body in ["Changelog: none", "<!-- Changelog: none (template) -->",
+                     "no changelog needed", "Changelog: none ()"]:
+            self.assertIsNotNone(self.need("fix: x", body), body)
+
+    def test_the_message_says_how_to_fix_it(self):
+        why = self.need("perf: faster", changed=["src/x.rs"])
+        self.assertIn("changelog.d/<name>.md", why)
+        self.assertIn("Changelog: none", why)
 
 if __name__ == "__main__":
     unittest.main()

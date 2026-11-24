@@ -119,13 +119,17 @@ fn timed_out_after(output: &str) -> Option<u64> {
     rest.split_once('s')?.0.parse().ok()
 }
 
+/// A check the agent ran itself: command, edit sequence at the time, whether
+/// it passed, its output (kept for failures), and the directory it ran in.
+type CheckRun = (String, u64, bool, String, PathBuf);
+
 /// The last check the agent ran since its most recent edit, if that run
 /// failed. Anything edited after the run makes it stale, so no nudge.
-fn last_failed_check(runs: &[(String, u64, bool, String)], edit_seq: u64) -> Option<(&str, &str)> {
+fn last_failed_check(runs: &[CheckRun], edit_seq: u64) -> Option<(&str, &str)> {
     runs.iter()
         .rev()
-        .find(|(_, seq, _, _)| *seq == edit_seq)
-        .and_then(|(cmd, _, ok, out)| (!ok).then_some((cmd.as_str(), out.as_str())))
+        .find(|(_, seq, _, _, _)| *seq == edit_seq)
+        .and_then(|(cmd, _, ok, out, _)| (!ok).then_some((cmd.as_str(), out.as_str())))
 }
 
 /// The target a failing test name belongs to, and the selector within it: the
@@ -151,16 +155,17 @@ fn test_target(name: &str) -> Option<(String, Option<String>)> {
 /// failing test's own file, module, class or the test itself. This is the
 /// "ran the suite, saw it fail, then ran a narrower thing that passed" finish,
 /// which no single-run guard catches.
-fn unverified_failure(runs: &[(String, u64, bool, String)]) -> Option<(&str, &str)> {
-    let (idx, cmd, out) = runs
+fn unverified_failure(runs: &[CheckRun]) -> Option<(&str, &str)> {
+    let (idx, cmd, out, dir) = runs
         .iter()
         .enumerate()
         .rev()
-        .find(|(_, (_, _, ok, _))| !ok)
-        .map(|(i, (cmd, _, _, out))| (i, cmd, out))?;
+        .find(|(_, (_, _, ok, _, _))| !ok)
+        .map(|(i, (cmd, _, _, out, dir))| (i, cmd, out, dir))?;
     let failing = crate::guardrails::failing_tests(out)?;
-    let covered = runs[idx + 1..].iter().any(|(run, _, ok, _)| {
-        *ok && (crate::guardrails::covers(run, cmd)
+    let covered = runs[idx + 1..].iter().any(|(run, _, ok, _, run_dir)| {
+        *ok && (crate::guardrails::at_root(run, run_dir, dir)
+            .is_some_and(|run| crate::guardrails::covers(&run, cmd))
             || failing.iter().all(|test| runs_test(run, test)))
     });
     (!covered).then_some((cmd.as_str(), out.as_str()))
@@ -275,14 +280,19 @@ pub fn event_json(ev: &Event) -> Option<Value> {
 }
 
 fn event_json_raw(ev: &Event) -> Option<Value> {
-    Some(match ev {
-        Event::AssistantStart => json!({"type": "assistant_start"}),
-        Event::AssistantEnd => json!({"type": "assistant_end"}),
-        Event::Text(t) => json!({"type": "text", "text": t}),
-        Event::Reasoning(t) => json!({"type": "reasoning", "text": t}),
-        Event::ToolStart { id, label, parent } => {
-            json!({"type": "tool_start", "id": id, "label": label, "parent": parent})
-        }
+    use crate::wire::{self, StreamEvent as E};
+    let todos;
+    let output;
+    let ev = match ev {
+        Event::AssistantStart => E::AssistantStart,
+        Event::AssistantEnd => E::AssistantEnd,
+        Event::Text(t) => E::Text { text: t },
+        Event::Reasoning(t) => E::Reasoning { text: t },
+        Event::ToolStart { id, label, parent } => E::ToolStart {
+            id,
+            label,
+            parent: parent.as_deref(),
+        },
         Event::ToolEnd {
             id,
             display,
@@ -291,12 +301,20 @@ fn event_json_raw(ev: &Event) -> Option<Value> {
             images,
             parent,
         } => {
-            json!({"type": "tool_end", "id": id, "is_error": is_error, "output": crate::util::truncate(&crate::secrets::redact(content), 2000), "display": display, "images": image_data_urls(images), "parent": parent})
+            output = crate::util::truncate(&crate::secrets::redact(content), 2000);
+            E::ToolEnd {
+                id,
+                is_error: *is_error,
+                output,
+                display,
+                images: image_data_urls(images),
+                parent: parent.as_deref(),
+            }
         }
-        Event::ToolProgress { id, text } => {
-            json!({"type": "tool_progress", "id": id, "text": text})
-        }
-        Event::Busy(label) => json!({"type": "busy", "label": label}),
+        Event::ToolProgress { id, text } => E::ToolProgress { id, text },
+        Event::Busy(label) => E::Busy {
+            label: label.as_deref(),
+        },
         Event::Usage {
             context_used,
             context_max,
@@ -305,29 +323,52 @@ fn event_json_raw(ev: &Event) -> Option<Value> {
             total_cost_usd,
             price_unknown,
             tps,
-        } => {
-            json!({"type": "usage", "context_used": context_used, "context_max": context_max, "total_in": total_in, "total_out": total_out, "tps": tps, "total_cost_usd": total_cost_usd, "price_unknown": price_unknown})
+        } => E::Usage {
+            context_used: *context_used,
+            context_max: *context_max,
+            total_in: *total_in,
+            total_out: *total_out,
+            tps: *tps,
+            total_cost_usd: *total_cost_usd,
+            price_unknown: *price_unknown,
+        },
+        Event::Warn(w) => E::Warning { message: w },
+        Event::Error(e) => E::Error { message: e },
+        Event::Info(i) => E::Info { message: i },
+        Event::Todos(t) => {
+            todos = t
+                .iter()
+                .map(|t| wire::Todo {
+                    content: &t.content,
+                    status: &t.status,
+                    active_form: &t.active_form,
+                })
+                .collect();
+            E::Todos { todos }
         }
-        Event::Warn(w) => json!({"type": "warning", "message": w}),
-        Event::Error(e) => json!({"type": "error", "message": e}),
-        Event::Info(i) => json!({"type": "info", "message": i}),
-        Event::Todos(t) => json!({"type": "todos", "todos": t}),
-        Event::ModeChanged(m) => json!({"type": "mode", "mode": m}),
-        Event::Compacted { before, after } => {
-            json!({"type": "compacted", "before": before, "after": after})
-        }
+        Event::ModeChanged(m) => E::Mode { mode: (*m).into() },
+        Event::Compacted { before, after } => E::Compacted {
+            before: *before,
+            after: *after,
+        },
         Event::Background {
             id,
             description,
             status,
-        } => {
-            json!({"type": "background_agent", "id": id, "description": description, "status": status})
-        }
-        Event::Limits(s) => {
-            json!({"type": "rate_limits", "summary": s.summary(), "plan": s.plan_type, "primary": s.primary, "secondary": s.secondary})
-        }
-        Event::Status { key, lines } => json!({"type": "status", "key": key, "lines": lines}),
-    })
+        } => E::BackgroundAgent {
+            id,
+            description,
+            status,
+        },
+        Event::Limits(s) => E::RateLimits {
+            summary: s.summary(),
+            plan: s.plan_type.as_deref(),
+            primary: s.primary.as_ref().map(Into::into),
+            secondary: s.secondary.as_ref().map(Into::into),
+        },
+        Event::Status { key, lines } => E::Status { key, lines },
+    };
+    Some(ev.to_value())
 }
 
 /// Base64 images as data URLs a browser can show. A tool result or message
@@ -414,6 +455,16 @@ impl Queued {
 
 // --------------------------------------------------------------------- env
 
+/// A background snapshot any number of callers can await. A snapshot task
+/// that panics leaves its checkpoints without a tree; waiters just resume.
+pub type PendingSnapshot = futures::future::Shared<futures::future::BoxFuture<'static, ()>>;
+
+/// Wrap a snapshot task so any number of callers can wait for it.
+pub fn pending_snapshot(handle: tokio::task::JoinHandle<()>) -> PendingSnapshot {
+    use futures::FutureExt;
+    handle.map(|_| ()).boxed().shared()
+}
+
 pub struct Env {
     pub accounting: Arc<crate::cost::Accounting>,
     /// Spend guard: fan-out estimates, burn-rate notices, the `/cost` breakdown.
@@ -425,6 +476,14 @@ pub struct Env {
     /// start, the new project's after `/cd`.
     pub auto_mode: RwLock<(Vec<String>, bool)>,
     pub provider: RwLock<Provider>,
+    /// The model's metadata lookup when startup didn't wait for it.
+    pub pending_model_info: Mutex<Option<PendingModelInfo>>,
+    /// MCP servers an interactive session started without waiting for: the
+    /// first model request waits for whichever are still connecting.
+    pub pending_mcp: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// A `/model` switch's vision lookup that hadn't answered: the next
+    /// model request waits for it.
+    pub pending_vision: Mutex<Option<ModelLookup>>,
     model: RwLock<String>,
     mode: RwLock<Mode>,
     /// The mode an edit's "always allow" switched away from to accept edits.
@@ -437,9 +496,14 @@ pub struct Env {
     pub text_tools: AtomicBool,
     cwd: RwLock<PathBuf>,
     read_files: Mutex<HashMap<PathBuf, SystemTime>>,
+    /// The files the file tools read and write: the disk, or memory in the
+    /// browser build and in tests.
+    fs: RwLock<Arc<dyn chanto_core::fs::Fs>>,
     pub todos: Mutex<Vec<Todo>>,
     pub shells: Mutex<HashMap<String, Arc<BgShell>>>,
-    shell_counter: AtomicU64,
+    /// Every background shell id handed out this session, so none is reused
+    /// after its shell ends (the model may still refer to it).
+    shell_ids: Mutex<std::collections::HashSet<String>>,
     pub browser: tokio::sync::Mutex<Option<BrowserSession>>,
     pub tools: Registry,
     pub session_tool_policy: RwLock<(Option<Vec<String>>, Vec<String>)>,
@@ -459,8 +523,17 @@ pub struct Env {
     /// File snapshots per user turn, for /rewind.
     pub checkpoints: Mutex<Vec<Checkpoint>>,
     /// The per-prompt working-tree snapshot, taken in the background; tools
-    /// that change files wait for it first.
-    pub pending_snapshot: Mutex<Option<tokio::task::JoinHandle<()>>>,
+    /// that change files wait for it first. Shared so that every waiter, not
+    /// just the first, blocks until it is done: parallel subagents each
+    /// wait before their first edit.
+    pub pending_snapshot: Mutex<Option<PendingSnapshot>>,
+    /// The checkpoint whose snapshot hasn't been taken yet: it is taken when
+    /// something may change files (`start_snapshot`), so a turn that only
+    /// reads never pays for one.
+    deferred_snapshot: Mutex<Option<String>>,
+    /// Checkpoints of turns that changed nothing, so never took a snapshot:
+    /// they get the next one taken, which records the same files.
+    unsnapped: Mutex<Vec<String>>,
     /// Where this session's shadow snapshots live, fixed when the session starts.
     pub history_dir: PathBuf,
     /// The user's shell setup for Bash commands, captured on first use.
@@ -490,6 +563,8 @@ pub struct Env {
     /// classifier's only source of the user's intent, for the main agent and
     /// its subagents alike. See [`Env::record_user_request`].
     user_requests: Mutex<Vec<String>>,
+    /// This session has read something from outside it: the web or an MCP server.
+    pub(crate) read_outside: std::sync::atomic::AtomicBool,
     /// Connected editor (VS Code extension), if any.
     ide: RwLock<Option<Arc<crate::ide::Ide>>>,
     /// Current session id and transcript path (for hooks).
@@ -602,6 +677,18 @@ mod checkpoint_files {
             })
             .collect())
     }
+}
+
+/// A model metadata lookup that outlasted startup (a slow or unreachable
+/// server), and what applying it needs.
+/// A model's (context size, vision) lookup, running in the background.
+pub type ModelLookup = tokio::task::JoinHandle<Option<(u64, bool)>>;
+
+pub struct PendingModelInfo {
+    pub lookup: ModelLookup,
+    /// The user set the context size, so a reported window doesn't raise it.
+    pub explicit_ctx: bool,
+    pub serving_kind: llm::ProviderKind,
 }
 
 pub struct EnvInit {
@@ -740,6 +827,8 @@ impl Env {
             commands: RwLock::new(commands),
             checkpoints: Default::default(),
             pending_snapshot: Default::default(),
+            deferred_snapshot: Default::default(),
+            unsnapped: Default::default(),
             history_dir: crate::config::home_dir().join("history"),
             shell_snapshot: Default::default(),
             rewind_undo: Default::default(),
@@ -755,6 +844,7 @@ impl Env {
             rate_limits: Default::default(),
             pending_context: Default::default(),
             user_requests: Default::default(),
+            read_outside: Default::default(),
             ide: Default::default(),
             session_info: Default::default(),
             halt: Default::default(),
@@ -783,12 +873,16 @@ impl Env {
             think: AtomicBool::new(think),
             effort: RwLock::new(effort),
             vision: AtomicBool::new(i.vision),
+            pending_model_info: Mutex::new(None),
+            pending_mcp: Mutex::new(None),
+            pending_vision: Mutex::new(None),
             text_tools: AtomicBool::new(false),
             cwd: RwLock::new(i.cwd),
             read_files: Default::default(),
+            fs: RwLock::new(Arc::new(chanto_core::fs::NativeFs)),
             todos: Default::default(),
             shells: Default::default(),
-            shell_counter: AtomicU64::new(1),
+            shell_ids: Mutex::default(),
             browser: tokio::sync::Mutex::new(None),
             tools: i.tools,
             session_tool_policy: RwLock::new((None, vec![])),
@@ -991,6 +1085,8 @@ impl Env {
     pub fn provider(&self) -> Provider {
         let mut p = self.provider.read().unwrap().clone();
         p.accounting = Some(self.accounting.clone());
+        let id = self.session_id();
+        p.with_session_id(Some(&id));
         p
     }
 
@@ -999,6 +1095,8 @@ impl Env {
         let (mut p, model) = self.resolve_untracked(spec);
         p.accounting = Some(self.accounting.clone());
         p.stream_idle = self.config.stream_idle();
+        let id = self.session_id();
+        p.with_session_id(Some(&id));
         if let Some((prefix, _)) = spec.split_once('/') {
             // Cloud platforms bill by platform, whatever the section is called.
             if let Some(id) = p.kind.cloud_id() {
@@ -1098,14 +1196,89 @@ impl Env {
     pub fn vision(&self) -> bool {
         self.vision.load(Ordering::Relaxed)
     }
+    /// Apply a model lookup that was still running when startup finished: the
+    /// first model request waits for it, since the context size and vision
+    /// support shape the request.
+    pub async fn settle_model_info(&self) {
+        let vision = self.pending_vision.lock().unwrap().take();
+        if let Some(lookup) = vision
+            && let Ok(Some((_, v))) = lookup.await
+        {
+            self.set_vision(v);
+        }
+        let pending = self.pending_model_info.lock().unwrap().take();
+        let Some(p) = pending else { return };
+        let Ok(Some(info)) = p.lookup.await else {
+            return;
+        };
+        let current = self.provider.read().unwrap().num_ctx;
+        let (num_ctx, vision, warning) =
+            llm::model_info_effect(info, p.explicit_ctx, p.serving_kind, current);
+        self.set_vision(vision);
+        self.provider.write().unwrap().num_ctx = num_ctx;
+        if let Some(w) = warning {
+            self.frontend.emit(Event::Warn(w));
+        }
+    }
+    /// Wait for the MCP servers startup left connecting, so the first request
+    /// has their tools. True the first time, when there were any.
+    pub async fn settle_mcp(&self) -> bool {
+        let pending = self.pending_mcp.lock().unwrap().take();
+        let Some(p) = pending else { return false };
+        if !p.is_finished()
+            && self
+                .mcp
+                .iter()
+                .any(|c| c.status() == crate::mcp::Status::Connecting)
+        {
+            self.frontend
+                .emit(Event::Info("Waiting for MCP servers to connect…".into()));
+        }
+        let _ = p.await;
+        true
+    }
+    /// Take a switched-to model's vision support from `lookup`: now if it
+    /// answers quickly (cached, or a local server), else `assumed` until the
+    /// next model request, which waits for it. A startup lookup still running
+    /// was about the previous model, so it no longer applies.
+    pub async fn switch_vision(&self, mut lookup: ModelLookup, assumed: bool) {
+        if let Some(p) = self.pending_model_info.lock().unwrap().take() {
+            p.lookup.abort();
+        }
+        if let Some(old) = self.pending_vision.lock().unwrap().take() {
+            old.abort();
+        }
+        match tokio::time::timeout(Duration::from_millis(50), &mut lookup).await {
+            Ok(r) => self.set_vision(r.ok().flatten().map_or(assumed, |(_, v)| v)),
+            Err(_) => {
+                self.set_vision(assumed);
+                *self.pending_vision.lock().unwrap() = Some(lookup);
+            }
+        }
+    }
     pub fn set_vision(&self, b: bool) {
         self.vision.store(b, Ordering::Relaxed)
     }
-    pub fn next_shell_id(&self) -> u64 {
-        self.shell_counter.fetch_add(1, Ordering::Relaxed)
+    /// A new background shell id from `base`: `base` itself, or `base-2`,
+    /// `base-3`… when an earlier shell this session had it.
+    pub fn issue_shell_id(&self, base: &str) -> String {
+        let mut ids = self.shell_ids.lock().unwrap();
+        let id = std::iter::once(base.to_string())
+            .chain((2..).map(|n| format!("{base}-{n}")))
+            .find(|id| !ids.contains(id))
+            .unwrap();
+        ids.insert(id.clone());
+        id
+    }
+    /// The file system the file tools use.
+    pub fn fs(&self) -> Arc<dyn chanto_core::fs::Fs> {
+        self.fs.read().unwrap().clone()
+    }
+    pub fn set_fs(&self, fs: Arc<dyn chanto_core::fs::Fs>) {
+        *self.fs.write().unwrap() = fs;
     }
     pub fn mark_read(&self, p: &Path) {
-        if let Ok(m) = std::fs::metadata(p).and_then(|m| m.modified()) {
+        if let Some(m) = self.fs().metadata(p).ok().and_then(|m| m.modified) {
             self.read_files
                 .lock()
                 .unwrap()
@@ -1124,15 +1297,67 @@ impl Env {
         let mut cps = self.checkpoints.lock().unwrap();
         if let Some(cp) = cps.last_mut() {
             let key = permissions::normalize(p);
-            cp.files.entry(key).or_insert_with(|| std::fs::read(p).ok());
+            let fs = self.fs();
+            cp.files.entry(key).or_insert_with(|| fs.read(p).ok());
         }
     }
 
-    /// Wait for the background per-prompt snapshot, if one is running.
-    pub async fn wait_snapshot(&self) {
-        let h = self.pending_snapshot.lock().unwrap().take();
+    /// A new prompt's checkpoint: its snapshot waits until something may
+    /// change files. The previous prompt's, if nothing needed it, gets the
+    /// next one taken.
+    pub async fn defer_snapshot(&self, id: String) {
+        // A snapshot the previous turn started has to finish first.
+        let running = self.pending_snapshot.lock().unwrap().take();
+        if let Some(h) = running {
+            h.await;
+        }
+        if let Some(previous) = self.deferred_snapshot.lock().unwrap().replace(id) {
+            self.unsnapped.lock().unwrap().push(previous);
+        }
+    }
+
+    /// Start the deferred snapshot in the background, if there is one.
+    pub fn start_snapshot(self: &Arc<Self>) {
+        let Some(id) = self.deferred_snapshot.lock().unwrap().take() else {
+            return;
+        };
+        let env = self.clone();
+        let handle = tokio::task::spawn_blocking(move || {
+            crate::util::timing("snapshot start");
+            // After `/cd` out of the project, a snapshot of the old project
+            // says nothing about this turn's files (and restoring it would
+            // revert the user's own changes there): rewind uses the
+            // turn's per-file copies instead.
+            let moved =
+                !permissions::normalize(&env.cwd()).starts_with(permissions::normalize(&env.root));
+            let tree = if moved { None } else { env.shadow_snapshot() };
+            crate::util::timing("snapshot done");
+            let mut ids = vec![id];
+            if tree.is_some() {
+                ids.append(&mut env.unsnapped.lock().unwrap());
+            }
+            for cp in env
+                .checkpoints
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .filter(|c| ids.contains(&c.id))
+            {
+                cp.tree = tree.clone();
+            }
+        });
+        *self.pending_snapshot.lock().unwrap() = Some(pending_snapshot(handle));
+    }
+
+    /// Wait for the per-prompt snapshot, taking it first if it was deferred.
+    /// Every caller waits for it to finish: the handle stays in place (a
+    /// finished one resolves at once) so a second concurrent waiter can't
+    /// find the slot empty and edit while the snapshot is still being taken.
+    pub async fn wait_snapshot(self: &Arc<Self>) {
+        self.start_snapshot();
+        let h = self.pending_snapshot.lock().unwrap().clone();
         if let Some(h) = h {
-            let _ = h.await;
+            h.await;
         }
     }
 
@@ -1285,16 +1510,16 @@ pub struct Agent {
     /// Deferred built-ins already recorded as used in this project.
     recorded_builtins: std::collections::HashSet<String>,
     /// The agent's own shell commands that looked like checks, with edit_seq at
-    /// the time: (command, seq, passed, output). The verify gate accepts a
-    /// covering *passing* run with no edits since, and reuses a covering failing
-    /// run instead of repeating it (its failures are then split against the
-    /// baseline like a fresh run's).
-    check_runs: Vec<(String, u64, bool, String)>,
+    /// the time (see [`CheckRun`]). The verify gate accepts a covering
+    /// *passing* run from the verify root with no edits since, and reuses a
+    /// covering failing run instead of repeating it (its failures are then
+    /// split against the baseline like a fresh run's).
+    check_runs: Vec<CheckRun>,
     /// Low disk space was already reported this turn.
     disk_warned: bool,
     /// Read-only commands of this turn that hit their time limit: command,
-    /// edit sequence, seconds.
-    check_timeouts: Vec<(String, u64, u64)>,
+    /// edit sequence, seconds, and the directory it ran in.
+    check_timeouts: Vec<(String, u64, u64, PathBuf)>,
     /// Verified mode: the checks run before any change, and their results.
     baseline_task: Option<tokio::task::JoinHandle<Vec<crate::guardrails::CheckResult>>>,
     baseline: Option<Vec<crate::guardrails::CheckResult>>,
@@ -1334,6 +1559,9 @@ pub struct Agent {
     /// re-injected when the conversation is compacted.
     pub goal: Option<PathBuf>,
     message_redactor: crate::secrets::MessageRedactor,
+    /// The same, for the transcript each turn saves: only messages added or
+    /// changed since the last save are masked again.
+    session_redactor: crate::secrets::MessageRedactor,
     /// The `fallback_model` entry serving the rest of this turn, after the
     /// model was overloaded or unavailable (None: the session's model).
     turn_fallback: Option<usize>,
@@ -1440,6 +1668,7 @@ impl Agent {
             stats: Default::default(),
             goal: None,
             message_redactor: Default::default(),
+            session_redactor: Default::default(),
             turn_fallback: None,
             last_model: None,
             sub: Default::default(),
@@ -1495,7 +1724,11 @@ impl Agent {
             cwd: &self.cwd_override.clone().unwrap_or_else(|| env.cwd()),
             model: &self.model(),
             skills: &env.skills.read().unwrap(),
-            agents: if self.depth == 0 { &agents } else { &[] },
+            agents: if self.depth < crate::resources::agent_depth(&env.config.resources) {
+                &agents
+            } else {
+                &[]
+            },
             mcp_note,
             instructions: !self.sub.omit_instructions,
         });
@@ -1715,11 +1948,10 @@ impl Agent {
         {
             return false;
         }
-        if self.depth > 0
-            && matches!(
-                name,
-                "Task" | "ExitPlanMode" | "AskUserQuestion" | "TodoWrite"
-            )
+        if self.depth > 0 && matches!(name, "ExitPlanMode" | "AskUserQuestion" | "TodoWrite") {
+            return false;
+        }
+        if name == "Task" && self.depth >= crate::resources::agent_depth(&self.env.config.resources)
         {
             return false;
         }
@@ -1996,9 +2228,6 @@ mod codex_call_tests;
 
 #[cfg(test)]
 mod oracle_limit_tests;
-
-#[cfg(test)]
-mod protocol_tests;
 
 #[cfg(test)]
 mod security_tests;

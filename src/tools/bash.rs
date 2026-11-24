@@ -32,6 +32,8 @@ fn append_bounded(buf: &mut Vec<u8>, data: &[u8]) {
 pub struct BgShell {
     pub id: String,
     pub command: String,
+    /// The directory the command started in.
+    pub cwd: std::path::PathBuf,
     /// The originating Bash call's short description, for human-facing status.
     pub description: Option<String>,
     /// Set for a Monitor watch: its description.
@@ -119,6 +121,8 @@ pub(crate) fn kill_group(pid: u32) {
         .status();
 }
 
+#[cfg_attr(not(any(target_os = "linux", windows)), allow(dead_code))]
+mod config_guard;
 mod guards;
 mod sandbox;
 #[cfg(target_os = "linux")]
@@ -137,6 +141,12 @@ fn looks_sandbox_blocked(out: &str) -> bool {
         || o.contains("access denied")
         || o.contains("read-only file system")
         || o.contains("sandbox")
+        // A login from the keychain, which the macOS sandbox keeps out of reach.
+        || (cfg!(target_os = "macos")
+            && (o.contains("could not read username")
+                || o.contains("terminal prompts disabled")
+                || o.contains("gh auth login")
+                || o.contains("keychain")))
 }
 
 /// A command that failed to reach the network (curl, wget, pip, npm, git, Python).
@@ -289,7 +299,7 @@ fn build_command_for_policy(
         None
     };
     let proxy_port = network.as_ref().map(|p| p.port);
-    let (prog, flags) = crate::shell::shell();
+    let (prog, flags) = crate::shell::tool_shell();
     let mut cmd = match sandbox {
         Some(sb) if active && cfg!(target_os = "macos") => {
             let root = crate::permissions::project_root().unwrap_or_else(|| cwd.to_path_buf());
@@ -643,10 +653,11 @@ independent calls in parallel."
             .map(|c| c.scratch.clone())
             .unwrap_or_else(std::env::temp_dir);
         let cwd_file = tmp.join(format!("chanto-cwd-{}", uuid::Uuid::new_v4().simple()));
-        let script = format!(
-            "{}{command}\n__hx_ec=$?\n{PWD} > '{}' 2>/dev/null\nexit $__hx_ec",
-            env_prelude(ctx, &cwd),
-            cwd_file.display()
+        let script = wrap_command(
+            crate::shell::tool_flavor(),
+            &env_prelude(ctx, &cwd),
+            &command,
+            &cwd_file,
         );
         // Bounded concurrency across agents, and don't pile onto a machine that's out of memory.
         let _slot = crate::resources::command_slot().await;
@@ -663,6 +674,12 @@ independent calls in parallel."
             unsandboxed,
         )?;
         apply_env_vars(ctx, &cwd, unsandboxed, &mut cmd);
+        #[cfg(any(target_os = "linux", windows))]
+        let mut config_guard = (sandbox_on() && !unsandboxed && exec.is_none()).then(|| {
+            config_guard::ConfigGuard::take(
+                &crate::permissions::project_root().unwrap_or_else(|| cwd.clone()),
+            )
+        });
         let mut child = cmd.spawn()?;
         let pid = child.id();
         let mut reaper = KillOnDrop(pid);
@@ -734,10 +751,13 @@ independent calls in parallel."
             // switch is atomic with that snapshot.
             let mut guard = sink.lock().unwrap();
             let text = strip_ansi(&String::from_utf8_lossy(&buf.lock().unwrap()));
-            let id = format!("bash_{}", ctx.env.next_shell_id());
+            let id = ctx
+                .env
+                .issue_shell_id(&readable_id(description.as_deref(), &command, "bash"));
             let shell = Arc::new(BgShell {
                 id: id.clone(),
                 command: command.clone(),
+                cwd: cwd.clone(),
                 description,
                 monitor: None,
                 output: Mutex::new(text.clone()),
@@ -756,9 +776,15 @@ independent calls in parallel."
                 .insert(id.clone(), shell.clone());
             let cf = cwd_file.clone();
             let title = shell.title();
+            // The command keeps running, so the guard has to outlive this call
+            // and restore when the process finally exits.
+            #[cfg(any(target_os = "linux", windows))]
+            let bg_guard = config_guard.take();
             tokio::spawn(async move {
                 let code = child.wait().await.ok().and_then(|s| s.code());
                 drain_output(r1, r2).await;
+                #[cfg(any(target_os = "linux", windows))]
+                undo_config_changes(&shell, bg_guard);
                 if exec.is_some() {
                     crate::runs::container::untrack(shell.pid);
                 }
@@ -819,6 +845,10 @@ independent calls in parallel."
             }
         }
         let _ = std::fs::remove_file(&cwd_file);
+        #[cfg(any(target_os = "linux", windows))]
+        if let Some(note) = config_guard.and_then(|g| g.restore()) {
+            out.push_str(&note);
+        }
         let elapsed = t0.elapsed();
         let code = status.as_ref().and_then(|s| s.code());
         let mut is_error;
@@ -854,7 +884,7 @@ independent calls in parallel."
                             "\n[This may have been blocked by the sandbox: commands can write only inside the project, temp dirs and package \
                              download caches, can't change git hooks or config, agent or editor settings, and can't read private keys or \
                              credential files. Installing a toolchain or tool, `git init`/`clone`/`worktree add`/`submodule`/`config` and \
-                             git over SSH need to run outside it: run it again with dangerouslyDisableSandbox: true, and the user will be \
+                             git over SSH or with a saved login (`git push`, `gh`) need to run outside it: run it again with dangerouslyDisableSandbox: true, and the user will be \
                              asked to approve.]"
                         });
                     } else if sandbox_on()
@@ -907,8 +937,32 @@ independent calls in parallel."
 }
 
 #[cfg(test)]
+#[test]
+fn a_missing_login_points_at_the_sandbox_on_macos() {
+    for out in [
+        "fatal: could not read Username for 'https://github.com'",
+        "fatal: terminal prompts disabled",
+        "To get started with GitHub CLI, please run: gh auth login",
+        "error: keychain not found",
+    ] {
+        assert_eq!(
+            looks_sandbox_blocked(out),
+            cfg!(target_os = "macos"),
+            "{out}"
+        );
+    }
+    assert!(!looks_sandbox_blocked("fatal: not a git repository"));
+}
+
+#[cfg(test)]
+mod tests;
+
+#[cfg(test)]
 #[path = "bash/output_tests.rs"]
 mod output_tests;
+
+#[cfg(test)]
+mod wrap_tests;
 
 /// Prints the shell's directory as a path Chanto can open: Git Bash's
 /// `pwd -P` says `/c/Users/…`, which Windows can't resolve, so ask for `C:/Users/…`.
@@ -916,6 +970,33 @@ mod output_tests;
 const PWD: &str = "{ pwd -W || pwd -P; }";
 #[cfg(not(windows))]
 const PWD: &str = "pwd -P";
+
+/// `command` as a script that keeps its exit status and leaves the directory
+/// it ended in at `cwd_file`. cmd.exe runs only one line through `/C`, so a
+/// command there can't report its directory.
+fn wrap_command(
+    flavor: crate::shell::Flavor,
+    prelude: &str,
+    command: &str,
+    cwd_file: &std::path::Path,
+) -> String {
+    use crate::shell::{Flavor, powershell_quote};
+    let file = cwd_file.display();
+    match flavor {
+        Flavor::Posix => {
+            format!("{prelude}{command}\n__hx_ec=$?\n{PWD} > '{file}' 2>/dev/null\nexit $__hx_ec")
+        }
+        // `$?` first: anything after it resets it. `$LASTEXITCODE` alone would
+        // miss a failed cmdlet and repeat an earlier program's status.
+        Flavor::PowerShell => format!(
+            "{prelude}{command}\n$__hx_ok = $?; $__hx_ec = $LASTEXITCODE\n\
+             try {{ [IO.File]::WriteAllText({}, (Get-Location).ProviderPath) }} catch {{}}\n\
+             if ($__hx_ok) {{ exit 0 }} elseif ($__hx_ec) {{ exit $__hx_ec }} else {{ exit 1 }}",
+            powershell_quote(&file.to_string())
+        ),
+        Flavor::Cmd => format!("{prelude}{command}"),
+    }
+}
 
 /// Where the shell stays after a command that ended in `new`: there if it's
 /// inside the project or an added directory (or back at `root` when
@@ -960,7 +1041,9 @@ fn maintain_project_dir() -> bool {
 /// they can build on it. Neither inside a background run's container,
 /// which can't see the files.
 fn env_prelude(ctx: &Ctx, cwd: &std::path::Path) -> String {
-    if crate::runs::container::for_path(cwd).is_some() {
+    if crate::runs::container::for_path(cwd).is_some()
+        || crate::shell::tool_flavor() != crate::shell::Flavor::Posix
+    {
         return String::new();
     }
     format!(
@@ -986,6 +1069,50 @@ fn apply_env_vars(
     }
 }
 
+/// Longest readable id, before any `-2` suffix.
+const MAX_ID: usize = 24;
+
+/// A readable base for a background shell's id: its description, or failing
+/// that its command's first few words (after any `cd`), as a lowercase slug
+/// (`Build release binary` → `build-release-binary`, `npm run dev` →
+/// `npm-run-dev`). The model refers to shells by id, and repeats it to the
+/// user, so it should say what the shell is. `fallback` when nothing is left.
+pub(crate) fn readable_id(description: Option<&str>, command: &str, fallback: &str) -> String {
+    let words = match description.map(str::trim).filter(|d| !d.is_empty()) {
+        Some(d) => d.to_string(),
+        None => command
+            .split(['\n', ';', '|', '&', '('])
+            .map(str::trim)
+            .find(|part| !part.is_empty() && part.split_whitespace().next() != Some("cd"))
+            .unwrap_or("")
+            .split_whitespace()
+            .filter(|w| !w.contains('='))
+            .take(3)
+            .map(|w| w.rsplit('/').next().unwrap_or(w))
+            .collect::<Vec<_>>()
+            .join(" "),
+    };
+    let mut slug = String::new();
+    for c in words.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.is_empty() && !slug.ends_with('-') {
+            slug.push('-');
+        }
+    }
+    let mut slug = slug.trim_matches('-').to_string();
+    if slug.len() > MAX_ID {
+        let cut = slug[..=MAX_ID].rfind('-').unwrap_or(MAX_ID);
+        slug.truncate(cut);
+        slug = slug.trim_end_matches('-').to_string();
+    }
+    if slug.is_empty() {
+        fallback.to_string()
+    } else {
+        slug
+    }
+}
+
 async fn start_background(
     ctx: &Ctx,
     command: &str,
@@ -998,12 +1125,24 @@ async fn start_background(
     {
         return Ok(ToolOutput::err(e));
     }
-    let id = format!("bash_{}", ctx.env.next_shell_id());
+    let id = ctx
+        .env
+        .issue_shell_id(&readable_id(description.as_deref(), command, "bash"));
     let shell = spawn_background(ctx, &id, command, cwd, unsandboxed, None, description)?;
     Ok(ToolOutput::ok(format!(
         "Started background shell {id}. Use BashOutput with bash_id=\"{id}\" to read its output, KillShell to stop it."
     ))
-    .display(format!("Started in background · {id}\n{}", shell.title())))
+    .display(started_line(&id, &shell.title())))
+}
+
+/// The line shown when a background shell starts: its id, and its title too
+/// unless the id already says it.
+fn started_line(id: &str, title: &str) -> String {
+    if id.starts_with(&readable_id(Some(title), "", "")) {
+        format!("Started in background · {title} ({id})")
+    } else {
+        format!("Started in background · {id}\n{title}")
+    }
 }
 
 /// Start `command` as background shell `id` (registered in `env.shells`, so
@@ -1028,6 +1167,12 @@ pub(crate) fn spawn_background(
         unsandboxed,
     )?;
     apply_env_vars(ctx, cwd, unsandboxed, &mut cmd);
+    #[cfg(any(target_os = "linux", windows))]
+    let config_guard = (sandbox_on() && !unsandboxed && exec.is_none()).then(|| {
+        config_guard::ConfigGuard::take(
+            &crate::permissions::project_root().unwrap_or_else(|| cwd.to_path_buf()),
+        )
+    });
     let mut child = cmd.spawn()?;
     if let Some((c, token)) = &exec {
         crate::runs::container::track(child.id(), c, token);
@@ -1035,6 +1180,7 @@ pub(crate) fn spawn_background(
     let shell = Arc::new(BgShell {
         id: id.clone(),
         command: command.to_string(),
+        cwd: cwd.to_path_buf(),
         description,
         monitor,
         output: Mutex::new(String::new()),
@@ -1070,6 +1216,8 @@ pub(crate) fn spawn_background(
     tokio::spawn(async move {
         let status = child.wait().await;
         drain_output(r1, r2).await;
+        #[cfg(any(target_os = "linux", windows))]
+        undo_config_changes(&s3, config_guard);
         if exec.is_some() {
             crate::runs::container::untrack(s3.pid);
         }
@@ -1106,6 +1254,15 @@ fn push_capped(sh: &BgShell, s: &str) {
     }
 }
 
+/// Put back a finished command's changes to the files that run code later, and
+/// tell readers of the shell's output what was undone.
+#[cfg(any(target_os = "linux", windows))]
+fn undo_config_changes(sh: &BgShell, guard: Option<config_guard::ConfigGuard>) {
+    if let Some(note) = guard.and_then(|g| g.restore()) {
+        push_capped(sh, &note);
+    }
+}
+
 pub fn strip_ansi(s: &str) -> String {
     use std::sync::OnceLock;
     static RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -1128,13 +1285,19 @@ pub fn strip_ansi(s: &str) -> String {
 
 pub struct BashOutput;
 
+/// How long unfiltered output must stay quiet before `wait_secs` returns it.
+#[cfg(not(test))]
+const SETTLE: Duration = Duration::from_secs(5);
+#[cfg(test)]
+const SETTLE: Duration = Duration::from_millis(300);
+
 #[async_trait]
 impl Tool for BashOutput {
     fn name(&self) -> String {
         "BashOutput".into()
     }
     fn description(&self) -> String {
-        "Read new output from a background shell started with run_in_background. Returns only output produced since the last read, plus status. Optional `filter` regex keeps matching lines only. Optional `wait_secs` (max 600) waits until there is new output (a matching line, with `filter`) or the shell exits, instead of sleeping.".into()
+        "Read new output from a background shell started with run_in_background. Returns only output produced since the last read, plus status. Optional `filter` regex keeps matching lines only. Optional `wait_secs` (max 600) waits instead of sleeping: until the shell exits, new output has stopped arriving for a few seconds, or (with `filter`) a matching line appears. One call with a long `wait_secs` is enough for a test run or build; don't poll.".into()
     }
     fn schema(&self) -> Value {
         json!({
@@ -1158,7 +1321,7 @@ impl Tool for BashOutput {
         let shell = env.shells.lock().unwrap().get(id).cloned();
         shell.map_or_else(
             || self.label(args),
-            |sh| format!("BashOutput({} · {id})", sh.title()),
+            |sh| format!("BashOutput({})", sh.title()),
         )
     }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput> {
@@ -1173,10 +1336,16 @@ impl Tool for BashOutput {
             let waiting = if filter.is_some() {
                 "Waiting for matching output"
             } else {
-                "Waiting for new output"
+                "Waiting for output to settle"
             };
             ctx.progress(format!("{waiting} (up to {}s)", secs.min(600)));
             let deadline = std::time::Instant::now() + Duration::from_secs(secs.min(600));
+            // Without a filter, return once new output has stopped arriving
+            // for a moment, not on its first byte: a test run printing a dot
+            // per test otherwise ends every wait at once, and each return
+            // costs the model another call.
+            let mut seen = sh.output.lock().unwrap().len();
+            let mut changed = std::time::Instant::now();
             loop {
                 if sh.exit.lock().unwrap().is_some()
                     || ctx.cancel.is_cancelled()
@@ -1193,7 +1362,13 @@ impl Tool for BashOutput {
                     }
                     match &filter {
                         Some(re) => out[start..].lines().any(|l| re.is_match(l)),
-                        None => out.len() > pos,
+                        None => {
+                            if out.len() != seen {
+                                seen = out.len();
+                                changed = std::time::Instant::now();
+                            }
+                            out.len() > pos && changed.elapsed() >= SETTLE
+                        }
                     }
                 };
                 if fresh {
@@ -1323,6 +1498,14 @@ impl Tool for KillShell {
     fn label(&self, args: &Value) -> String {
         format!("KillShell({})", args["shell_id"].as_str().unwrap_or(""))
     }
+    fn label_in(&self, args: &Value, env: &crate::agent::Env) -> String {
+        let id = args["shell_id"].as_str().unwrap_or("");
+        let shell = env.shells.lock().unwrap().get(id).cloned();
+        shell.map_or_else(
+            || self.label(args),
+            |sh| format!("KillShell({})", sh.title()),
+        )
+    }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput> {
         let id = args["shell_id"]
             .as_str()
@@ -1350,757 +1533,34 @@ pub fn kill_all(env: &crate::agent::Env) {
 }
 
 #[cfg(test)]
-mod cwd_tests {
-    use super::settle_cwd;
-
-    #[test]
-    fn the_shell_stays_inside_the_project_or_added_dirs() {
-        let base = crate::permissions::normalize(&std::env::temp_dir())
-            .join(format!("chanto-settle-{}", uuid::Uuid::new_v4().simple()));
-        let (root, sub, extra) = (base.join("proj"), base.join("proj/sub"), base.join("extra"));
-        for d in [&sub, &extra] {
-            std::fs::create_dir_all(d).unwrap();
-        }
-        let extras = vec![extra.clone()];
-        assert_eq!(
-            settle_cwd(&sub, &root, &extras, false),
-            (sub.clone(), false)
-        );
-        assert_eq!(
-            settle_cwd(&extra, &root, &extras, false),
-            (extra.clone(), false)
-        );
-        assert_eq!(
-            settle_cwd(&base, &root, &extras, false),
-            (root.clone(), true)
-        );
-        // A sibling whose name starts with the root's isn't inside it.
-        let sibling = base.join("proj-other");
-        std::fs::create_dir_all(&sibling).unwrap();
-        assert_eq!(
-            settle_cwd(&sibling, &root, &extras, false),
-            (root.clone(), true)
-        );
-        // CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR: always back to the root,
-        // with the note only when the command had left the project.
-        assert_eq!(
-            settle_cwd(&sub, &root, &extras, true),
-            (root.clone(), false)
-        );
-        assert_eq!(
-            settle_cwd(&base, &root, &extras, true),
-            (root.clone(), true)
-        );
-        let _ = std::fs::remove_dir_all(base);
-    }
-}
+mod cwd_tests;
 
 #[cfg(test)]
 mod profile_tests;
 
-#[cfg(test)]
+#[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
 fn test_sandbox_available() -> bool {
-    if !sandbox_available() {
-        return false;
-    }
     #[cfg(target_os = "macos")]
-    return std::process::Command::new("/usr/bin/sandbox-exec")
-        .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-        .output()
-        .is_ok_and(|o| o.status.success());
+    return sandbox_available()
+        && std::process::Command::new("/usr/bin/sandbox-exec")
+            .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
+            .output()
+            .is_ok_and(|o| o.status.success());
     #[cfg(not(target_os = "macos"))]
-    true
+    sandbox_available()
 }
 
 #[cfg(all(test, any(target_os = "macos", target_os = "linux")))]
-mod sandbox_tests {
-    use super::*;
-
-    async fn run(
-        cmd: &str,
-        cwd: &std::path::Path,
-        cfg: &crate::config::SandboxConfig,
-        unsandboxed: bool,
-    ) -> (bool, String) {
-        // Use a narrow grant for backend tests so the outside fixture can live
-        // in temp too. Never create fixtures or scan secrets in the real home.
-        let writable = vec![cwd.display().to_string()];
-        let home = cwd.join("test-home");
-        let (mut command, _network) =
-            build_command_for_policy(cmd, cwd, None, None, true, false).unwrap();
-        if !unsandboxed {
-            #[cfg(target_os = "macos")]
-            {
-                let (prog, flags) = crate::shell::shell();
-                command = tokio::process::Command::new("/usr/bin/sandbox-exec");
-                command
-                    .arg("-p")
-                    .arg(sandbox_profile_with_paths(&writable, &home, cfg, None))
-                    .arg(prog)
-                    .args(flags)
-                    .arg(cmd)
-                    .current_dir(cwd);
-            }
-            #[cfg(target_os = "linux")]
-            landlock_writes(
-                &mut command,
-                &writable,
-                &read_allow_paths(&read_denied_paths(&home, &cfg.deny_read)),
-                false,
-                None,
-            );
-        }
-        let o = command.output().await.unwrap();
-        (
-            o.status.success(),
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&o.stdout),
-                String::from_utf8_lossy(&o.stderr)
-            ),
-        )
-    }
-
-    #[test]
-    fn spots_whole_disk_scans() {
-        assert!(scans_everything(
-            "find / -name cli.py -path '*flask*' 2>/dev/null | head"
-        ));
-        assert!(scans_everything("ls; find ~ -maxdepth 6 -name x"));
-        assert!(scans_everything("find \"$HOME\" -name '*.whl'"));
-        assert!(!scans_everything("find . -name '*.py'"));
-        assert!(!scans_everything("find src/ -name x"));
-    }
-
-    #[test]
-    fn read_allow_paths_skip_only_denied() {
-        let base = std::env::temp_dir()
-            .canonical()
-            .unwrap()
-            .join(format!("chanto-rap-{}", std::process::id()));
-        std::fs::create_dir_all(base.join("sub")).unwrap();
-        std::fs::write(base.join("secret"), "x").unwrap();
-        std::fs::write(base.join("ok"), "x").unwrap();
-        let allowed = read_allow_paths(&[base.join("secret")]);
-        assert!(allowed.contains(&base.join("ok")) && allowed.contains(&base.join("sub")));
-        assert!(!allowed.contains(&base.join("secret")) && !allowed.contains(&base));
-        assert!(
-            !allowed.iter().any(|p| base.starts_with(p)),
-            "no ancestor of a denied path is granted whole"
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn read_allow_paths_walk_into_ancestors_of_a_deep_denial() {
-        // Landlock only grants access, so denying a file nested several levels
-        // deep means granting every ancestor directory *except* the denied leaf,
-        // and its siblings at each level. Getting this wrong either blocks the
-        // whole home tree or leaks the denied path.
-        let root = std::env::temp_dir()
-            .canonical()
-            .unwrap()
-            .join(format!("chanto-rap-deep-{}", std::process::id()));
-        let denied = root.join("a/b/secret");
-        std::fs::create_dir_all(denied.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(root.join("a/c")).unwrap();
-        std::fs::write(root.join("a/keep"), "x").unwrap();
-        std::fs::write(&denied, "x").unwrap();
-        let allowed = read_allow_paths(std::slice::from_ref(&denied));
-        // The denied leaf is never granted...
-        assert!(!allowed.contains(&denied));
-        // ...its ancestors are traversed rather than granted wholesale...
-        for anc in [root.clone(), root.join("a"), root.join("a/b")] {
-            assert!(
-                !allowed.contains(&anc),
-                "ancestor {anc:?} must not be granted whole"
-            );
-        }
-        // ...but their siblings are readable.
-        assert!(allowed.contains(&root.join("a/keep")));
-        assert!(allowed.contains(&root.join("a/c")));
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[tokio::test]
-    async fn the_shell_snapshot_works_inside_the_sandbox() {
-        if !test_sandbox_available() {
-            return;
-        }
-        let _home = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _g = SANDBOX_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let home = crate::shell::snapshot::tests::home();
-        std::fs::write(home.join(".bashrc"), crate::shell::snapshot::tests::RC).unwrap();
-        let snap = crate::shell::snapshot::create(
-            std::path::Path::new("/bin/bash"),
-            Some(&home),
-            Duration::from_secs(20),
-            &Default::default(),
-        )
-        .unwrap();
-        let project =
-            std::env::temp_dir().join(format!("chanto-sbx-snap-{}", uuid::Uuid::new_v4().simple()));
-        std::fs::create_dir_all(&project).unwrap();
-        let script = format!(
-            "{}hx-only-tool && hxgreet && hxfn s && echo hi > inside.txt",
-            crate::shell::snapshot::source_line(&snap)
-        );
-        let cfg = crate::config::SandboxConfig::default();
-        let (mut cmd, _lease) =
-            build_command_for_policy(&script, &project, Some(&cfg), None, false, true).unwrap();
-        let o = cmd.output().await.unwrap();
-        let out = format!(
-            "{}{}",
-            String::from_utf8_lossy(&o.stdout),
-            String::from_utf8_lossy(&o.stderr)
-        );
-        assert!(o.status.success(), "{out}");
-        assert!(
-            out.contains("tool-ran")
-                && out.contains("hello-from-alias")
-                && out.contains("fn-got-s"),
-            "{out}"
-        );
-        assert!(project.join("inside.txt").exists());
-        let _ = std::fs::remove_dir_all(snap.parent().unwrap());
-        let _ = std::fs::remove_dir_all(&home);
-        let _ = std::fs::remove_dir_all(&project);
-    }
-
-    #[tokio::test]
-    async fn sandbox_limits_writes_and_secret_reads() {
-        if !test_sandbox_available() {
-            return;
-        }
-        // Tests that move CHANTO_HOME hold this lock; the sandbox's test home
-        // is CHANTO_HOME, so keep it still while this runs.
-        let _home = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _g = SANDBOX_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let home = sandbox_home();
-        let project = std::env::temp_dir().join(format!("chanto-sbx-{}", std::process::id()));
-        std::fs::create_dir_all(&project).unwrap();
-
-        let outside = home.join(format!(".chanto-sbx-outside-{}", std::process::id()));
-        let secret_dir = home.join(format!(".chanto-sbx-secret-{}", std::process::id()));
-        // Keep the secret fixture in the isolated test home.
-        if std::fs::create_dir_all(&secret_dir)
-            .and_then(|_| std::fs::write(secret_dir.join("key"), "s3cret"))
-            .is_err()
-        {
-            let _ = std::fs::remove_dir_all(&project);
-
-            return;
-        }
-        let cfg = crate::config::SandboxConfig {
-            deny_read: vec![secret_dir.display().to_string()],
-            ..Default::default()
-        };
-
-        let (ok, out) = run("echo hi > inside.txt", &project, &cfg, false).await;
-        assert!(
-            ok && project.join("inside.txt").exists(),
-            "writes inside the project work: {out}"
-        );
-        // The project is writable, but its git internals are not: a hook
-        // written here would otherwise run, unsandboxed, on the next git call.
-        // The Seatbelt profile denies writes to .git internals inside the
-        // writable project. Landlock doesn't carve them out: that would also
-        // take away creating files in the project (see landlock_write_allow).
-        #[cfg(target_os = "macos")]
-        {
-            std::fs::create_dir_all(project.join(".git/hooks")).unwrap();
-            let (ok, _) = run(
-                "echo payload > .git/hooks/pre-commit",
-                &project,
-                &cfg,
-                false,
-            )
-            .await;
-            assert!(
-                !ok && !project.join(".git/hooks/pre-commit").exists(),
-                "writing a git hook must fail in the sandbox"
-            );
-        }
-        let (ok, out) = run(
-            &format!("echo hi > '{}'", outside.display()),
-            &project,
-            &cfg,
-            false,
-        )
-        .await;
-        assert!(
-            !ok && !outside.exists(),
-            "write outside the project must fail: {out}"
-        );
-        let (ok, out) = run(
-            &format!("echo hi > '{}'", outside.display()),
-            &project,
-            &cfg,
-            true,
-        )
-        .await;
-        assert!(
-            ok && outside.exists(),
-            "approved outside write works: {out}"
-        );
-        std::fs::remove_file(&outside).unwrap();
-        let (ok, out) = run(
-            &format!("cat '{}'", secret_dir.join("key").display()),
-            &project,
-            &cfg,
-            false,
-        )
-        .await;
-        assert!(
-            !ok && !out.contains("s3cret"),
-            "denied read must fail: {out}"
-        );
-        assert!(looks_sandbox_blocked(&out), "{out}");
-        assert!(
-            looks_network_failure(
-                "curl: (7) Failed to connect to 127.0.0.1 port 11434 after 0 ms: Couldn't connect to server"
-            ) && !looks_network_failure("error: no such file")
-        );
-        // Approved commands can read the otherwise denied fixture.
-        let (ok, out) = run(
-            &format!("cat '{}'", secret_dir.join("key").display()),
-            &project,
-            &cfg,
-            true,
-        )
-        .await;
-        assert!(ok && out.contains("s3cret"), "approved read works");
-        let _ = std::fs::remove_dir_all(&secret_dir);
-        let _ = std::fs::remove_dir_all(&project);
-    }
-
-    /// Landlock grants access rather than denying it, so the read-deny path is
-    /// only exercised on Linux. Assert the denied file is unreadable *and* that
-    /// its neighbours stay readable — the failure mode of the ancestor-walk is
-    /// locking down too much, which this catches.
-    #[cfg(target_os = "linux")]
-    #[tokio::test]
-    async fn landlock_denies_a_secret_but_not_its_neighbours() {
-        if !test_sandbox_available() {
-            return;
-        }
-        let _home = crate::compat::TEST_HOME_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _g = SANDBOX_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let home = sandbox_home();
-        let project = std::env::temp_dir().join(format!("chanto-ll-sbx-{}", std::process::id()));
-        std::fs::create_dir_all(&project).unwrap();
-        let dir = home.join(format!(".chanto-ll-{}", std::process::id()));
-        // Keep fixtures in the isolated test home.
-        if std::fs::create_dir_all(&dir)
-            .and_then(|_| std::fs::write(dir.join("secret"), "s3cret"))
-            .and_then(|_| std::fs::write(dir.join("public"), "hello"))
-            .is_err()
-        {
-            let _ = std::fs::remove_dir_all(&project);
-
-            return;
-        }
-        // Deny the one file; the file next to it must stay readable.
-        let cfg = crate::config::SandboxConfig {
-            deny_read: vec![dir.join("secret").display().to_string()],
-            ..Default::default()
-        };
-
-        let (ok, out) = run(
-            &format!("cat '{}'", dir.join("secret").display()),
-            &project,
-            &cfg,
-            false,
-        )
-        .await;
-        assert!(
-            !ok && !out.contains("s3cret"),
-            "denied read must fail: {out}"
-        );
-        let (ok, out) = run(
-            &format!("cat '{}'", dir.join("public").display()),
-            &project,
-            &cfg,
-            false,
-        )
-        .await;
-        assert!(
-            ok && out.contains("hello"),
-            "sibling of a denied path stays readable: {out}"
-        );
-
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&project);
-    }
-}
+mod sandbox_tests;
 
 #[cfg(test)]
-mod network_tests {
-    use super::*;
-    use crate::config::{NetworkPolicy, SandboxConfig};
-
-    #[test]
-    fn seatbelt_allows_only_proxy_endpoint() {
-        let cfg = SandboxConfig {
-            network: Some(NetworkPolicy::Allowlist),
-            ..Default::default()
-        };
-        let root = std::env::temp_dir();
-        let profile = sandbox_profile_with_port(&root, &cfg, Some(12345));
-        assert!(profile.contains("(deny network*)"));
-        assert!(profile.contains("(allow network-outbound (remote ip \"localhost:12345\"))"));
-        assert!(profile.contains("(remote unix-socket)"));
-        assert!(!sandbox_profile(&root, &SandboxConfig::default()).contains("(deny network*)"));
-        assert!(
-            sandbox_profile(
-                &root,
-                &SandboxConfig {
-                    deny_network: true,
-                    ..Default::default()
-                }
-            )
-            .contains("(deny network*)")
-        );
-    }
-
-    #[test]
-    #[cfg(target_os = "macos")]
-    fn profile_denies_writes_to_execution_paths_in_writable_trees() {
-        let cwd = std::env::temp_dir().join(format!("chanto-wd-{}", uuid::Uuid::new_v4()));
-        let profile = sandbox_profile(&cwd, &SandboxConfig::default());
-        // The project tree is writable, but its git internals are not. The
-        // deny names the resolved path (temp_dir is under a symlink here),
-        // since that is what Seatbelt matches.
-        let allow_at = profile.find("(allow file-write*").unwrap();
-        let git = crate::permissions::normalize(&cwd.join(".git/hooks"))
-            .display()
-            .to_string();
-        let deny = format!("(deny file-write* (subpath \"{}\"))", sbpl_quote(&git));
-        assert!(
-            profile.contains(&deny),
-            "missing git-hooks deny:\n{profile}"
-        );
-        // The deny comes after the allow block, so SBPL's last match wins.
-        assert!(profile.find(&deny).unwrap() > allow_at);
-        // Cargo's bin directory is denied even though ~/.cargo is writable.
-        assert!(
-            profile
-                .lines()
-                .any(|l| l.starts_with("(deny file-write*") && l.contains(".cargo/bin")),
-            "missing cargo-bin deny:\n{profile}"
-        );
-    }
-
-    #[test]
-    fn path_based_profile_preserves_proxy_rules_and_secret_denials() {
-        let root = std::env::temp_dir().join(format!("chanto-profile-{}", uuid::Uuid::new_v4()));
-        let home = root.join("home");
-        let writable = vec![root.join("project").display().to_string()];
-        let secret = home.join("private-key").display().to_string();
-        let cfg = SandboxConfig {
-            network: Some(NetworkPolicy::Allowlist),
-            deny_read: vec![secret.clone()],
-            ..Default::default()
-        };
-        let profile = sandbox_profile_with_paths(&writable, &home, &cfg, Some(12345));
-        assert!(profile.contains(&format!("(subpath \"{}\")", sbpl_quote(&writable[0]))));
-        let resolved = crate::permissions::normalize(std::path::Path::new(&secret));
-        assert!(profile.contains(&format!(
-            "(deny file-read* (subpath \"{}\"))",
-            sbpl_quote(&resolved.display().to_string())
-        )));
-        assert!(profile.contains("(deny network*)"));
-        assert!(profile.contains("(remote ip \"localhost:12345\")"));
-    }
-
-    #[cfg(windows)]
-    #[test]
-    fn windows_allowlist_fails_closed() {
-        let cfg = SandboxConfig {
-            network: Some(NetworkPolicy::Allowlist),
-            ..Default::default()
-        };
-        let error = build_command_for_policy(
-            "echo test",
-            &std::env::temp_dir(),
-            Some(&cfg),
-            None,
-            false,
-            true,
-        )
-        .err()
-        .unwrap();
-        assert!(
-            error.to_string().contains("unsupported on Windows"),
-            "{error} (sandbox available: {})",
-            sandbox_available()
-        );
-        assert!(
-            build_command_for_policy(
-                "echo test",
-                &std::env::temp_dir(),
-                Some(&cfg),
-                None,
-                true,
-                true
-            )
-            .is_ok()
-        );
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn linux_network_policy_fails_closed_before_abi_v4() {
-        if landlock_abi() >= 4 {
-            return;
-        }
-        let cfg = SandboxConfig {
-            network: Some(NetworkPolicy::Allowlist),
-            ..Default::default()
-        };
-        let error =
-            build_command_for_policy(":", &std::env::temp_dir(), Some(&cfg), None, false, true)
-                .err()
-                .unwrap();
-        assert!(error.to_string().contains("network sandbox"));
-        let allowed = SandboxConfig::default();
-        assert!(
-            build_command_for_policy(
-                ":",
-                &std::env::temp_dir(),
-                Some(&allowed),
-                None,
-                false,
-                true
-            )
-            .is_ok()
-        );
-    }
-
-    #[cfg(all(
-        target_os = "linux",
-        any(target_arch = "x86_64", target_arch = "aarch64")
-    ))]
-    #[test]
-    fn linux_network_socket_filter() {
-        // Apply seccomp only in an isolated test process, never in the runner.
-        if std::env::var("CHANTO_TEST_SECCOMP").as_deref() != Ok("1") {
-            let out = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "tools::bash::network_tests::linux_network_socket_filter",
-                    "--nocapture",
-                ])
-                .env("CHANTO_TEST_SECCOMP", "1")
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "{}{}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-            return;
-        }
-        assert_eq!(
-            unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) },
-            0
-        );
-        restrict_network_sockets().unwrap();
-        assert!(std::net::TcpListener::bind(("127.0.0.1", 0)).is_ok());
-        assert_eq!(
-            std::net::UdpSocket::bind(("127.0.0.1", 0))
-                .unwrap_err()
-                .raw_os_error(),
-            Some(libc::EPERM)
-        );
-        let unix = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_DGRAM, 0) };
-        assert!(unix >= 0);
-        unsafe {
-            libc::close(unix);
-        }
-        for (family, kind, protocol) in [
-            (libc::AF_INET, libc::SOCK_RAW, libc::IPPROTO_ICMP),
-            (libc::AF_INET, libc::SOCK_STREAM, libc::IPPROTO_SCTP),
-            (libc::AF_PACKET, libc::SOCK_RAW, 0),
-        ] {
-            assert_eq!(unsafe { libc::socket(family, kind, protocol) }, -1);
-            assert_eq!(
-                std::io::Error::last_os_error().raw_os_error(),
-                Some(libc::EPERM)
-            );
-        }
-        assert_eq!(
-            unsafe { libc::syscall(libc::SYS_io_uring_setup, 0, std::ptr::null::<u8>()) },
-            -1
-        );
-        assert_eq!(
-            std::io::Error::last_os_error().raw_os_error(),
-            Some(libc::EPERM)
-        );
-    }
-
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn macos_allowlist_proxy_works_and_direct_connection_fails() {
-        use tokio::io::AsyncWriteExt;
-        if !sandbox_available() {
-            return;
-        }
-        let check = std::process::Command::new("/usr/bin/sandbox-exec")
-            .args(["-p", "(version 1)(allow default)", "/usr/bin/true"])
-            .output()
-            .unwrap();
-        if !check.status.success() {
-            eprintln!(
-                "skipping Seatbelt integration: {}",
-                String::from_utf8_lossy(&check.stderr)
-            );
-            return;
-        }
-        let _lock = SANDBOX_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let root =
-            std::env::temp_dir().join(format!("chanto-net-sandbox-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&root).unwrap();
-        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
-            .await
-            .unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = tokio::spawn(async move {
-            loop {
-                let (mut client, _) = listener.accept().await.unwrap();
-                tokio::spawn(async move {
-                    let mut request = Vec::new();
-                    while !request.ends_with(b"\r\n\r\n") {
-                        request.push(client.read_u8().await.unwrap());
-                    }
-                    client.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\nfixture").await.unwrap();
-                });
-            }
-        });
-        let cfg = SandboxConfig {
-            network: Some(NetworkPolicy::Allowlist),
-            allowed_domains: Some(vec!["127.0.0.1".into()]),
-            ..Default::default()
-        };
-        let script = format!("/usr/bin/curl -fsS --max-time 3 http://127.0.0.1:{port}/");
-        let (mut cmd, _lease) =
-            build_command_for_policy(&script, &root, Some(&cfg), None, false, true).unwrap();
-        let out = cmd.output().await.unwrap();
-        assert!(
-            out.status.success(),
-            "{}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-        assert_eq!(out.stdout, b"fixture");
-        let script =
-            format!("/usr/bin/curl -fsS --noproxy '*' --max-time 3 http://127.0.0.1:{port}/");
-        let (mut cmd, _lease) =
-            build_command_for_policy(&script, &root, Some(&cfg), None, false, true).unwrap();
-        assert!(
-            !cmd.output().await.unwrap().status.success(),
-            "direct connection must fail"
-        );
-        let deny = SandboxConfig {
-            network: Some(NetworkPolicy::Deny),
-            ..Default::default()
-        };
-        let (mut cmd, _) =
-            build_command_for_policy(&script, &root, Some(&deny), None, false, true).unwrap();
-        assert!(
-            !cmd.output().await.unwrap().status.success(),
-            "deny must block direct connections"
-        );
-
-        server.abort();
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
+mod network_tests;
 
 #[cfg(all(test, windows))]
-mod windows_secret_tests {
-    use super::*;
-
-    #[test]
-    fn expands_windows_private_keys_and_credential_paths() {
-        let home =
-            std::env::temp_dir().join(format!("chanto-win-secrets-{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&home).unwrap();
-        // Denied paths are canonical; the temp dir may be an 8.3 short name (RUNNER~1).
-        let home = crate::util::canonical(&home).unwrap();
-        for name in [
-            ".ssh/id_ed25519",
-            ".ssh/id_ed25519_sk",
-            ".ssh/id_ed25519.pub",
-            ".aws/credentials",
-            "AppData/Roaming/gcloud/credentials.db",
-        ] {
-            let path = home.join(name);
-            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            std::fs::write(path, "fixture").unwrap();
-        }
-        let denied = read_denied_paths(&home, &[]);
-        assert!(denied.contains(&home.join(".ssh/id_ed25519")));
-        assert!(denied.contains(&home.join(".ssh/id_ed25519_sk")));
-        assert!(!denied.contains(&home.join(".ssh/id_ed25519.pub")));
-        assert!(denied.contains(&home.join(".aws/credentials")));
-        assert!(denied.contains(&home.join("AppData/Roaming/gcloud/credentials.db")));
-        std::fs::remove_dir_all(home).unwrap();
-    }
-}
+mod windows_secret_tests;
 
 #[cfg(test)]
-mod sink_tests {
-    use super::*;
-
-    fn shell() -> Arc<BgShell> {
-        Arc::new(BgShell {
-            id: "bash_1".into(),
-            command: "true".into(),
-            description: None,
-            monitor: None,
-            output: Mutex::new(String::new()),
-            read_pos: Mutex::new(0),
-            watch_pos: Mutex::new(0),
-            exit: Mutex::new(None),
-            pid: None,
-            network: Mutex::new(None),
-        })
-    }
-
-    /// A foreground command's output goes to the returned buffer; once it is
-    /// handed to the background, later chunks must land in the shell instead,
-    /// so nothing is duplicated or lost across the switch.
-    #[test]
-    fn chunks_follow_the_sink_across_a_hand_off() {
-        let buf = Mutex::new(Vec::new());
-        let sink = Mutex::new(Sink::Fg);
-        push_sink(&sink, &buf, b"one\n");
-        assert_eq!(String::from_utf8_lossy(&buf.lock().unwrap()), "one\n");
-        let sh = shell();
-        *sink.lock().unwrap() = Sink::Bg(sh.clone());
-        push_sink(&sink, &buf, b"two\n");
-        assert_eq!(
-            String::from_utf8_lossy(&buf.lock().unwrap()),
-            "one\n",
-            "the foreground buffer stops growing"
-        );
-        assert_eq!(
-            *sh.output.lock().unwrap(),
-            "two\n",
-            "later output lands in the shell"
-        );
-    }
-}
+mod sink_tests;
 
 // The libc calls stay in this file with the sandbox's other FFI; guards.rs
 // uses the result to deny writes to Chanto's own terminal.

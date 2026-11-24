@@ -2,11 +2,11 @@
 
 Full reference for every feature. The [README](../README.md) is the overview.
 
-**Contents:** [Setup](#setup) · [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Outcome mode](#outcome-mode) · [Goals](#goals) · [Verified mode (guardrails)](#verified-mode-guardrails) · [Learning from your corrections](#learning-from-your-corrections) · [Usage insights](#usage-insights) · [Secrets](#secrets) · [Resource limits](#resource-limits) · [Computer use](#computer-use) · [Background agents and worktrees](#background-agents-and-worktrees) · [Background and remote runs](#background-and-remote-runs) · [Teams](#teams) · [Voice input](#voice-input) · [Server](#server) · [Claude Code and Codex compatibility](#claude-code-and-codex-compatibility) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [License](#license) · [ACP client](#acp-client) · [Managing spend](#managing-spend) · [Costs, budgets and telemetry](#costs-budgets-and-telemetry) · [Durable memory](#durable-memory) · [Permission modes](#permission-modes) · [Tools](#tools) · [Sandbox](#sandbox) · [Sessions and checkpoints](#sessions-and-checkpoints) · [Context management](#context-management)
+**Contents:** [Setup](#setup) · [Install](#install) · [Usage](#usage) · [Configuration](#configuration) · [Outcome mode](#outcome-mode) · [Goals](#goals) · [Verified mode (guardrails)](#verified-mode-guardrails) · [Quality profile](#quality-profile) · [Learning from your corrections](#learning-from-your-corrections) · [Usage insights](#usage-insights) · [Secrets](#secrets) · [Resource limits](#resource-limits) · [Computer use](#computer-use) · [Background agents and worktrees](#background-agents-and-worktrees) · [Background and remote runs](#background-and-remote-runs) · [Teams](#teams) · [Voice input](#voice-input) · [Server](#server) · [Claude Code and Codex compatibility](#claude-code-and-codex-compatibility) · [Benchmarks](#benchmarks) · [Architecture](#architecture) · [License](#license) · [ACP client](#acp-client) · [Managing spend](#managing-spend) · [Costs, budgets and telemetry](#costs-budgets-and-telemetry) · [Durable memory](#durable-memory) · [Permission modes](#permission-modes) · [Tools](#tools) · [Sandbox](#sandbox) · [Sessions and checkpoints](#sessions-and-checkpoints) · [Context management](#context-management)
 
 A fast, local-first agentic coding CLI written in Rust, built around one rule: it has to prove its work before it calls the job done. It runs against **local models** through Ollama's native API or any OpenAI-compatible server (llama.cpp `llama-server`, LM Studio, vLLM, MLX, …), and against hosted models: the native **Anthropic Messages** and **OpenAI Responses** APIs, OpenAI-compatible services (OpenRouter, Gemini, DeepSeek, Groq and others; `chanto providers` lists them), and Amazon Bedrock, Google Vertex AI and Azure.
 
-- **Single binary** (about 17 MB), starts instantly, uses little memory
+- **Single binary** (about 20 MB), starts instantly, uses little memory
 - **Full-screen or [inline](#inline-mode) TUI**: streaming markdown, collapsible tool, diff and thinking blocks (click or `ctrl+o`), mouse scrolling, permission dialogs, slash and `@file` completion (gitignored files are offered last, marked, and `.git` never), todo panel, and a status bar with context usage and tokens/s
 - **Reads the setup you already have**: existing Claude Code and Codex settings, permission rules, hooks, MCP servers, instruction files, skills, commands/prompts and subagents carry over, so switching doesn't mean starting from an empty config (see [Compatibility](#claude-code-and-codex-compatibility))
 - **Multi-model**: named providers (`[providers.lmstudio]`, `[providers.llamacpp]`, …) referenced as `provider/model`, so the main agent, subagents (`subagent_model`) and the auto-mode classifier (`classifier_model`) can each use a different model or server. Switch live with `/model`.
@@ -20,24 +20,26 @@ Cycle with `shift+tab`: `default` → `acceptEdits` → `plan` → `auto`, plus 
 
 - **Auto mode** runs autonomously. Read-only and in-project actions run immediately, known-dangerous commands are hard-blocked, and anything else is screened by an LLM safety classifier. The classifier sees only what you typed and the proposed action, never tool output or the files you mention, so prompt injection can't talk it into approving. Only what you type into a frontend (the TUI, the REPL, the web UI or phone, an ACP client, `-p`) counts as your request. Every other prompt is shown to it as the agent's task, not as your request: a subagent's task, a goal, team or outcome step, a background run, a scheduled task, a slash command's expansion, a request from an MCP client. Approving an edit preserves auto mode; the approval does not remove protected-path or workspace checks. The classifier receives up to 16 recent user messages, so short follow-ups retain more of the original request. Explicit requests to publish, merge or deploy authorize necessary steps within that scope; later restrictions override earlier requests. A classifier refusal or failure becomes a prompt immediately in interactive sessions; known-dangerous command patterns fall back to you after 3 consecutive blocks. Prompts explain the applicable boundary, such as a sandbox escape, protected configuration, an outside-workspace edit, or uninspectable patch/archive paths. Optional, experimental: `permissions.fast_path = true` clears routine shell commands with a small built-in model in microseconds instead of a model call (it can only allow, never block, and never clears inline code such as `node -e` or `python -c`, packages fetched to run such as `npx github:…` or `go run …@latest`, or `curl -K`/`wget -e` option files; see [classifier/](../classifier/README.md) for how it's measured). Shell writes to protected paths (`.git/`, `.chanto/`, `.claude/` settings and hooks, `.mcp.json`, `.husky/`, `.vscode/` settings and tasks) ask in every mode but bypass, as edits of them do, and so does a write whose target the shell computes (`$var`, `$(…)`). In auto mode, extracting an archive or applying a patch asks too.
 - **Always a human's call**, in every mode but `bypassPermissions`: reading secret files (`.env`, keys, `~/.ssh`, `~/.aws`), writing files outside the project or ones that make git or Chanto run commands (`.git/hooks`, hooks config), turning the command sandbox off, and fetching cloud instance metadata, this machine's own services (`localhost`, `127.0.0.1`, `::1`) or local files outside the project. An allow rule you write still covers its case, for example `WebFetch(domain:localhost)` for your dev server.
+- **Git in a repository whose own config runs programs** asks in every mode but `bypassPermissions`, since the command line doesn't show what will run. Diff and filter drivers, a pager, an fsmonitor or an included file make every git command ask, reads included. A `core.hooksPath` (set by husky, or by `git config core.hooksPath .githooks`) only counts for commands that can run a hook that's actually in that directory: with only `pre-commit` there, `git commit` asks, while `git log`, `status`, `diff` and `push` don't. An unknown subcommand (it could be an alias) or a global option such as `-c` or `-C` always asks.
+- **Read-only GitHub polling** runs without a prompt in every mode: `gh pr view|list|diff|checks|status`, `gh issue view|list|status`, `gh run view|list`, `gh workflow view|list`, `gh repo view|list`, `gh release view|list`, `gh search …` and `gh auth status`. The rest does not — `gh api` (any method), `gh auth token`, `gh alias`, `gh extension`, `gh pr checkout|merge|comment|review`, `gh repo clone`, `gh release download|create`, `gh workflow run`, `gh secret` and `gh variable` write, run a command or print a credential, so they go to the classifier or to you.
 
 ## Tools
 
-`Read` (text, images, PDF, notebooks), `Write`, `Edit`, `MultiEdit` (a file that isn't UTF-8 is refused with its likely encoding, UTF-16 or Latin-1, and an `iconv` command to convert it; a `Write` or `Edit` whose arguments arrived as broken JSON, likely cut off, isn't run on a repaired guess: the model is asked to resend it in smaller pieces), `NotebookEdit`, `Glob`, `Grep` (ripgrep), `Ls`, `RepoMap` (a ranked, token-budgeted map of the project's symbols (functions, types, classes, modules), most-referenced first, for getting oriented in a large or unfamiliar tree before grepping; `path` limits it to a subdirectory, `tokens` sets the budget, default 1024), `SemanticSearch` (vector search over the codebase: files are split into overlapping chunks and embedded through the `[embeddings]` provider, the vectors are cached under `~/.chanto/cache/embeddings/` and refreshed when a file changes, and results are ranked by cosine similarity; `query` is required, `k` (default 8) and `path` are optional), `Bash` (persistent cwd inside the project and `--add-dir`/`additionalDirectories` directories: a command that ends outside them, like `cd /`, leaves the shell back at the project root and the output says `Shell cwd was reset to <root>`; `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` (or `CHANTO_BASH_MAINTAIN_PROJECT_WORKING_DIR`) starts every command at the project root, timeouts, background shells via `BashOutput`/`KillShell`; runs through bash on Unix, with your shell's PATH, variables, aliases and functions (see [Your shell setup in Bash](#your-shell-setup-in-bash)), and through a `bash`/PowerShell/cmd on Windows, whichever exists (override with `CHANTO_SHELL`); files a command changed show as a diff), `Monitor` (runs a command in the background and hands each line it prints to the model as it arrives, so it reacts to a log, a file change or a CI status without polling; ends when the command exits or at `timeout_ms`, default 5 minutes, at most 30 (10 in `-p` runs, which wait for the watch to finish); it is a background shell, so `/bashes`, `BashOutput` and `KillShell` see it, and `Bash(...)` permission rules apply to its command), `CronCreate`/`CronList`/`CronDelete` and `ScheduleWakeup` (in-session scheduled prompts and the self-paced `/loop`; offered in the TUI and the `--plain` REPL only, and not at all with `CLAUDE_CODE_DISABLE_CRON=1`), `WebSearch`, `WebFetch`, `Browser` (Chrome over CDP: navigate, snapshot with element refs, click, type, keys, screenshots for vision models, tabs, JS eval), `Computer` (opt-in desktop control: screenshots, mouse, keyboard, apps; see [Computer use](#computer-use)), `TodoWrite`, `Task` (subagents with their own context), `AskUserQuestion`, `ExitPlanMode`, `Skill`
+`Read` (text, images, PDF, notebooks), `Write`, `Edit`, `MultiEdit` (a file that isn't UTF-8 is refused with its likely encoding, UTF-16 or Latin-1, and an `iconv` command to convert it; a `Write` or `Edit` whose arguments arrived as broken JSON, likely cut off, isn't run on a repaired guess: the model is asked to resend it in smaller pieces), `NotebookEdit`, `Glob`, `Grep` (ripgrep), `Ls`, `RepoMap` (a ranked, token-budgeted map of the project's symbols (functions, types, classes, modules), most-referenced first, for getting oriented in a large or unfamiliar tree before grepping; `path` limits it to a subdirectory, `tokens` sets the budget, default 1024), `SemanticSearch` (vector search over the codebase: files are split into overlapping chunks and embedded through the `[embeddings]` provider, the vectors are cached under `~/.chanto/cache/embeddings/` and refreshed when a file changes, and results are ranked by cosine similarity; `query` is required, `k` (default 8) and `path` are optional), `Bash` (persistent cwd inside the project and `--add-dir`/`additionalDirectories` directories: a command that ends outside them, like `cd /`, leaves the shell back at the project root and the output says `Shell cwd was reset to <root>`; `CLAUDE_BASH_MAINTAIN_PROJECT_WORKING_DIR=1` (or `CHANTO_BASH_MAINTAIN_PROJECT_WORKING_DIR`) starts every command at the project root, timeouts, background shells via `BashOutput`/`KillShell`; runs through bash on Unix, with your shell's PATH, variables, aliases and functions (see [Your shell setup in Bash](#your-shell-setup-in-bash)), and through PowerShell (then cmd) on Windows while the sandbox is on, which is the default, or with it off through Git Bash if present, then PowerShell, then cmd (override with `CHANTO_SHELL`, though Git Bash can't start inside the sandbox); files a command changed show as a diff), `Monitor` (runs a command in the background and hands each line it prints to the model as it arrives; the model reacts to a log, a file change or a CI status without polling; ends when the command exits or at `timeout_ms`, default 5 minutes, at most 30 (10 in `-p` runs, which wait for the watch to finish); it is a background shell, so `/bashes`, `BashOutput` and `KillShell` see it, and `Bash(...)` permission rules apply to its command), `CronCreate`/`CronList`/`CronDelete` and `ScheduleWakeup` (in-session scheduled prompts and the self-paced `/loop`; offered in the TUI and the `--plain` REPL only, and not at all with `CLAUDE_CODE_DISABLE_CRON=1`), `WebSearch`, `WebFetch`, `Browser` (Chrome over CDP: navigate, snapshot with element refs, click, type, keys, screenshots for vision models, tabs, JS eval), `Computer` (opt-in desktop control: screenshots, mouse, keyboard, apps; see [Computer use](#computer-use)), `TodoWrite`, `Task` (subagents with their own context), `AskUserQuestion`, `ExitPlanMode`, `Skill`, `Memory` (see [Durable memory](#durable-memory)), `Lsp` (see [Language servers](#language-servers)), `ToolSearch` (see [MCP servers](#mcp-servers)), `ChantoCloud` (cloud runs and agents, once you've signed in with `chanto cloud login`)
 
 ## Sandbox
 
 The sandbox is on by default (macOS Seatbelt, Linux Landlock, and on Windows a write-restricted token that confines writes only, see below). Shell commands can write only inside the project, temp dirs and the package managers' download caches: `~/.cargo/registry` and `git`, `~/.npm` (`_cacache`, `_npx`), `~/.m2/repository`, `~/.gradle/caches`, `go/pkg`, `.bun/install/cache`, `.pnpm-store`, and named entries of `~/.cache` and `~/Library/Caches` (pip, uv, pnpm, Yarn, deno, node-gyp, go-build, Homebrew, Playwright, …), not the rest of those two. Dependency downloads are writable on purpose, like the project's own `node_modules`; toolchains, installed tools and settings are not.
-- **What stays read-only inside those trees (macOS):** the project's `.git` (pinned, also when missing, so it can't be swapped or created) with its hooks, config and `commondir`, submodule and worktree git dirs (pinned too), nested repositories' `.git/hooks` and `.git/config`; agent and editor settings that carry hooks (`.chanto/`, `.claude/settings*.json` and `hooks/`, `.mcp.json`, `.husky/`, `.githooks/`, `.vscode/{settings,tasks}.json`, with `.claude` and `.vscode` pinned against rename); Chanto's own home and shell startup files; toolchain bins and settings (`~/.cargo/bin` and `config.toml`, `~/.rustup`, pyenv, uv's Pythons, `~/.local/bin`, Gradle wrappers, `init.d` and `gradle.properties`, Maven settings).
+- **What stays read-only inside those trees (macOS):** the project's `.git` (pinned, even when missing, against swapping or creation) with its hooks, config and `commondir`, submodule and worktree git dirs (pinned too), nested repositories' `.git/hooks` and `.git/config`; agent and editor settings that carry hooks (`.chanto/`, `.claude/settings*.json` and `hooks/`, `.mcp.json`, `.husky/`, `.githooks/`, `.vscode/{settings,tasks}.json`, with `.claude` and `.vscode` pinned against rename); Chanto's own home and shell startup files; toolchain bins and settings (`~/.cargo/bin` and `config.toml`, `~/.rustup`, pyenv, uv's Pythons, `~/.local/bin`, Gradle wrappers, `init.d` and `gradle.properties`, Maven settings).
 - **What needs an unsandboxed run (approval):** installing a toolchain or tool, a first dependency fetch on Linux when its cache directory doesn't exist yet, `git init` and `git clone` inside the project, `git worktree add`, `git submodule add`/`update`, `git remote add`, `git config` and `git branch -u` (they write `.git/config`), and git over SSH unless `sandbox.allow_ssh_agent = true`. The blocked-command hint says so.
-- **Reads:** on macOS and Linux commands can't read SSH private keys, AWS/gcloud/GitHub/Docker/Kubernetes/npm/crates.io/1Password credentials, `.netrc`, git credentials, GPG private keys or Chanto's own token files (add more with `sandbox.deny_read`). A private npm registry or `docker pull` that needs those logins fails quietly inside the sandbox. On Linux, read denials cover files that exist when the command starts. On macOS the keychain is still reachable, so `git credential-osxkeychain`, `gh auth token` and Docker's credential helper can return tokens.
+- **Reads:** on macOS and Linux commands can't read SSH private keys, AWS/gcloud/GitHub/Docker/Kubernetes/npm/crates.io/1Password credentials, `.netrc`, git credentials, GPG private keys or Chanto's own token files (add more with `sandbox.deny_read`). A private npm registry or `docker pull` that needs those logins fails quietly inside the sandbox. On Linux, read denials cover files that exist when the command starts. On macOS the keychain is out of reach too, so logins kept there (`gh`, `git push` over HTTPS, Docker's credential helper) don't work inside the sandbox; Chanto asks you to approve such a command running outside it.
 - **Local IPC (macOS):** commands start in a new session without a controlling terminal, can't read, write or `ioctl` Chanto's terminal or the other terminal windows' ttys (ptys they open themselves, as `script` does, work), can't send Apple Events, use LaunchServices (`open`, `osascript`), the clipboard or Shortcuts, and can connect to Unix sockets only inside the project and their own `$TMPDIR` (so not `docker.sock`, SSH or GPG agents, tmux, or other apps' sockets in the shared temp dirs). The SSH, GPG, D-Bus, X11/Wayland, Docker and `XDG_RUNTIME_DIR` environment variables are removed.
 - **Linux status:** Landlock grants the project, temp dirs and `/dev` whole, because carving a path out of a tree takes away the right to create files next to it (`target/`, `.git/index.lock`). So the in-project guards above (`.git`, `.chanto`, `.claude`, …) are not enforced by the sandbox on Linux; the permission layer still asks before the file tools touch them, but a shell command can write them. The home guards apply where a configured `allow_write` or `--add-dir` covers them. Unix sockets aren't scoped: removing the environment variables is advisory, and a command that knows a socket's path (`/var/run/docker.sock`, `/run/user/<uid>/bus`) can connect to it. Seccomp refuses TIOCSTI and TIOCLINUX, and UDP/raw sockets when the network is restricted.
 - **Network** stays allowed by default. Set `sandbox.network = "deny"` to block it, or `"allowlist"` to use the domain filtering proxy (`deny_network = true` remains a legacy alias; an explicit `network` wins); neither is enforced on Windows.
-- **Windows status:** commands run under a restricted copy of your own token (`WRITE_RESTRICTED`) inside a job object. No administrator, driver, extra account or AppContainer is needed. What's enforced: writes are limited to the project, the temp dir, `allow_write` and `--add-dir` paths, the package managers' download caches (`.cargo\registry`, `.cargo\git`, `.gradle\caches`, `.m2\repository`, `.bun\install\cache`, `go\pkg` and `.nuget\packages` in your profile; the npm, pnpm, Yarn, pip, uv, Go build and Poetry caches under `%LOCALAPPDATA%`), plus the rare locations that grant write access to Everyone; and the job kills every descendant when the shell or the launcher exits (the launcher also watches the Chanto process). What isn't: none of the read-only guards above apply, and reads are not restricted at all (Windows only consults a write-restricted token's extra SIDs for writes), so `deny_read` and the built-in credential denials don't apply and commands can read anything you can. The network isn't restricted either: `network = "deny"` gets a startup warning and commands keep network access, and `network = "allowlist"` fails closed with an error. With `sandbox.auto_allow`, Chanto warns at startup that auto-allowed commands can read credentials and use the network.
+- **Windows status:** commands run under a restricted copy of your own token (`WRITE_RESTRICTED`) inside a job object. They run in PowerShell, because Git Bash can't start under this token. No administrator, driver, extra account or AppContainer is needed. What's enforced: writes are limited to the project, the temp dir, `allow_write` and `--add-dir` paths, the package managers' download caches (`.cargo\registry`, `.cargo\git`, `.gradle\caches`, `.m2\repository`, `.bun\install\cache`, `go\pkg` and `.nuget\packages` in your profile; the npm, pnpm, Yarn, pip, uv, Go build and Poetry caches under `%LOCALAPPDATA%`), plus the rare locations that grant write access to Everyone; and the job kills every descendant when the shell or the launcher exits (the launcher also watches the Chanto process). What isn't: none of the read-only guards above apply, and reads are not restricted at all (Windows only consults a write-restricted token's extra SIDs for writes), so `deny_read` and the built-in credential denials don't apply and commands can read anything you can. The network isn't restricted either: `network = "deny"` gets a startup warning and commands keep network access, and `network = "allowlist"` fails closed with an error. With `sandbox.auto_allow`, Chanto warns at startup that auto-allowed commands can read credentials and use the network.
 - On Windows each writable root gets its own write SID (derived from its path) and an inheritable allow ACE for it. The ACE stays on the directory after the command: the first grant on a big tree waits while Windows propagates it to existing files, later commands only check it. The tool caches are granted in the background when Chanto starts, so commands don't wait on them. It grants nothing to ordinary processes, since that SID can only narrow a token's access. Files with protected ACLs, or moved in from elsewhere with their own ACL, stay read-only inside the sandbox. Grant paths must be on an ACL-capable filesystem, and setup failures stop the command rather than running it without isolation. WSL shells can't be contained and are refused. If the startup probe fails, Chanto warns and runs commands unsandboxed, as on any system without a sandbox.
 - When the sandbox blocks a command, the model can retry it with `dangerouslyDisableSandbox: true`. That is never automatic and always needs a human: you're asked in default, acceptEdits and plan modes, auto mode asks too (the classifier does not get to hand the sandbox back), and only bypass mode allows it. An explicit `Bash(...)` allow rule you wrote also covers it.
-- `/sandbox` shows the policy and `/sandbox on|off` toggles it for the session; `[sandbox] enabled = false` turns it off. `--sandbox read-only | workspace-write | danger-full-access` work as in Codex.
+- `/sandbox` shows the policy and `/sandbox on|off` toggles it for the session; `/sandbox network allow|allowlist|deny` saves the network policy for later sessions; `[sandbox] enabled = false` turns it off. `--sandbox read-only | workspace-write | danger-full-access` work as in Codex; `[sandbox] read_only = true` sets the read-only policy in config, whatever the permission mode.
 - In allowlist mode, `allowed_domains` accepts exact names and `*.example.org` (subdomains only); `denied_domains` wins over allowed entries. Omit `allowed_domains` to use package registry defaults for GitHub, npm/Yarn, PyPI, crates.io, Go modules, Maven Central and RubyGems. An explicit `[]` permits nothing. IP literals, including loopback, require an exact entry.
 - Commands receive `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` and their lowercase equivalents, with `NO_PROXY=localhost`. HTTPS uses CONNECT; plain HTTP checks Host and the request target. A lazy loopback proxy uses separate credentials and policies for each command. Tools that ignore proxy settings cannot connect directly to normal service ports.
 - macOS Seatbelt restricts outbound traffic to the proxy's loopback endpoint. Linux requires Landlock ABI v4 for `deny` or `allowlist`, restricts TCP connects to the proxy port, and uses seccomp to block UDP/raw/packet sockets and io_uring bypasses. Landlock port rules apply to every destination address, so Linux also permits TCP connections to that same port on other hosts; it cannot enforce the loopback address. Unix sockets remain available for local DNS services. Unsupported kernels fail closed with an actionable error; `network = "allow"` retains unrestricted networking.
@@ -47,7 +49,7 @@ The sandbox is on by default (macOS Seatbelt, Linux Landlock, and on Windows a w
 ```toml
 [sandbox]
 network = "allowlist"
-# Omit allowed_domains for package registry defaults, or supply your own list:
+# Omit allowed_domains for the defaults (package registries, language toolchains and GitHub), or supply your own list:
 allowed_domains = ["github.com", "*.npmjs.org", "pypi.org", "files.pythonhosted.org"]
 denied_domains = ["untrusted.npmjs.org"]
 ```
@@ -65,7 +67,7 @@ denied_domains = ["untrusted.npmjs.org"]
 
 Snapshots use a private Git object store in `~/.chanto/history/<project-hash>/`; the project's own Git index, HEAD, refs, and stash are untouched. Snapshots include working-directory files, including untracked files, while honoring `.gitignore`. Ignored files, `.git`, `node_modules`, `target`, `.venv`, and files over the size cap are excluded. Restoring removes newly created files and recreates deleted files within that scope. External side effects (databases, network calls, package caches outside the project, and Git pushes) are not undone. Snapshots run at each prompt and before mutating Bash calls; read-only shell calls skip the extra snapshot. A project's first snapshot stores every file, written as a single pack (a few seconds for 30,000 small files), and may take up to 30 s; later ones only re-read files whose size or modification time changed (well under a second for the same project).
 
-If Git is unavailable or a snapshot exceeds its budget, a warning appears once and that checkpoint uses file-edit snapshots. This fallback covers Write/Edit/MultiEdit/NotebookEdit/apply_patch; Bash changes cannot be recovered by the fallback. Web UI and SDK file snapshots remain supported.
+If Git is unavailable or a snapshot exceeds its budget, a warning appears once and that checkpoint uses file-edit snapshots. This fallback covers Write/Edit/MultiEdit/NotebookEdit/apply_patch; Bash changes cannot be recovered by the fallback. Web UI file snapshots remain supported.
 
 Configure snapshot limits in TOML:
 
@@ -130,7 +132,7 @@ macOS and Linux (arm64 or x86_64):
 ```sh
 curl -fsSL https://chanto.sh/install.sh | sh
 # Pin a release or change the install prefix (binary goes in PREFIX/bin):
-curl -fsSL https://chanto.sh/install.sh | sh -s -- --version v0.1.4 --prefix "$HOME/.local"
+curl -fsSL https://chanto.sh/install.sh | sh -s -- --version v0.1.12 --prefix "$HOME/.local"
 ```
 
 Windows x64, in PowerShell:
@@ -138,7 +140,7 @@ Windows x64, in PowerShell:
 ```powershell
 irm https://chanto.sh/install.ps1 | iex
 # For options, download install.ps1, then:
-./install.ps1 -Version v0.1.4 -Prefix "$env:LOCALAPPDATA/chanto"
+./install.ps1 -Version v0.1.12 -Prefix "$env:LOCALAPPDATA/chanto"
 ```
 
 The shell installer defaults to `~/.local/bin`; PowerShell defaults to
@@ -223,7 +225,7 @@ means releases before v0.1.5, which have no `SHA256SUMS.sshsig`, can't be
 installed by script. Releases before v0.1.2 aren't signed and can't be
 installed by script at all. A signature can't show that a release is the
 newest, so the scripts also refuse a "latest" older than the floor they carry
-(currently v0.1.6, raised with each security release), in case the download
+(currently v0.1.25, raised with each security release), in case the download
 host serves an old release; an older release asked for with `--version` /
 `-Version` still installs, with a warning. The public key is
 [`packaging/release-signing-key.pub`](../packaging/release-signing-key.pub):
@@ -282,6 +284,8 @@ With Homebrew (macOS and Linux):
 brew install chanto-sh/tap/chanto
 ```
 
+To embed the agent in a web page, `npm install @chanto/web`: the agent loop and its file tools as WebAssembly, working on a project held in memory, with the model supplied by the page. There's no shell. It's experimental, and its interface may change in any release; see [`web/README.md`](../web/README.md).
+
 Each release renders the formula from `packaging/homebrew/chanto.rb` (version
 and archive checksums), uploads it as a `homebrew-formula` artifact, and pushes
 it to the [chanto-sh/homebrew-tap](https://github.com/chanto-sh/homebrew-tap)
@@ -296,7 +300,8 @@ reinstalls the latest release):
   platform, verifies it against the release's `SHA256SUMS`, checks that the new
   binary runs, then replaces the old one (removed, then the new one moved into
   place). On a mismatch or any failure the old binary stays.
-- **Homebrew**: offers to run `brew upgrade chanto`.
+- **Homebrew**: runs `brew update` and `brew upgrade chanto`, then checks the new version arrived and says so if it didn't.
+- **npm and Scoop**: runs `npm install -g @chanto/cli@latest` or `scoop update chanto`, then checks the new version arrived the same way.
 - **Cargo**: prints the `cargo install` command; a build in a source checkout is
   told to `git pull` and rebuild. If the install method can't be told, nothing
   is replaced and Chanto says how to install a release.
@@ -310,8 +315,11 @@ at most once per day, with a two-second timeout. The single request is
 version User-Agent; it sends no prompts, keys, or project data. Results and failed
 attempt timestamps are cached in `~/.chanto/update-check.json` (or
 `$CHANTO_HOME/update-check.json`). A newer release produces one dim TUI line or
-an stderr line after a print run, with the appropriate Homebrew, Cargo, or
-`chanto upgrade` command. Very short runs may exit before a notice is ready.
+an stderr line after a print run, naming the version it runs, the release it can
+move to, and the command that upgrades this install: `chanto upgrade` where
+Chanto can do the upgrade itself (the installer, Homebrew, npm and Scoop),
+otherwise the package manager's own command (Cargo). Very short runs may exit
+before a notice is ready.
 Checks never run when `CI` is set. Disable them with `CHANTO_NO_UPDATE_CHECK=1`
 or in your configuration:
 
@@ -327,7 +335,10 @@ Requirements: a model, either a hosted provider (a key or login) or a local serv
 ```sh
 chanto                                  # interactive TUI
 chanto "fix the failing tests"          # TUI with an initial prompt
-chanto -p "explain src/main.rs"         # print mode (non-interactive)
+chanto -p "explain src/main.rs"         # print mode (non-interactive; also --print); `chanto exec "…"` is the same
+chanto -p --max-turns 20 "…"            # stop after 20 model turns (default 500; also `max_turns`)
+chanto -C ../other-repo                 # work in another directory (also --cwd, --cd)
+chanto --no-think                       # turn model reasoning off (also `think = false`)
 chanto -p --mode auto "add a --json flag and tests"
 chanto -p --output-format json "…"      # machine-readable result (usage, duration, num_turns and tool_calls for the whole session, compaction included)
 chanto -c                               # continue the last session here (an unreadable one is reported, with the newest readable one resumed instead)
@@ -339,6 +350,7 @@ chanto -r                               # pick a previous session to resume
 chanto --completions zsh > ~/.zfunc/_chanto
 chanto goal "make the importer handle CSV files"   # work until agreed criteria pass
 chanto team "add OAuth login and a settings page" --agents 3
+chanto batch "fix the lint errors in {}" --from files.txt --jobs 4 -- --mode acceptEdits  # once per line; a rerun skips what succeeded; runs share this folder, so keep items from editing the same files
 ```
 
 Text output (`-p` without `--output-format`, or with `--verbose`) drops terminal escape sequences and control characters from the model's text, whether or not stdout is a terminal, so a reply can't retitle the window or write to the clipboard; `json` and `stream-json` carry the text unchanged.
@@ -410,7 +422,7 @@ Note that Chanto's `--agents` takes either form: a number is the team size, as b
 | `esc esc` | rewind to an earlier prompt |
 | `enter` while it works | the model gets the message at its next step (between tool calls); slash commands wait for the turn to end. If the turn ends before the message is delivered, it starts the next turn as plain text (a leading `!`, `/` or `#` isn't run, and `@file` isn't attached) |
 | `ctrl+x enter` | queue the message to run after the current turn |
-| `ctrl+x ctrl+s` / `ctrl+enter` | send now: cut the current turn short and run the message next |
+| `ctrl+x ctrl+s` (or `ctrl+enter`, where the terminal reports it) | send now: cut the current turn short and run the message next |
 | `↑` on an empty prompt while working | pull messages the model hasn't received yet (queued ones, and ones sent with Enter that are still waiting for its next step) back into the prompt to edit |
 | `ctrl+x ctrl+e` | edit the prompt in your editor (same as `ctrl+g`) |
 | `shift+enter` / `alt+enter` / `ctrl+j` / `\` + enter | newline |
@@ -421,7 +433,7 @@ Note that Chanto's `--agents` takes either form: a number is the team size, as b
 | `#note` | save a note to project memory (`#--agents note` appends to `./AGENTS.md` instead) |
 | `&task` | start `task` as a [background run](#background-and-remote-runs) (same as `/bg task`) |
 
-Messages you type while the model is working are delivered at its next step, as in Claude Code. Large pastes collapse to `[Pasted text #n +N lines]`; ctrl+o with the cursor on or just after the tag expands it in place so you can edit it, and `collapse_pastes = false` in config inserts every paste as plain text.
+Messages you type while the model is working are delivered at its next step, as in Claude Code. Large pastes collapse to `[Pasted text #n +N lines]`. A message too large for the model's context stays in the box when you press enter, and enter again saves the paste to a private file under `~/.chanto/attachments` for the model to read from; ctrl+o with the cursor on or just after the tag expands it in place so you can edit it, and `collapse_pastes = false` in config inserts every paste as plain text.
 
 ### Prompt extras
 
@@ -507,13 +519,13 @@ Besides the `✓`/spinner tab title (OSC 0), Chanto reports what the TUI session
 
 ### Keeping the machine awake
 
-A long turn, a `/loop` or a background run stops when the computer idles into sleep. By default Chanto prevents idle sleep while it's working, and releases it as soon as it's waiting for you. At an idle prompt, the status line shows `awake` if a background job or the `always` setting is still preventing sleep.
+A long turn, a `/loop` or a background run stops when the computer idles into sleep. By default Chanto prevents idle sleep while it's working, and releases it as soon as it's waiting for you. It starts after 20 seconds of work, since no system idles into sleep sooner, so quick answers never take it. At an idle prompt, the status line shows `awake` if a background job or the `always` setting is still preventing sleep.
 
 ```toml
 keep_awake = "working"   # default; or "never", or "always" (the whole session)
 ```
 
-It uses `caffeinate -i` on macOS, `systemd-inhibit` on Linux (skipped where that isn't installed) and `SetThreadExecutionState` on Windows. None of them can stop a closed laptop lid from sleeping (unless a Mac is on power with an external display), so for overnight work use a machine that stays on, `chanto --bg` on a server, or cloud runs.
+It takes a power assertion on macOS (what `caffeinate -i` takes, without starting a process), `systemd-inhibit` on Linux (skipped where that isn't installed) and `SetThreadExecutionState` on Windows. None of them can stop a closed laptop lid from sleeping (unless a Mac is on power with an external display), so for overnight work use a machine that stays on, `chanto --bg` on a server, or cloud runs.
 
 ### Themes
 
@@ -555,7 +567,7 @@ Animations are off whenever a screen reader is on, and otherwise follow the `ani
 
 ### Several sessions in one project
 
-Sessions in different terminals working in the same project know about each other. Each keeps a small record (its latest prompt, the files it edited recently, and a heartbeat) under `~/.chanto/presence/`. At the start of every turn the agent is told which other sessions are here and which files they've touched, so it can steer clear. A peer's prompt text is never put in another session's context; only `/peers` shows the tasks, to you. If it goes to edit a file another live session changed in the last ten minutes, the edit stops once with who has it and why; making the same edit again goes ahead. With the existing check that a file hasn't changed since the agent read it, neither can silently overwrite the other. `/peers` lists the other sessions. `CHANTO_NO_PRESENCE=1` keeps a session out of this entirely (nothing shared, nothing read), for runs that shouldn't be steered by, or appear to, interactive sessions. For work that has to touch the same files at once, start each session with `chanto --worktree [name]`. It works in a new checkout and branch (`chanto/<name>`, under `.chanto/worktrees/`), leaving yours untouched. On exit, a worktree with no changes is removed, otherwise Chanto says how to review, merge or discard the branch. `chanto run --bg` and `/team` isolate their agents the same way.
+Sessions in different terminals working in the same project know about each other. Each keeps a small record (its latest prompt, the files it edited recently, and a heartbeat) under `~/.chanto/presence/`. At the start of every turn the agent is told which other sessions are here and which files they've touched, and can steer clear. A peer's prompt text is never put in another session's context; only `/peers` shows the tasks, to you. If it goes to edit a file another live session changed in the last ten minutes, the edit stops once with who has it and why; making the same edit again goes ahead. With the existing check that a file hasn't changed since the agent read it, neither can silently overwrite the other. `/peers` lists the other sessions. `CHANTO_NO_PRESENCE=1` keeps a session out of this entirely (nothing shared, nothing read), for runs that shouldn't be steered by, or appear to, interactive sessions. For work that has to touch the same files at once, start each session with `chanto --worktree [name]`. It works in a new checkout and branch (`chanto/<name>`, under `.chanto/worktrees/`), leaving yours untouched. On exit, a worktree with no changes is removed, otherwise Chanto says how to review, merge or discard the branch. `chanto run --bg` and `/team` isolate their agents the same way.
 
 ### Inline mode
 
@@ -606,8 +618,12 @@ The Chanto directory (`~/.chanto` throughout these docs: config, sessions, logs,
 provider = "ollama"
 model = "qwen3-coder:30b"
 num_ctx = 32768
+show_thinking = true                # false leaves streamed reasoning out of the TUI
+tool_protocol = "native"            # native (falls back to text when needed) | text (always use the text tool-call protocol)
+apply_patch_tool = false            # offer the apply_patch tool to models (it's accepted when called either way)
+primer = true                       # first turn: list the project's files and attach small files the request names
 think = true                        # if reasoning starts repeating itself, that step is retried without thinking
-effort = "high"                     # reasoning effort: low | medium | high | xhigh | max (default: the provider's). Also --effort, /effort, /think <level>
+effort = "high"                     # reasoning effort: low | medium | high | xhigh | max | ultra (default: the provider's). Also --effort, /effort, /think <level>
 mode = "default"
 input_border = "block"              # TUI frames: block (default; thin, can't leave gaps) | line (rounded outline) | solid
 theme = "auto"                      # auto | dark | light | dracula | nord | solarized-dark | gruvbox | colorblind | ~/.chanto/themes/<name>.toml
@@ -629,13 +645,22 @@ mcp_tool_timeout = 600              # seconds an MCP tool call may take (a serve
 allow = ["Bash(cargo test:*)", "Bash(npm run lint:*)"]
 deny  = ["Bash(git push:*)"]
 auto_mode_rules = ["Never modify files under migrations/"]
+auto_deny_after_secs = 75           # auto mode: deny a prompt nobody answers after this long (0: wait)
+additional_directories = ["../shared"] # directories outside the project treated as part of the workspace
 
 [web]
 search_backend = "auto"             # duckduckgo by default; brave/tavily/searxng with keys
 search_min_gap_ms = 1500            # key-less searches are paced per engine; a blocked engine cools down (0 disables pacing)
+# brave_api_key, tavily_api_key     # keys for those backends (or BRAVE_API_KEY, TAVILY_API_KEY)
+# searxng_url = "http://localhost:8888"
+fetch_max_chars = 30000             # page content WebFetch returns
+condense_with_model = false         # true: the model condenses long pages against the prompt (slow on local models)
 
 [browser]
 headless = false
+# chrome_path = "/path/to/chrome"    # default: found automatically
+# port = 9222                       # attaches if something already listens there
+# user_data_dir = "/path/to/profile" # keeps logins between runs
 
 [embeddings]                        # SemanticSearch's embedding endpoint
 provider = "ollama"                 # ollama (default) | openai
@@ -652,7 +677,7 @@ base_url = "http://localhost:1234/v1"
 kind = "anthropic"                  # key from api_key or ANTHROPIC_API_KEY
 
 [sandbox]
-enabled = true                      # macOS: Bash writes limited to project + temp/caches
+enabled = true                      # on by default: Bash writes limited to project + temp/caches
 auto_allow = true                   # auto mode: sandboxed commands skip the classifier
 
 [mcp_servers.github]
@@ -674,13 +699,13 @@ command = "cargo fmt"
 
 ### Your shell setup in Bash
 
-Bash commands run under `bash -c`, which reads no startup files. So that tools that work in your terminal work for the agent too (nvm, pyenv, asdf, Homebrew's `shellenv`, your aliases), Chanto takes a *shell snapshot* once per session, the first time a command runs: it starts your `$SHELL` (zsh or bash) as an interactive login shell, so it reads `~/.zprofile`/`~/.zshrc` or `~/.bash_profile`/`~/.bashrc` as a terminal would (a login bash whose profile doesn't mention `.bashrc` gets `~/.bashrc` too), and records what they set up in a private file (mode 600, in a new mode-700 directory under the temp dir) that every command sources first:
+Bash commands run under `bash -c`, which reads no startup files. So that tools that work in your terminal work for the agent too (nvm, pyenv, asdf, Homebrew's `shellenv`, your aliases), Chanto takes a *shell snapshot* once per session, the first time a command runs: it starts your `$SHELL` (zsh or bash) as an interactive login shell, which reads `~/.zprofile`/`~/.zshrc` or `~/.bash_profile`/`~/.bashrc` as a terminal would (a login bash whose profile doesn't mention `.bashrc` gets `~/.bashrc` too), and records what they set up in a private file (mode 600, in a new mode-700 directory under the temp dir) that every command sources first:
 
 - exported variables your startup files added or changed. `PATH` is merged: directories only Chanto's own environment has (an activated virtualenv) stay in front, then your login shell's `PATH`. Left out: secret-named variables (the ones `[secrets] scrub_env` keeps from commands, unless `pass_env` lets them through), values that look like secrets, terminal and prompt state (`PS1`, `TERM`, `TMUX`, history settings, …), proxy variables, the ones Chanto sets for commands itself (`PAGER`, `NO_COLOR`, …), and ones the config's `env` (or Claude Code's settings `env`) sets, which win;
 - functions, except completion, prompt and hook functions (names starting with `_`, `prompt_`, `precmd`, `preexec`, …) and ones that would replace builtins Chanto relies on (`cd`, `pwd`, `exit`, …). Each is defined through its own `eval`, so one bash can't parse (zsh-only syntax) is skipped; functions and aliases whose text looks like it holds a secret are left out too;
 - aliases, with `expand_aliases` on.
 
-The startup files run with no terminal, stdin from `/dev/null` and their output thrown away, so ones that print, fail or wait for input don't matter, and with `CHANTO_SHELL_SNAPSHOT=1` set, which they can test to skip slow work. If they take more than 5 seconds, Chanto warns once and commands run with Chanto's own environment. Commands still run under bash (not your shell) so quoting and the tool's behavior are the same for everyone; variables always carry over from zsh, and functions do when bash can parse them. fish isn't captured. The snapshot is sourced inside the command's process, so the sandbox applies to it, and `CLAUDE_ENV_FILE` files run after it, so they can build on it. Not in a background run's container, and not on Windows, where commands run in Git Bash or PowerShell as before.
+The startup files run with no terminal, stdin from `/dev/null` and their output thrown away, so ones that print, fail or wait for input don't matter, and with `CHANTO_SHELL_SNAPSHOT=1` set, which they can test to skip slow work. If they take more than 5 seconds, Chanto warns once and commands run with Chanto's own environment. Commands still run under bash (not your shell) so quoting and the tool's behavior are the same for everyone; variables always carry over from zsh, and functions do when bash can parse them. fish isn't captured. The snapshot is sourced inside the command's process, so the sandbox applies to it, and `CLAUDE_ENV_FILE` files run after it, so they can build on it. Not in a background run's container, and not on Windows.
 
 Turn it off with `shell_snapshot = false`, `CHANTO_SHELL_SNAPSHOT=0`, or Claude Code's `CLAUDE_BASH_NO_LOGIN=1`.
 
@@ -797,7 +822,7 @@ To undo source changes, commit or stash your work, switch to the previous branch
   - `tool_search = "auto"` (default), `"auto:N"` (defer at N% of the context), `"true"` (always defer) or `"false"` (always send every schema). The `ENABLE_TOOL_SEARCH` environment variable (or `env` in settings) takes the same values and overrides the config.
   - `always_load = true` on a server (`alwaysLoad` in `.mcp.json`) keeps its tools upfront; `always_load = false` defers all of them. A tool the server marks `_meta["anthropic/alwaysLoad"]: true` loads upfront unless its server sets `always_load = false`.
   - A deny rule for `ToolSearch` turns tool search off.
-- **Per-server options:** `cwd` (working directory of a stdio server), `startup_timeout_sec` (default 30, 10 for imported servers), `tool_timeout_sec` (how long one tool call may take; default `mcp_tool_timeout` from the top level of the config, else `MCP_TOOL_TIMEOUT` in milliseconds as in Claude Code, else 10 minutes. A call that runs out comes back to the model as an error naming the server and tool; esc stops the wait at any time. Either way the server is sent `notifications/cancelled` for the request, over stdio, streamable HTTP or legacy SSE), `enabled_tools = [...]` (only expose these) and `disabled_tools = [...]` (hide these; applied after `enabled_tools`). Names are the server's own tool names, without the `mcp__server__` prefix.
+- **Per-server options:** `cwd` (working directory of a stdio server), `startup_timeout_sec` (how long a server may take to connect; default 30, 10 for imported servers. The interactive TUI and REPL don't wait for servers at launch: `/mcp` shows them as connecting, and the first request waits for any still connecting, and has their tools. A run with a prompt, such as `-p`, waits at launch), `tool_timeout_sec` (how long one tool call may take; default `mcp_tool_timeout` from the top level of the config, else `MCP_TOOL_TIMEOUT` in milliseconds as in Claude Code, else 10 minutes. A call that runs out comes back to the model as an error naming the server and tool; esc stops the wait at any time. Either way the server is sent `notifications/cancelled` for the request, over stdio, streamable HTTP or legacy SSE), `enabled_tools = [...]` (only expose these) and `disabled_tools = [...]` (hide these; applied after `enabled_tools`). Names are the server's own tool names, without the `mcp__server__` prefix.
 
 ## Outcome mode
 
@@ -810,7 +835,7 @@ Outcome mode reviews what was built, not the code. `/outcome <what you want>` (o
 
 ## Goals
 
-A goal keeps going until it's verifiably done. `/goal <objective>` (or `chanto goal "<objective>"`) works toward an objective over as many turns as it takes, not just one:
+A goal keeps going until it's verifiably done. `/goal <objective>` (or `chanto goal "<objective>"`) works toward an objective over as many turns as it takes:
 
 1. **Criteria:** the same first steps as [outcome mode](#outcome-mode). The agent explores read-only and writes executable acceptance criteria, they run once as a baseline, and you approve them. From then on they're **locked**: Chanto runs the copy recorded when you approved them, and if the agent edits the criteria files, Chanto puts them back and tells it so. That iteration doesn't count as progress.
    - **How criteria run.** Every criterion runs the same way: in the baseline, after every iteration, and in the instructions the agent gets. Its `check` is a shell command run **from the project root** (a background goal's worktree). `CHANTO_GOAL_DIR` (the goal directory) and `CHANTO_PROJECT_ROOT` are set, and the project root is on `PYTHONPATH`, so check scripts are written as `python3 "$CHANTO_GOAL_DIR/checks/test_x.py"` and can `import` project modules. The agent is shown the exact line to reproduce a run (`cd <root> && CHANTO_GOAL_DIR=… <check>`).
@@ -880,11 +905,56 @@ protect_tests = true
 oracle = false        # true: the oracle reviews the diff once before the checks run
 ```
 
-Project-level `[guardrails]` runs commands, so it only applies in trusted folders.
+Project-level `[guardrails]` runs commands, and only applies in trusted folders.
 
 Checks (configured or detected), goal and outcome criteria, team checks and formatters run the way the agent's Bash commands do: in the [sandbox](#sandbox) when it's on, with the same writable places (the project, temporary directories, tool caches), and without secret-named environment variables. A check that needs a token gets it through `[secrets] pass_env`. Under a network allowlist or `network = "deny"`, a check that needs the network fails as a Bash command would. Language servers start without secret-named variables too. Detecting pytest never imports code from the project.
 
 **The oracle.** `oracle` is a built-in subagent type, next to `Explore` and `general-purpose`: a read-only reviewer (Read, Grep, Glob, read-only Bash, web) prompted to find bugs, wrong assumptions and broken callers in a plan or diff, and to answer `LGTM` when there's nothing to fix. It runs on `oracle_model` (top-level setting, e.g. a stronger hosted model), else the main model. The model can consult it any time through the Task tool (`subagent_type: "oracle"`). With `oracle = true` under `[guardrails]` and verified mode on, when the model first gives its final answer after changing files, the oracle reviews that turn's diff; its findings go back to the model once (it fixes what's real or says why not), and then the done-gate runs as usual. An `LGTM`, a failed review or an empty diff goes straight to the gate. A custom agent named `oracle` replaces the built-in.
+
+## Quality profile
+
+`chanto prime` sets up [verified mode](#verified-mode-guardrails) for a project in one step and writes the result to `.chanto/quality.toml`, a file you commit so everyone, and CI, checks the same things:
+
+1. **Finds the checks** the project declares: the detected test commands, plus clippy and `cargo fmt --check` (Rust), the `lint` script (npm), ruff and mypy when configured (Python), gofmt (Go), and gitleaks when it's installed.
+2. **Runs each one once.** A check that fails now is written with `when = "off"` and a note; it doesn't fail every turn until you fix it. A check slower than 5 minutes gets `when = "nightly"`: it's kept out of the gate and left for scheduled CI.
+3. **Shows the profile and asks** before writing it (`--yes` skips the question, `--dry-run` prints it, `--force` replaces an existing one).
+
+Priming runs the project's commands, and only works in a trusted folder. They run the way the gate runs them: sandboxed, without secret-named variables.
+
+```toml
+version = 1
+
+[gate]                 # any [guardrails] setting: enabled, scope, oracle, protect_tests, max_attempts, timeout_secs
+enabled = true
+
+[[check]]
+name = "tests"
+run = "cargo test --quiet"
+when = "turn"          # turn (the gate runs it) | nightly | off
+baseline = "passing"   # what it did when primed; informational
+source = "detected"
+
+[[rule]]
+id = "no-unwrap"
+title = "No unwrap() in library code"
+regex = '\.unwrap\(\)'
+paths = ["src/**"]
+exclude = ["**/*_tests.rs"]
+new_code_only = true   # only lines this change adds; false: every line of every matching file
+
+[review]
+no_touch = ["vendor/**"]   # becomes an Edit(vendor/**) deny rule
+
+[secrets]
+exclude = ["tests/fixtures/**"]   # files with fake keys; `scan = false` turns the scan off
+```
+
+- **Checks:** the `when = "turn"` commands are the gate's `checks`. A profile with no `[[check]]` keeps the detected ones.
+- **Rules:** `chanto quality check` reports every line a rule's `regex` matches: the lines added since `HEAD` and untracked files, the commits from `--base <rev>` to `--head <rev>` (default `HEAD`), or whole files with `--all`. `--checks` also runs the `when = "turn"` checks (trusted folders only). It exits 1 when anything is found, so CI can run it too. Files under `.chanto/` are skipped.
+- **Secrets:** the same command scans those lines for keys, tokens and passwords with the detector that masks them in transcripts (known token formats and high-entropy `KEY=value` pairs). It's on in every profile unless `[secrets] scan = false`; the report shows the line with the secret masked. The gate runs `chanto quality check` after the checks whenever the scan is on or a rule has a `regex`.
+- **Before a push:** `chanto prime --hook` installs a git pre-push hook that runs `chanto quality check --checks` over the commits being pushed and stops the push when it fails. It never replaces a hook that isn't Chanto's, or writes into a `core.hooksPath` directory; it prints the line to add instead. `git push --no-verify` skips it, so run `chanto quality check --all` in CI too.
+- **In CI:** the [GitHub Action](../action/README.md) with `quality: "true"` runs `chanto quality check --checks` on every pull request's added lines and annotates findings on them. It needs no model or API key, so pull requests from forks are checked too. `chanto github install` writes the workflow (`.github/workflows/chanto-quality.yml`).
+- **Precedence:** the profile is read as a project layer just below `.chanto/config.toml`, so a `[guardrails]` setting there (or in `config.local.toml`) wins. In an untrusted folder its gate, checks and deny rules are skipped like any project `[guardrails]` section. `chanto doctor` lists it among the config layers.
 
 ## Learning from your corrections
 
@@ -917,7 +987,7 @@ Model time (including prompt processing), tool time and token counts are recorde
 
 Secrets are kept away from the model, transcripts and model-written commands by default. There are three layers.
 
-1. **Masking known values.** At startup Chanto collects real secret values from three places: secret-named environment variables (`*_TOKEN`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*` and similar, plus a random-looking value in any other `*_KEY`; `*PUBLIC_KEY` and names like `CACHE_KEY` and `SORT_KEY` don't count), its own API keys, and the project's `.env`, `.env.*` and `.dev.vars` files. Example files like `.env.example` are skipped, and changed files are re-read each turn. Sign-in tokens Chanto gets while running (`chanto login` OAuth tokens, MCP servers' OAuth tokens) are added as they're used, and a background run also masks the values in its source checkout's env files, which its worktree doesn't have. Those exact values, plus their base64 and URL-encoded forms, are replaced with `[REDACTED:NAME]` in everything sent to the model (every request: turns, compaction summaries, hook and classifier checks and other side calls) and in saved sessions. That covers tool output, file contents, your own messages and tool-call arguments. What leaves the session is masked too: `--output-format stream-json` events, the web UI and `/remote` (events, permission prompts and questions, transcripts, checkpoints and the message queue), background runs' event logs, and what a runner sends its server (including a run's script output). Streamed answer text is masked one piece at a time, so a known value the model writes split across two pieces could show; the model only ever sees masked values, so it can't repeat one it wasn't shown. If you paste a secret into a message, Chanto warns you that it was masked.
+1. **Masking known values.** At startup Chanto collects real secret values from three places: secret-named environment variables (`*_TOKEN`, `*SECRET*`, `*PASSWORD*`, `*API_KEY*` and similar, plus a random-looking value in any other `*_KEY`; `*PUBLIC_KEY` and names like `CACHE_KEY` and `SORT_KEY` don't count), its own API keys, and the project's `.env`, `.env.*` and `.dev.vars` files. Example files like `.env.example` are skipped, and changed files are re-read each turn. Sign-in tokens Chanto gets while running (`chanto login` OAuth tokens, MCP servers' OAuth tokens) are added as they're used, and a background run also masks the values in its source checkout's env files, which its worktree doesn't have. Those exact values, plus their base64 and URL-encoded forms, are replaced with `[REDACTED:NAME]` in everything sent to the model (every request: turns, compaction summaries, hook and classifier checks and other side calls) and in saved sessions. That covers tool output, file contents, your own messages and tool-call arguments. What leaves the session is masked too: `--output-format stream-json` events, the web UI and `/remote` (events, permission prompts and questions, transcripts, checkpoints and the message queue), background runs' event logs, and what a runner sends its server (including a run's script output). Streamed answer text is masked one piece at a time, so a known value the model writes split across two pieces could show. The model only ever sees masked values and cannot repeat one it wasn't shown. If you paste a secret into a message, Chanto warns you that it was masked.
 2. **Masking known formats.** Common token formats are masked even when Chanto doesn't know the value:
    - AWS, GitHub, GitLab, Slack, Stripe, OpenAI, Anthropic, Google, npm, PyPI, Hugging Face, SendGrid and DigitalOcean tokens;
    - private keys and JWTs;
@@ -940,7 +1010,7 @@ To let the agent read one specific file without asking, add an allow rule such a
 ## Resource limits
 
 Agents can't take the machine down:
-- **Concurrency:** at most 3 subagents (`max_parallel_agents`) and 4 shell commands (`max_parallel_commands`) run at once across all agents; the rest wait their turn. At most 8 background agents can be alive (`max_background_agents`), and subagents can't start subagents, so there's no recursive fan-out.
+- **Concurrency:** at most 6 subagents (`max_parallel_agents`) and 4 shell commands (`max_parallel_commands`) run at once across all agents; the rest wait their turn. At most 8 background agents can be alive (`max_background_agents`), and by default subagents can't start subagents; `max_agent_depth` 2 or 3 allows it, with at most 20 nested agents at once.
 - **Memory-aware starts:** new subagents and commands wait while free memory is below `min_free_memory_mb` (default 5% of RAM, at least 1 GB), then fail with a message telling the model to work sequentially. On macOS this uses the kernel's memory-pressure figure, not resident size.
 - **Watchdog:** if Chanto's child processes use more than `memory_limit_percent` of RAM (default 70%), or the system is nearly out of memory, Chanto kills the largest one's process group. That's the runaway build or test, never Chanto itself, and the model is told why. On macOS it measures physical footprint, so compressed and swapped memory count.
 - **Bounded output:** command output kept in memory is capped (head and tail), so a command that floods output can't exhaust RAM.
@@ -948,7 +1018,8 @@ Agents can't take the machine down:
 
 ```toml
 [resources]
-max_parallel_agents = 3
+max_parallel_agents = 6
+max_agent_depth = 1                 # 2 or 3 lets subagents start their own, at most 20 of those at once
 max_parallel_commands = 4
 max_background_agents = 8
 # min_free_memory_mb = 2048
@@ -957,7 +1028,7 @@ memory_limit_percent = 70        # 0 = watchdog off
 
 ## Computer use
 
-The `Computer` tool lets the model work in any desktop app, not just web pages: it takes screenshots, clicks, drags, scrolls, types, presses keys and opens or focuses apps. It's off by default. Turn it on for one session with `chanto --computer`, or always with:
+The `Computer` tool lets the model work in any desktop app, web or not: it takes screenshots, clicks, drags, scrolls, types, presses keys and opens or focuses apps. It's off by default. Turn it on for one session with `chanto --computer`, or always with:
 
 ```toml
 [computer]
@@ -1078,7 +1149,7 @@ memory = "4g"
 
 **Images.** Without `image`, Chanto picks one by project type: `rust:1-bookworm` (Cargo.toml), `golang:1-bookworm` (go.mod), `node:22-bookworm` (package.json), `python:3.12-bookworm` (pyproject.toml, requirements.txt, setup.py), `ruby:3-bookworm` (Gemfile), `eclipse-temurin:21-jdk` (Maven/Gradle), else `buildpack-deps:bookworm`. The engine pulls an image the first time it's used, which can take a while. These images are large, so set `image` to something smaller you already have if disk space matters.
 
-**Network.** `none` (default): no network at all. `full`: the engine's default bridge. `allowlist`: the container sits on an internal network (`--internal`, no route out) whose only other member is a small relay container (`alpine:latest` running busybox `nc`). The relay forwards to Chanto's filtering proxy on the host, and commands get `HTTP(S)_PROXY` pointing at it, so only `[sandbox] allowed_domains` (default: the package registries) minus `denied_domains` are reachable. A blocked domain is offered for approval like any sandboxed command's. Tools that ignore proxy variables simply get no network. With Docker Desktop the relay reaches the host's loopback proxy through `host.docker.internal`. On Linux Chanto also serves the proxy on the bridge's gateway address.
+**Network.** `none` (default): no network at all. `full`: the engine's default bridge. `allowlist`: the container sits on an internal network (`--internal`, no route out) whose only other member is a small relay container (`alpine:latest` running busybox `nc`). The relay forwards to Chanto's filtering proxy on the host, and commands get `HTTP(S)_PROXY` pointing at it, so only `[sandbox] allowed_domains` (default: the package registries) minus `denied_domains` are reachable. A blocked domain is offered for approval like any sandboxed command's. Tools that ignore proxy variables get no network. With Docker Desktop the relay reaches the host's loopback proxy through `host.docker.internal`. On Linux Chanto also serves the proxy on the bridge's gateway address.
 
 **Permissions.** In `acceptEdits` (the default for runs), commands that run in the container go ahead without asking when `allow_sandboxed_commands = true`, except for the usual dangerous ones. `dangerouslyDisableSandbox` has no effect: the container is the boundary.
 
@@ -1137,7 +1208,9 @@ WantedBy=multi-user.target
 
 ### Queue runners: taking runs from Chanto cloud
 
-`chanto runner connect` turns a machine into a runner for a run queue (Chanto cloud, or any server that implements the runner protocol in `proto/src/runs.rs`). The runner only makes outbound HTTPS requests, so it works behind a firewall.
+Chanto cloud isn't publicly available yet.
+
+`chanto runner connect` turns a machine into a runner for a run queue (Chanto cloud, or any server that implements the runner protocol in `proto/src/runs.rs`). The runner makes only outbound HTTPS requests, which works behind a firewall.
 
 ```bash
 chanto runner connect https://cloud.example --registration-token hrr_…   # once: registers, saves its token
@@ -1146,6 +1219,7 @@ chanto runner connect https://cloud.example --label gpu --label linux     # only
 CHANTO_CLOUD_URL=… CHANTO_RUNNER_REGISTRATION_TOKEN=… chanto runner connect --ephemeral   # in a throwaway VM
 chanto runner connect https://cloud.example --own-model                  # always use this machine's model setup
 chanto runner connect https://cloud.example --allow-scripts              # also run the scripts jobs come with
+chanto runner connect https://cloud.example --registration-token hrr_… --register-only   # save the token, then exit
 ```
 
 **Scripts.** A job can come with a shell script that runs before (or instead of) the model. It is the server's code, so a runner only runs it with `--allow-scripts` (`CHANTO_RUNNER_ALLOW_SCRIPTS=1`); without that, such a job is reported failed with a note saying so. Allowed scripts run like the agent's Bash commands: in the [sandbox](#sandbox) under the machine's `[sandbox]` settings, without its secret-named environment variables (the run's own org secrets are passed), in a fresh checkout whose git directory is kept under `~/.chanto/runner/pulled/scripts/`, out of the script's reach. A script that runs `git commit` itself therefore fails in the sandbox; its changes are committed for it.
@@ -1156,9 +1230,11 @@ The registration token comes from the org's runner settings; the runner's own to
 
 Nobody watches these runs, so permission prompts are denied with an explanation and questions are answered with "use your best judgment"; choose `[background] mode` (or `--mode`) with that in mind. The runner keeps its job with a heartbeat. If it stops (Ctrl-C, crash, lost network), the server gives the run to another runner once the lease runs out; a cancel from the server stops the run at the next heartbeat. `--ephemeral` takes one job and deregisters, for runners in VMs or containers that are thrown away afterwards; `--once` takes one job and exits.
 
+**Keeping it running.** `runner connect` holds the terminal until it stops, so a machine that should take runs unattended supervises it like any other long-running process: a launchd agent on macOS, a systemd user unit on Linux (`ExecStart=…/chanto runner connect …` with `Restart=always`), or the supervisor your platform provides. Because a login shell is what has your model key and `PATH`, start it the way your terminal would (for example `/bin/zsh -lic 'exec …'`), not from a bare environment. Register the machine once with `--register-only`, then start the service without the registration token: passing it on every start would register a new runner each time and leave the old one behind as a duplicate. Several machines can take from the same queue; a run goes to whichever online runner has all the labels it asks for. That is how you keep work off your laptop: give the always-on machine a label of its own (`--label batch`), have the runs that belong there ask for it, and leave the labels off the runs any machine should pick up.
+
 ### Cloud runs from the CLI
 
-Sign in to [Chanto cloud](https://chanto.sh) with GitHub, then send a task from your terminal, follow it there, and get its branch back:
+Chanto cloud isn't publicly available yet. Once it is, you'll sign in, then send a task from your terminal, follow it there, and get its branch back:
 
 ```bash
 chanto cloud login                                      # browser sign-in; the token goes in ~/.chanto/auth.json (0600)
@@ -1188,7 +1264,7 @@ git fetch origin chanto/run/<id> && git switch chanto/run/<id>
 
 In CI, set `CHANTO_CLOUD_URL` and `CHANTO_CLOUD_TOKEN` (an account token, such as the one `chanto cloud login` saves) instead of logging in, and `CHANTO_CLOUD_ORG` to pick the org.
 
-**Staying signed in.** The dashboard's sign-in lasts a year and is pushed forward on every visit, so it only asks again after a long absence or once the token is revoked. The token lives in an `HttpOnly` cookie that page scripts can't read. **Devices** in the dashboard lists every browser and CLI sign-in on your account with when it signed in and when it was last used, and revoking one signs that device out; logging out of the browser revokes its token on the server too.
+**Staying signed in.** The dashboard's sign-in lasts a year and is pushed forward on every visit; it asks again only after a long absence or once the token is revoked. The token lives in an `HttpOnly` cookie that page scripts can't read. **Devices** in the dashboard lists every browser and CLI sign-in on your account with when it signed in and when it was last used, and revoking one signs that device out; logging out of the browser revokes its token on the server too.
 
 ### Scheduled and triggered jobs
 
@@ -1198,7 +1274,7 @@ Jobs live in `.chanto/runner.toml` in a project, or in `~/.chanto/runner.toml` f
 
 ```toml
 [[job]]
-name = "nightly-review"             # letters, digits, - _ .; unique across all job files
+name = "nightly-review"             # letters, digits, - _ .; unique within a file
 schedule = "0 3 * * *"              # 5-field cron (local time), or an interval: 30m, 2h, 1d
 prompt = "Review yesterday's commits and write up the risks in REVIEW.md."
 verify = true                       # the rest default to [background]
@@ -1266,10 +1342,10 @@ Once signed in, the built-in provider `chanto` uses the cloud's model gateway, b
 ```bash
 chanto cloud models                     # what the gateway offers, with prices per million tokens
 chanto models chanto                   # the same names as chanto/<model>
-chanto -m chanto/claude-sonnet-4-5
+chanto -m chanto/<model>
 ```
 
-`/model chanto/<model>` works too, and `chanto providers` and `chanto doctor` show the sign-in. Claude models go to the gateway's Anthropic Messages API (`/v1/model/anthropic`), others to its OpenAI-compatible API (`/v1/model/openai/v1`). Requests carry your token as `x-api-key` (or a bearer token) and the org as `x-chanto-org` when one is selected. A `402` means the org can't spend more: it reached its monthly spending limit or has no trial credit left, so an org admin needs to raise the limit or turn on billing. A `401` means the token was revoked or expired: run `chanto cloud login` again.
+`/model chanto/<model>` works too, and `chanto providers` and `chanto doctor` show the sign-in.
 
 ### Agents
 
@@ -1429,7 +1505,7 @@ the audio, any format ffmpeg reads) returns `{"text": ...}`.
 
 `chanto serve` exposes sessions and [background runs](#background-and-remote-runs) over HTTP with server-sent events, so other machines and scripts can drive Chanto.
 
-The API is bound to `127.0.0.1` by default and every route except `/health` requires `Authorization: Bearer <token>` (the scheme name is case-insensitive, as for every Chanto server: `bearer` works too) (the token is written to `~/.chanto/server.json`, mode `600`). Set `CHANTO_SERVER_TOKEN` to pin it, or `CHANTO_SERVER_TOKEN_FILE` to a file that holds the token (for systemd `LoadCredential=` and Docker/Compose secrets, so it never sits in the environment).
+The API is bound to `127.0.0.1` by default and every route except `/health` requires `Authorization: Bearer <token>` (the scheme name is case-insensitive, as for every Chanto server: `bearer` works too) (the token is written to `~/.chanto/server.json`, mode `600`). Set `CHANTO_SERVER_TOKEN` to pin it, or `CHANTO_SERVER_TOKEN_FILE` to a file that holds the token (for systemd `LoadCredential=` and Docker/Compose secrets, keeping it out of the environment).
 
 ### As an MCP server
 
@@ -1489,6 +1565,8 @@ How it works:
 - MCP tool search follows Claude Code's `ToolSearch`: the same query forms, `ENABLE_TOOL_SEARCH` values (`true`, `false`, `auto`, `auto:N`), `alwaysLoad` server setting and `anthropic/alwaysLoad` tool metadata. Two differences: unset means `auto` (Claude Code always defers on its own API), since small local models do better with tools in view while the list is small; and loaded definitions are sent as ordinary tools appended to the list (and in the `ToolSearch` result) rather than as `tool_reference` blocks, which only Anthropic's API supports. See [MCP servers](#mcp-servers).
 - `--fallback-model` and `fallback_model` work like Claude Code's `--fallback-model` and `fallbackModel` (a chain of up to three, tried in order, for the current turn only, with a notice when it switches). Chanto also switches when a local model server refuses the connection, which Claude Code treats as a transport error. Claude Code's `fallbackModel` setting isn't imported, since its model names don't apply to other providers. See [Fallback models](#fallback-models).
 - `compat.codex_rules = true` also imports the command approvals in `~/.codex/rules/*.rules` (`prefix_rule`) as Bash allow, ask and deny rules.
+
+`chanto migrate <tool> [--path <file>] [--apply]` translates another agent's configuration (`opencode`, `continue`, `cline`, `cursor`, `windsurf`, `aider`, or any file with `--path`) into Chanto's, using your configured model. It shows the result for review; `--apply` backs up your config and merges it into `~/.chanto/config.toml`.
 
 ### Other tools' instruction files
 
@@ -1595,6 +1673,8 @@ command = "zls"
 extensions = ["zig"]
 ```
 
+In a project with more than 20,000 files, reading a file doesn't start a language server (the first edit does), and clangd runs only with a compilation database.
+
 Some servers run project code: rust-analyzer runs build scripts and proc macros, typescript-language-server loads the project's own TypeScript, gopls may download toolchains, and pylsp loads linter plugins. These only start in trusted folders. pyright and clangd run anywhere. Servers only start for files inside the project or an `--add-dir` directory, with at most 4 running at once. In a Cargo workspace, one rust-analyzer serves all member crates. `[lsp]` in a project config is ignored until the folder is trusted. Set `CHANTO_LSP_DEBUG=1` to log server traffic to stderr.
 
 Environment overrides: `CHANTO_MODEL`, `CHANTO_BASE_URL`, `CHANTO_PROVIDER`, `CHANTO_API_KEY`, `CHANTO_HOME`, `BRAVE_API_KEY`, `TAVILY_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`.
@@ -1611,7 +1691,7 @@ Environment overrides: `CHANTO_MODEL`, `CHANTO_BASE_URL`, `CHANTO_PROVIDER`, `CH
 
 A `[providers.<name>]` section without `kind` is `ollama`, unless its `base_url` ends in `/v1`: then it's `openai`. If the server answers in the other format (Server-Sent Events or `choices` to the Ollama provider, Ollama's NDJSON to the OpenAI one), the error says so and names the `provider`/`kind` to set.
 
-Built-in providers need no `[providers]` section: `chanto providers` lists them (Anthropic, OpenAI, your ChatGPT plan, OpenRouter, Gemini, DeepSeek, xAI, Mistral, Groq, Cerebras, Together, Fireworks, Moonshot, Z.ai, MiniMax, DashScope, Hugging Face, NVIDIA, Vercel AI Gateway, OpenCode Zen, Baseten, Perplexity, Cohere, DeepInfra, Nebius, SambaNova, SiliconFlow, Upstage, AI21, Inception, Requesty, Venice, Chutes, Nano-GPT, Scaleway, DigitalOcean, Weights & Biases, OVHcloud, Crusoe, Morph, Poe, StepFun, Volcengine (Doubao), Xiaomi MiMo, Ollama Cloud, the coding plans, the cloud platforms and [Chanto cloud](#models-through-chanto-cloud)) and whether you're logged in. Each works with its key variable (`GEMINI_API_KEY`, `GROQ_API_KEY`, …) or `chanto login <provider>`. With `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` set, the provider names `anthropic` and `openai` work without any config. For example, `chanto -m anthropic/claude-opus-5-5`, `subagent_model = "anthropic/claude-haiku-5-5"` or `/model openai/gpt-6.1-sol`. To use one as the default provider, set `provider = "anthropic"` and `model = "claude-opus-5-5"`.
+Built-in providers need no `[providers]` section: `chanto providers` lists them (Anthropic, OpenAI, your ChatGPT plan, OpenRouter, Gemini, DeepSeek, xAI, Mistral, Groq, Cerebras, Together, Fireworks, Moonshot, Z.ai, MiniMax, DashScope, Hugging Face, NVIDIA, Vercel AI Gateway, OpenCode Zen, OpenCode Go, Baseten, Perplexity, Cohere, DeepInfra, Nebius, SambaNova, SiliconFlow, Upstage, AI21, Inception, Requesty, Venice, Chutes, Nano-GPT, Scaleway, DigitalOcean, Weights & Biases, OVHcloud, Crusoe, Morph, Poe, StepFun, Volcengine (Doubao), Xiaomi MiMo, Ollama Cloud, the coding plans, the cloud platforms and [Chanto cloud](#models-through-chanto-cloud)) and whether you're logged in. Each works with its key variable (`GEMINI_API_KEY`, `GROQ_API_KEY`, …) or `chanto login <provider>`. With `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` set, the provider names `anthropic` and `openai` work without any config. For example, `chanto -m anthropic/claude-opus-5-5`, `subagent_model = "anthropic/claude-haiku-5-5"` or `/model openai/gpt-6.1-sol`. To use one as the default provider, set `provider = "anthropic"` and `model = "claude-opus-5-5"`.
 
 For a ChatGPT plan, run `chanto login chatgpt` (or `/login chatgpt`), then `/models` to discover your account's available model names. Select an exact name with `/model chatgpt/<model>` or `chanto -m chatgpt/<model>`. Logging in does not select a model, and Chanto stores its credentials separately from Codex. Model access depends on your account; a model-access rejection is different from an expired or rejected login. OpenAI API-key access remains separate as `openai/<model>`. The `chatgpt` login uses Sign in with ChatGPT and draws from your existing Codex/ChatGPT Work allowance; a separate login to the same account does not add quota. Review connected-app usage and limits in ChatGPT **Settings → Usage**. See [OpenAI’s explanation](https://learn.chatgpt.com/docs/sign-in-with-chatgpt).
 
@@ -1641,6 +1721,8 @@ Inside a session, the equivalents are `/login kimi-coding` and `/login zai`. Log
 | `cline` | Cline Pass | `https://api.cline.bot/api/v1` | `CLINE_API_KEY` | `/models` |
 
 For example, `chanto login kimi-coding`, then `chanto -m kimi-coding/kimi-for-coding`. `/models` lists what the plan's API reports, or the vendor-documented models above if it has no list. Kimi's `k3` reaches a 1M window only on higher membership tiers, so Chanto budgets 256K for it. The `-cn` providers use the mainland-China endpoint with the same key, so pick whichever matches where your account was created. MiniMax's M Plan is Anthropic-compatible, so point `[providers.minimax-coding]` at `https://api.minimax.cn/anthropic/v1` (China) or `https://api.minimax.io/anthropic/v1` with `kind = "anthropic"` if your key only works there.
+
+OpenCode's Go plan is built in as `opencode-go`, separate from the pay-as-you-go `opencode-zen` provider because the two are served from different addresses. It takes the same Console API key (`OPENCODE_API_KEY` or `chanto login opencode-go`) and speaks OpenAI-compatible chat; Chanto sends the per-conversation `x-opencode-session` header Go requires. Use it with `chanto -m opencode-go/<model>`, and `/models` lists the plan's models. A key from a workspace without a Go subscription is billed to its balance instead.
 
 ### Usage and provider errors
 
@@ -1824,13 +1906,18 @@ Benchmark variants turn on the experimental optimizations below: `chanto+concise
 
 ## Optimizations (experimental)
 
-Speed and token optimizations that are **off by default** while they're being measured against the benchmark; each has its own switch so it can be measured on its own. Turn them on in config, or for one run with `CHANTO_OPTIMIZE=concise,quiet,provenance` (or `all`):
+Speed and token optimizations, each with its own switch, measurable on its own against the benchmark. Most are **off by default**; `adaptive_effort` and `stable_prefix` are on. Set them in config, or for one run with `CHANTO_OPTIMIZE=concise,quiet,provenance,spec,defer,token,noprefix,noadaptive` (`all` turns on the first three):
 
 ```toml
 [optimize]
 concise_prose = true      # brief prose replies
 quiet = true              # quiet mode: no narration, one short summary, a quiet view (see below)
 provenance = true         # flag numeric claims and identifiers not found in this turn's tool outputs
+spec_check = true         # treat a written spec as the contract and exercise the result against it
+defer_tools = true        # keep rarely used built-in tools behind ToolSearch
+token_classifier = true   # auto mode: settle ALLOW from a one-token answer's probabilities
+adaptive_effort = false   # on by default: low effort once a turn is under way
+stable_prefix = false     # on by default: per-project context goes in the first user message
 ```
 
 - **`concise_prose`** adds a short instruction to the system prompt: lead with the result, no recaps of what was done or restating the task, short status updates between tool calls. It says explicitly that it never applies to code, tool arguments, file contents or reasoning. It's part of the session's fixed system prompt, so the prompt prefix (and a local server's cache) stays the same from request to request. It's skipped when the Concise output style is already selected, which says the same.
@@ -1838,7 +1925,10 @@ provenance = true         # flag numeric claims and identifiers not found in thi
   - *Model side* (`quiet = true`, `CHANTO_OPTIMIZE=quiet`): a fixed system-prompt instruction not to write narration or status text between tool calls and to call tools directly, then, when the task is done, to write one short summary: what changed (the files), what was verified and how, and anything left or uncertain. It says explicitly that it never applies to code, tool arguments, file contents or reasoning, or to questions the model genuinely needs to ask you. It's part of the session's fixed system prompt, so the prefix stays the same from request to request; `/quiet` rebuilds it once, from the next turn.
   - *`--quiet`* (or `/quiet on|off` during a session) turns on the model side and a quiet view. In the TUI, while the agent works you see only the spinner and the status line (the tool running now, how many tool calls so far, elapsed time and tokens), plus permission prompts and questions. The turn's intermediate text, thinking and tool blocks stay out of the transcript but are still recorded: ctrl+o or `/transcript` shows them (inline mode prints the last turn's steps), and the session history is intact, so "what did you do?" works as usual. The final summary shows normally, and spend-guard notices, warnings, errors and verification results always show. `--plain` prints the same way (`/transcript` lists the last turn's steps), and `-p` text prints only the final summary even with `--verbose`; `--output-format json` and `stream-json` are unchanged.
   - *Preset*: `--quiet` without `--mode` starts in auto mode, so safety is auto mode's: risky actions still ask, and the sandbox still applies. An explicit `--mode` (or `--dangerously-skip-permissions`, `--full-auto`, `--sandbox`) wins. `quiet = true` in config (or `CHANTO_OPTIMIZE=quiet`) turns on the model side and the quiet view but leaves the mode alone.
-- **`provenance`** (`chanto+provenance`) checks the final answer's numbers, environment-variable names, file paths and function-call identifiers against tool output from the current turn. When a claim isn't found, the model is told once more and asked to re-check it against the code or the tool output (a single bounded bounce, so it never loops); the warning is always shown, and nothing is blocked or re-asked again. This deterministic prototype can miss unsupported prose or flag a valid claim expressed differently; user messages, earlier turns and answers given without any tool call are not checked.
+- **`provenance`** (`chanto+provenance`) checks the final answer's numbers, environment-variable names, file paths and function-call identifiers against tool output from the current turn. When a claim isn't found, the model is told once more and asked to re-check it against the code or the tool output (a single bounded bounce, never a loop); the warning is always shown, and nothing is blocked or re-asked again. This deterministic prototype can miss unsupported prose or flag a valid claim expressed differently; user messages, earlier turns and answers given without any tool call are not checked.
+
+- **`adaptive_effort`** (on by default): from the first reply in a turn that only called tools, later calls in that turn ask for `low` reasoning effort, so the effort changes at most once a turn. `false` keeps the provider's default on every call.
+- **`stable_prefix`** (on by default): only Chanto's fixed instructions go in the system message; the environment, git status, skills, subagents, MCP servers and instruction files go at the top of the first user message, so the system message and tool list are cached across sessions and directories.
 
 OpenAI's Predicted Outputs aren't included: the `prediction` parameter is a Chat Completions feature of GPT-4o and GPT-4.1 models only, it can't be combined with `tools` (function calling), and the file content a tool call is about to write isn't known before the model writes it, so there's no sound way to use it in a tool-calling agent loop.
 
@@ -1887,7 +1977,7 @@ chanto acp-client claude-agent-acp
 chanto acp-client opencode acp
 ```
 
-Chanto is the ACP client here. The agent's session starts in the current directory, so it reads the project instructions it normally uses (`CLAUDE.md`, `AGENTS.md`, its own configuration). Its text, reasoning, tool calls, diffs and plans stream into the TUI exactly like Chanto's own, its permission requests become the same permission dialogs, and `/clear` starts a fresh agent process and session.
+Chanto is the ACP client here. The agent's session starts in the current directory, where it reads the project instructions it normally uses (`CLAUDE.md`, `AGENTS.md`, its own configuration). Its text, reasoning, tool calls, diffs and plans stream into the TUI exactly like Chanto's own, its permission requests become the same permission dialogs, and `/clear` starts a fresh agent process and session.
 
 The agent runs its own loop, so Chanto's `/model`, tools, hooks, subagents, context compaction, session files and usage accounting do not apply. Chanto answers `fs/read_text_file` and `fs/write_text_file` requests, and the `terminal/*` methods: an agent that asks for a command gets it run through Chanto's own environment, with its output available to the agent and the terminal killed when the session ends. Your configured MCP servers are handed to the agent at session start (variables expanded, and disabled or gated servers left out), except HTTP or SSE servers when the agent doesn't advertise those transports. A form elicitation becomes the normal question dialog, and a URL elicitation shows the address and asks before confirming. The agent's `config_option_update` and `available_commands_update` notifications update what Chanto knows and appear as a one-line note. If the agent process restarts, Chanto restores its previous session with `session/load` or `session/resume` (history the agent replays is not shown twice), and `/clear` closes it explicitly when the agent supports `session/close`. The agent's session id is saved with the Chanto session, so `/resume` (and `--continue`) restores the agent's side of the conversation too. Modes and settings the agent advertises when the session starts are listed once: `/agent-mode <id>` and `/agent-config <id> <value>` change them, and without arguments they list the available modes and settings with their current values. `/agent-login [method]` and `/agent-logout` use the agent's own sign-in methods; when it reports that authentication is required, Chanto points at `/agent-login`. When the agent advertises slash commands, they appear in completion and `/help` and are sent to it as prompts; Chanto commands of the same name win. The agent's stderr is kept only for error messages (the last 20 lines) and is not shown in the transcript. If a turn is cancelled, Chanto asks the agent to stop (`session/cancel`) and terminates it if it has not stopped within 10 seconds.
 
@@ -1929,7 +2019,7 @@ After you continue, a similar fan-out within 10 minutes isn't asked about again 
 | the same tool call with the same result four times in an agent's last dozen | `Spend: the same Grep call ran 4 times in the Explore: map the parser with the same result: no progress, but each repeat is another model call over the whole context.` |
 | spend above `burn_usd_per_min` (default $0.50) or `burn_plan_percent_per_hour` (default 25%) | `Spend: ~$0.62/min over the last 3m across 6 agents (above $0.50/min). /cost shows where it goes.` |
 
-`notices = false` turns them off. Detection works on counters the agent loop already keeps, so it adds no model calls.
+`notices = false` turns them off. Detection works on counters the agent loop already keeps, adding no model calls.
 
 **Afterwards: `/cost`.** Besides the totals, budgets and plan limits, `/cost` breaks the session down by agent (model, calls, tokens in and cached, out, cost, $/min), by model (including cache writes), by tool (tokens their results added to the context) and by the large files read more than once. It ends with suggestions from what it saw:
 
@@ -2090,7 +2180,7 @@ share_errors = true   # or false
 Chanto reports these known-bad events: a crash (a panic writes
 `~/.chanto/crashes/<time>.json`, sent at the next start and then deleted;
 with reports off the files stay local, at most ten), a model request that
-fails and ends a turn (not a server that simply isn't running), the auto-mode
+fails and ends a turn (not a server that isn't running), the auto-mode
 safety classifier being unavailable, and the shell sandbox failing to start.
 Each report holds only: the kind of error, its message (first 500
 characters), Chanto version, OS and architecture, provider type, a timestamp

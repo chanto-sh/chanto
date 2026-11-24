@@ -676,7 +676,9 @@ pub(super) fn blocks_from_messages(a: &Agent) -> Vec<Block> {
                         .get(&c.name)
                         .map(|t| t.label(&c.arguments))
                         .unwrap_or_else(|| c.name.clone());
-                    let content = result.map(|r| r.content.clone()).unwrap_or_default();
+                    let content = result
+                        .map(|r| String::clone(&r.content))
+                        .unwrap_or_default();
                     let first = content.lines().next().unwrap_or("").to_string();
                     out.push(Block::new(Kind::Tool(ToolBlock {
                         id: c.id.clone(),

@@ -1,0 +1,38 @@
+name: code scanning watch
+# The "Require code scanning results" rule in "protect main" stops a pull
+# request that introduces a new CodeQL alert. A scan after merge can still find
+# something the pull request's scan didn't (a new query in a CodeQL action
+# update, or the weekly full scan); codeql.yml checks right after each analysis
+# on main, and this runs the same check every six hours in case that job was
+# missed. scripts/codeql-watch.sh fails, which emails the maintainer, and keeps
+# one tracking issue current.
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/code-scanning-watch.yml
+      - scripts/codeql-watch.sh
+
+permissions:
+  contents: read
+  security-events: read
+  issues: write
+
+concurrency:
+  group: codeql-watch
+  cancel-in-progress: true
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check main and keep the tracking issue current
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/codeql-watch.sh

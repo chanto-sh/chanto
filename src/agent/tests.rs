@@ -23,6 +23,125 @@ fn tool_event_masks_before_truncating_output() {
     assert!(!value["output"].as_str().unwrap().contains("truncate-b"));
 }
 
+#[test]
+fn every_event_streams_as_documented() {
+    // The JSON clients and sdk/schema.json rely on, one event of each kind.
+    use chanto_core::limits::{Snapshot, Window};
+    let todo = crate::tools::misc::Todo {
+        content: "Write tests".into(),
+        status: "in_progress".into(),
+        active_form: "Writing tests".into(),
+    };
+    let cases = vec![
+        (Event::AssistantEnd, json!({"type": "assistant_end"})),
+        (
+            Event::Reasoning("hmm".into()),
+            json!({"type": "reasoning", "text": "hmm"}),
+        ),
+        (
+            Event::ToolStart {
+                id: "t".into(),
+                label: "Read(a)".into(),
+                parent: Some("p".into()),
+            },
+            json!({"type": "tool_start", "id": "t", "label": "Read(a)", "parent": "p"}),
+        ),
+        (
+            Event::ToolProgress {
+                id: "t".into(),
+                text: "50%".into(),
+            },
+            json!({"type": "tool_progress", "id": "t", "text": "50%"}),
+        ),
+        (
+            Event::Busy(Some("Thinking".into())),
+            json!({"type": "busy", "label": "Thinking"}),
+        ),
+        (
+            Event::Info("i".into()),
+            json!({"type": "info", "message": "i"}),
+        ),
+        (
+            Event::Warn("w".into()),
+            json!({"type": "warning", "message": "w"}),
+        ),
+        (
+            Event::Error("e".into()),
+            json!({"type": "error", "message": "e"}),
+        ),
+        (
+            Event::Todos(vec![todo]),
+            json!({"type": "todos", "todos": [{"content": "Write tests", "status": "in_progress", "activeForm": "Writing tests"}]}),
+        ),
+        (
+            Event::Usage {
+                context_used: 10,
+                context_max: 100,
+                total_in: 7,
+                total_out: 3,
+                total_cost_usd: 0.5,
+                price_unknown: true,
+                tps: 42.0,
+            },
+            json!({"type": "usage", "context_used": 10, "context_max": 100, "total_in": 7, "total_out": 3,
+                   "tps": 42.0, "total_cost_usd": 0.5, "price_unknown": true}),
+        ),
+        (
+            Event::Compacted {
+                before: 900,
+                after: 300,
+            },
+            json!({"type": "compacted", "before": 900, "after": 300}),
+        ),
+        (
+            Event::Background {
+                id: "b".into(),
+                description: "d".into(),
+                status: "done".into(),
+            },
+            json!({"type": "background_agent", "id": "b", "description": "d", "status": "done"}),
+        ),
+        (
+            Event::Status {
+                key: "goal".into(),
+                lines: vec!["l".into()],
+            },
+            json!({"type": "status", "key": "goal", "lines": ["l"]}),
+        ),
+    ];
+    for (event, want) in cases {
+        assert_eq!(event_json(&event).unwrap(), want);
+    }
+    for (mode, name) in [
+        (Mode::Default, "default"),
+        (Mode::AcceptEdits, "acceptEdits"),
+        (Mode::Plan, "plan"),
+        (Mode::Auto, "auto"),
+        (Mode::Bypass, "bypassPermissions"),
+    ] {
+        assert_eq!(event_json(&Event::ModeChanged(mode)).unwrap()["mode"], name);
+    }
+    let window = Window {
+        used_percent: 18.0,
+        window_minutes: Some(300),
+        resets_at: Some(1791800000),
+    };
+    let limits = event_json(&Event::Limits(Snapshot {
+        primary: Some(window),
+        secondary: None,
+        plan_type: Some("plus".into()),
+    }))
+    .unwrap();
+    assert_eq!(limits["type"], "rate_limits");
+    assert_eq!(limits["plan"], "plus");
+    assert_eq!(
+        limits["primary"],
+        json!({"used_percent": 18.0, "window_minutes": 300, "resets_at": 1791800000})
+    );
+    assert_eq!(limits["secondary"], Value::Null);
+    assert!(limits["summary"].is_string());
+}
+
 struct NullFrontend;
 #[test]
 fn checkpoint_files_round_trip_compactly() {
@@ -434,6 +553,42 @@ async fn mechanical_followups_use_low_effort() {
 }
 
 #[tokio::test]
+async fn ultra_effort_tells_only_the_main_agent_to_delegate() {
+    let dir = tmpdir("effort-ultra");
+    let (base, seen) = mock_server(vec![
+        json!({"content": "One."}),
+        json!({"content": "Two."}),
+        json!({"content": "Three."}),
+    ])
+    .await;
+    let run = async |effort: &str, depth| {
+        let mut agent = Agent::new(make_env(&base, &dir, Mode::Default, 32768));
+        agent.env.set_think(true);
+        agent.env.set_effort(Some(effort.into()));
+        agent.depth = depth;
+        agent
+            .run_turn("go", vec![], CancellationToken::new())
+            .await
+            .unwrap();
+    };
+    run("ultra", 0).await;
+    run("ultra", 1).await;
+    run("max", 0).await;
+    let bodies = seen.lock().unwrap().clone();
+    assert_eq!(bodies.len(), 3);
+    let reminded =
+        |b: &serde_json::Value| b["messages"].to_string().contains("Delegate on your own");
+    assert!(reminded(&bodies[0]));
+    assert!(
+        !reminded(&bodies[1]),
+        "a subagent would keep splitting work"
+    );
+    assert!(!reminded(&bodies[2]));
+    // Chat completions tops out at `xhigh`.
+    assert_eq!(bodies[0]["reasoning_effort"], "xhigh");
+}
+
+#[tokio::test]
 async fn adaptive_effort_stays_the_same_within_a_turn() {
     let dir = tmpdir("effort-sticky");
     std::fs::write(dir.join("a.txt"), "hello\n").unwrap();
@@ -516,8 +671,8 @@ fn a_side_question_sees_the_context_without_changing_it() {
     // The real conversation is untouched — that is the point of /btw.
     assert_eq!(base.len(), 2);
     assert_eq!(msgs.len(), 3);
-    assert_eq!(msgs[0].content, "sys");
-    assert_eq!(msgs[1].content, "read src/main.rs");
+    assert_eq!(*msgs[0].content, "sys");
+    assert_eq!(*msgs[1].content, "read src/main.rs");
     assert!(msgs[2].content.contains("what does main do?"));
     assert!(msgs[2].content.contains("side question"));
 }
@@ -916,12 +1071,12 @@ fn project_context_moves_to_the_first_user_message() {
         Message::user("more"),
     ];
     move_project_context(&mut msgs);
-    assert_eq!(msgs[0].content, "fixed");
+    assert_eq!(*msgs[0].content, "fixed");
     assert_eq!(
-        msgs[1].content,
+        *msgs[1].content,
         "<system-reminder>\n# Environment\n- Working directory: /x\n</system-reminder>\n\nhi"
     );
-    assert_eq!(msgs[3].content, "more");
+    assert_eq!(*msgs[3].content, "more");
     // Nothing to move: unchanged.
     let mut plain = vec![Message::system("fixed"), Message::user("hi")];
     move_project_context(&mut plain);
@@ -1078,7 +1233,7 @@ async fn quiet_adds_one_stable_instruction_and_keeps_the_steps() {
         );
         // ...while the session keeps the narration and the tool call.
         assert!(agent.messages.iter().any(|m| m.role == Role::Assistant
-            && m.content == "Let me read the file."
+            && *m.content == "Let me read the file."
             && m.tool_calls.len() == 1));
         agent
             .run_turn("and again", vec![], CancellationToken::new())
@@ -1278,6 +1433,53 @@ fn make_interactive_env(
         frontend,
         interactive: true,
     })
+}
+
+#[test]
+fn opencode_go_uses_the_environments_session_id() {
+    let dir = tmpdir("opencode-go-session");
+    let mut config = Config::default();
+    config.provider = ProviderKind::Openai;
+    config.providers.insert(
+        "go".into(),
+        crate::config::ProviderConfig {
+            kind: ProviderKind::Openai,
+            base_url: "https://opencode.ai/inference/go/openai/v1".into(),
+            api_key: Some("k".into()),
+            ..Default::default()
+        },
+    );
+    let env = Env::new(EnvInit {
+        config,
+        provider: Provider::new(ProviderKind::Openai, "http://127.0.0.1:1/v1", None, 4096),
+        model: "mock".into(),
+        mode: Mode::Default,
+        vision: false,
+        cwd: dir.clone(),
+        tools: Registry::builtin(),
+        mcp: vec![],
+        frontend: Arc::new(NullFrontend),
+        interactive: false,
+    });
+    *env.session_info.lock().unwrap() = Some(("ses_abc".into(), dir.join("s.jsonl")));
+    let (p, model) = env.resolve("go/kimi-k3");
+    assert_eq!(model, "kimi-k3");
+    assert!(
+        p.headers
+            .iter()
+            .any(|(k, v)| *k == "x-opencode-session" && v == "ses_abc")
+    );
+    // Every turn of the session sends the same id, once.
+    let (again, _) = env.resolve("go/kimi-k3");
+    assert_eq!(again.headers, p.headers);
+    // A provider that isn't OpenCode Go is untouched.
+    let (plain, _) = env.resolve("mock");
+    assert!(
+        !plain
+            .headers
+            .iter()
+            .any(|(k, _)| *k == "x-opencode-session")
+    );
 }
 
 #[tokio::test]
@@ -1918,18 +2120,38 @@ async fn a_pipe_does_not_hide_a_failing_check_from_the_finish_guard() {
 #[test]
 fn only_the_latest_check_after_an_edit_counts() {
     let runs = vec![
-        ("a".to_string(), 0, false, "FAILED t".to_string()),
-        ("b".to_string(), 0, true, String::new()),
+        (
+            "a".to_string(),
+            0,
+            false,
+            "FAILED t".to_string(),
+            PathBuf::new(),
+        ),
+        ("b".to_string(), 0, true, String::new(), PathBuf::new()),
     ];
     assert_eq!(last_failed_check(&runs, 0), None, "a later pass clears it");
     assert_eq!(last_failed_check(&runs, 1), None, "an edit makes it stale");
-    let only_fail = vec![("a".to_string(), 2, false, "FAILED t".to_string())];
+    let only_fail = vec![(
+        "a".to_string(),
+        2,
+        false,
+        "FAILED t".to_string(),
+        PathBuf::new(),
+    )];
     assert_eq!(last_failed_check(&only_fail, 2), Some(("a", "FAILED t")));
 }
 
 #[test]
 fn a_failure_only_re_run_on_a_narrower_scope_stays_unverified() {
-    let run = |cmd: &str, ok: bool, out: &str| (cmd.to_string(), 0u64, ok, out.to_string());
+    let run = |cmd: &str, ok: bool, out: &str| {
+        (
+            cmd.to_string(),
+            0u64,
+            ok,
+            out.to_string(),
+            PathBuf::from("/p"),
+        )
+    };
     let fail = run(
         "pytest tests/ -q",
         false,
@@ -2870,6 +3092,105 @@ async fn gate_trusts_the_agents_own_passing_run() {
     assert!(text.contains("your run, no edits since"), "{text}");
 }
 
+/// An external (MCP-style) tool that rewrites `calc.py` with a bug.
+struct BreakCalc;
+
+#[async_trait]
+impl crate::tools::Tool for BreakCalc {
+    fn name(&self) -> String {
+        "mcp__fs__write".into()
+    }
+    fn description(&self) -> String {
+        "Write a file.".into()
+    }
+    fn schema(&self) -> Value {
+        json!({"type": "object", "properties": {}})
+    }
+    fn kind(&self) -> ToolKind {
+        ToolKind::External
+    }
+    async fn run(&self, _args: Value, ctx: &Ctx) -> Result<ToolOutput> {
+        std::fs::write(
+            ctx.cwd().join("calc.py"),
+            "def add(a, b):\n    return a - b  # broken later\n",
+        )?;
+        Ok(ToolOutput::ok("written"))
+    }
+}
+
+/// Runs the "fix, test, then something else changes the file" turn and
+/// returns the final answer and every model request. The late change makes
+/// calc.py a different size from the fixed one: written in the same second
+/// at the same size, Python would reuse the earlier run's cached bytecode.
+async fn finish_after_a_late_change(name: &str, late: Value, sub: &[Value]) -> (String, String) {
+    let dir = tmpdir(name);
+    std::fs::write(
+        dir.join("calc.py"),
+        "def add(a, b):\n    return a - b  # broken later\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("test_calc.py"), "import unittest\nfrom calc import add\nclass T(unittest.TestCase):\n    def test_add(self):\n        self.assertEqual(add(2, 3), 5)\n").unwrap();
+    let fixed = "def add(a, b):\n    return a + b\n";
+    let mut script = vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "calc.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": fixed}))}),
+        json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q"}))}),
+        json!({"tool_calls": late}),
+    ];
+    script.extend(sub.iter().cloned());
+    script.extend([
+        json!({"content": "Fixed."}),
+        // Sent back with the failure: fix it again.
+        json!({"tool_calls": tc("Read", json!({"file_path": "calc.py"}))}),
+        json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": fixed}))}),
+        json!({"content": "Fixed again."}),
+    ]);
+    let (base, seen) = mock_server(script).await;
+    let mut env = verified_env(&base, &dir, "python3 -m unittest -q");
+    Arc::get_mut(&mut env)
+        .unwrap()
+        .tools
+        .tools
+        .push(Arc::new(BreakCalc));
+    let mut agent = Agent::new(env);
+    let TurnEnd::Done(text) = agent
+        .run_turn("fix add", vec![], CancellationToken::new())
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let reqs = serde_json::to_string(&*seen.lock().unwrap()).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+    (text, reqs)
+}
+
+#[tokio::test]
+async fn an_external_tool_change_makes_the_agents_run_stale() {
+    let (text, reqs) =
+        finish_after_a_late_change("vouch-external", tc("mcp__fs__write", json!({})), &[]).await;
+    assert!(!text.contains("no edits since"), "{text}");
+    assert!(reqs.contains("AssertionError"), "the gate ran the tests");
+}
+
+#[tokio::test]
+async fn a_subagent_change_makes_the_agents_run_stale() {
+    let (text, reqs) = finish_after_a_late_change(
+        "vouch-task",
+        tc(
+            "Task",
+            json!({"description": "d", "prompt": "tidy calc.py"}),
+        ),
+        &[
+            json!({"tool_calls": tc("Write", json!({"file_path": "calc.py", "content": "def add(a, b):\n    return a - b  # broken later\n"}))}),
+            json!({"content": "sub done"}),
+        ],
+    )
+    .await;
+    assert!(!text.contains("no edits since"), "{text}");
+    assert!(reqs.contains("AssertionError"), "the gate ran the tests");
+}
+
 fn slow_tests(name: &str) -> PathBuf {
     let dir = tmpdir(name);
     std::fs::write(dir.join("calc.py"), "def add(a, b):\n    return a - b\n").unwrap();
@@ -2947,7 +3268,7 @@ async fn bash_output_waits_and_foreground_sleep_is_refused() {
     let dir = tmpdir("bg-wait");
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 1; echo ready", "run_in_background": true}))}),
-        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20}))}),
+        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "sleep-1", "wait_secs": 20}))}),
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 30 && echo done"}))}),
         json!({"content": "Done."}),
     ])
@@ -2988,7 +3309,7 @@ async fn a_failure_from_a_background_run_still_bounces_the_finish() {
         json!({"tool_calls": tc("Bash", json!({"command": "python3 -m unittest -q test_x", "run_in_background": true}))}),
         // Output can arrive in several chunks. Wait for the complete failure
         // line instead of treating the first separator or traceback as final.
-        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "bash_1", "wait_secs": 20, "filter": r"^FAIL: test_f \([^)]+\)$"}))}),
+        json!({"tool_calls": tc("BashOutput", json!({"bash_id": "python3-m-unittest", "wait_secs": 20, "filter": r"^FAIL: test_f \([^)]+\)$"}))}),
         json!({"content": "Done."}),
         json!({"content": "The existing test is failing, so the work is not done."}),
     ])
@@ -3110,7 +3431,7 @@ async fn btw_threads_earlier_side_questions_and_forks_with_the_conversation() {
         .await
         .messages
         .iter()
-        .map(|m| m.content.clone())
+        .map(|m| String::clone(&m.content))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
@@ -3846,7 +4167,7 @@ async fn auto_compacts_near_context_limit() {
             .iter()
             .any(|m| m.content.contains("SUMMARY OF EVERYTHING"))
     );
-    assert!(!agent.messages.iter().any(|m| m.content == "first answer"));
+    assert!(!agent.messages.iter().any(|m| *m.content == "first answer"));
     assert_eq!(seen.lock().unwrap().len(), 3);
     // The prompt that triggered compaction reaches the model as written,
     // folded into the continuation user message (with the summary) rather
@@ -4176,13 +4497,16 @@ async fn messages_reach_a_background_agent_queued_or_resumed() {
 }
 
 #[tokio::test]
-async fn a_write_with_repaired_arguments_is_not_run() {
+async fn a_call_with_repaired_arguments_runs_only_if_read_only() {
     let dir = tmpdir("repaired-write");
+    std::fs::write(dir.join("r.txt"), "readable").unwrap();
     let cut = |name: &str, args: &str| json!([{"index": 0, "id": "c1", "type": "function", "function": {"name": name, "arguments": args}}]);
     let (base, seen) = mock_server(vec![
         json!({"tool_calls": cut("Write", "{\"file_path\": \"a.txt\", \"content\": \"line one\\nline tw")}),
-        // Other tools still run with repaired arguments.
+        // A cut-off shell command isn't run either.
         json!({"tool_calls": cut("Bash", "{\"command\": \"echo ran > b.txt")}),
+        // A read-only tool still runs with repaired arguments.
+        json!({"tool_calls": cut("Read", "{\"file_path\": \"r.txt")}),
         json!({"content": "done"}),
     ])
     .await;
@@ -4196,15 +4520,24 @@ async fn a_write_with_repaired_arguments_is_not_run() {
         !dir.join("a.txt").exists(),
         "the truncated Write was not run"
     );
-    assert!(dir.join("b.txt").exists(), "the Bash call ran");
+    assert!(
+        !dir.join("b.txt").exists(),
+        "the truncated Bash was not run"
+    );
     let seen = seen.lock().unwrap();
     let second = seen[1].to_string();
     assert!(
         second.contains("was not run") && second.contains("smaller pieces"),
         "{second}"
     );
+    let third = seen[2].to_string();
     assert!(
-        !seen[2].to_string().contains(llm::REPAIRED),
+        third.contains("was not run") && third.contains("complete arguments"),
+        "{third}"
+    );
+    assert!(seen[3].to_string().contains("readable"), "the Read ran");
+    assert!(
+        !seen[3].to_string().contains(llm::REPAIRED),
         "the marker never reaches the model"
     );
 }
@@ -4233,7 +4566,7 @@ async fn autocompact_off_and_a_token_threshold() {
         .await
         .unwrap();
     assert_eq!(seen.lock().unwrap().len(), 2, "no summary call");
-    assert!(agent.messages.iter().any(|m| m.content == "first answer"));
+    assert!(agent.messages.iter().any(|m| *m.content == "first answer"));
     // A token count well under the configured 85%: compacts there.
     let dir = tmpdir("autocompact-tokens");
     let (base, seen) = mock_server(vec![
@@ -4289,7 +4622,7 @@ async fn monitor_lines_reach_the_model_and_the_run_waits_for_them() {
     assert_eq!(crate::tools::monitor::active(&env), 0);
     let all = seen.lock().unwrap().last().unwrap()["messages"].to_string();
     assert!(
-        all.contains("Monitor monitor_1 (test watch) output"),
+        all.contains("Monitor test-watch (test watch) output"),
         "{all}"
     );
     assert!(
@@ -4302,7 +4635,7 @@ async fn monitor_lines_reach_the_model_and_the_run_waits_for_them() {
         env.shells
             .lock()
             .unwrap()
-            .get("monitor_1")
+            .get("test-watch")
             .is_some_and(|s| s.monitor.as_deref() == Some("test watch"))
     );
 }
@@ -5224,7 +5557,7 @@ async fn editing_an_earlier_prompt_branches_and_keeps_the_original() {
     );
     // The original is intact and resumable; `/rewind undo` in the branch brings the files back.
     let (_, kept) = crate::session::Session::load(&dir, &original).unwrap();
-    assert!(kept.iter().any(|m| m.content == "wrote v2"));
+    assert!(kept.iter().any(|m| *m.content == "wrote v2"));
     assert!(env.rewind_undo.lock().unwrap().is_some());
     // Conversation only: the files stay as they are.
     std::fs::write(dir.join("a.txt"), "user's").unwrap();
@@ -5978,6 +6311,8 @@ async fn hanging_mcp_server() -> (String, Arc<Mutex<Vec<Value>>>) {
                         json!({"tools": [{"name": "echo", "description": "Echo", "inputSchema": {"type": "object"}}]})
                     }
                     "tools/call" => {
+                        // Recorded, so a test can act once the call is in flight.
+                        notes.lock().unwrap().push(body.clone());
                         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
                         return;
                     }
@@ -6062,8 +6397,24 @@ async fn an_mcp_tool_call_that_never_answers_times_out_and_esc_aborts_it() {
     let mut agent = Agent::new(env_with_mcp(&base, &dir, client));
     let cancel = CancellationToken::new();
     let c2 = cancel.clone();
+    // Press esc once the call is in flight, not after a fixed delay: on a slow
+    // runner the delay can pass before the call is sent, and then there is
+    // nothing to cancel.
+    let calls = notes.clone();
     tokio::spawn(async move {
-        tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+        for _ in 0..200 {
+            let n = calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|n| n["method"] == "tools/call")
+                .count();
+            if n >= 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         c2.cancel();
     });
     let end = tokio::time::timeout(
@@ -6410,4 +6761,354 @@ async fn auto_mode_survives_always_allow_on_a_protected_edit() {
         "the approval must not create a blanket protected-file grant"
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn a_model_lookup_sets_the_context_and_clamps_an_oversized_one() {
+    use crate::llm::{ProviderKind, model_info_effect};
+    // A server that reports its window gets all of it, unless the user set one.
+    assert_eq!(
+        model_info_effect((131_072, true), false, ProviderKind::Openai, 32_768),
+        (131_072, true, None)
+    );
+    assert_eq!(
+        model_info_effect((131_072, true), true, ProviderKind::Openai, 32_768),
+        (32_768, true, None)
+    );
+    // No reported window (DeepSeek): nothing changes.
+    assert_eq!(
+        model_info_effect((0, false), false, ProviderKind::Openai, 32_768),
+        (32_768, false, None)
+    );
+    // A configured size beyond the model's is clamped, with a warning.
+    let (n, _, warning) = model_info_effect((8_192, false), true, ProviderKind::Ollama, 32_768);
+    assert_eq!(n, 8_192);
+    assert!(
+        warning
+            .unwrap()
+            .contains("exceeds the model's trained context 8192")
+    );
+}
+
+#[tokio::test]
+async fn a_lookup_that_outlasted_startup_is_applied_before_the_first_request() {
+    let dir = tmpdir("settle-model-info");
+    let env = make_env("http://127.0.0.1:9", &dir, Mode::Bypass, 32_768);
+    let lookup = tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        Some((8_192u64, false))
+    });
+    *env.pending_model_info.lock().unwrap() = Some(crate::agent::PendingModelInfo {
+        lookup,
+        explicit_ctx: true,
+        serving_kind: crate::llm::ProviderKind::Openai,
+    });
+    env.settle_model_info().await;
+    assert_eq!(env.provider.read().unwrap().num_ctx, 8_192);
+    assert!(!env.vision());
+    assert!(env.pending_model_info.lock().unwrap().is_none());
+    // Settling again is a no-op.
+    env.settle_model_info().await;
+    assert_eq!(env.provider.read().unwrap().num_ctx, 8_192);
+}
+
+#[tokio::test]
+async fn a_turn_without_bash_never_takes_the_shell_snapshot() {
+    // The snapshot runs the user's startup files in a login shell: a session
+    // that only reads and answers shouldn't pay for it.
+    let dir = tmpdir("no-bash-snapshot");
+    let (base, _seen) = mock_server(vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "missing.txt"}))}),
+        json!({"content": "Done."}),
+    ])
+    .await;
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::Bypass, 32768));
+    agent
+        .run_turn("hi", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert!(!agent.env.shell_snapshot.initialized());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn the_shell_snapshot_starts_when_the_model_begins_a_bash_call() {
+    let dir = tmpdir("early-snapshot");
+    let (base, _seen) = mock_server(vec![
+        json!({"tool_calls": tc("Bash", json!({"command": "touch made-by-the-test"}))}),
+        json!({"content": "Done."}),
+    ])
+    .await;
+    // Plan mode refuses the command, so only the streamed call can start it.
+    let mut agent = Agent::new(make_env(&base, &dir, Mode::Plan, 32768));
+    assert!(!agent.env.shell_snapshot.initialized());
+    agent
+        .run_turn("hi", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    for _ in 0..50 {
+        if agent.env.shell_snapshot.initialized() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert!(agent.env.shell_snapshot.initialized());
+    assert!(!dir.join("made-by-the-test").exists());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn the_first_request_waits_for_mcp_servers_still_connecting() {
+    let dir = tmpdir("mcp-background");
+    let servers: std::collections::BTreeMap<String, crate::config::McpServerConfig> =
+        [("slow".to_string(), crate::mcp::tests::slow_server(0.5))].into();
+    let (clients, connecting) = crate::mcp::start_all(&servers);
+    let (base, seen) = mock_server(vec![json!({"content": "done"})]).await;
+    let mut tools = Registry::builtin();
+    tools.hidden.extend::<[Arc<dyn crate::tools::Tool>; 2]>([
+        Arc::new(crate::mcp::ListMcpResources),
+        Arc::new(crate::mcp::ReadMcpResource),
+    ]);
+    let mut config = Config::default();
+    config.provider = ProviderKind::Openai;
+    let env = Env::new(EnvInit {
+        config,
+        provider: Provider::new(ProviderKind::Openai, &base, None, 32768),
+        model: "mock".into(),
+        mode: Mode::Bypass,
+        vision: false,
+        cwd: dir.clone(),
+        tools,
+        mcp: clients.clone(),
+        frontend: Arc::new(NullFrontend),
+        interactive: true,
+    });
+    *env.pending_mcp.lock().unwrap() = Some(tokio::spawn(async move {
+        connecting.await;
+    }));
+    // The session is ready before the server is.
+    let mut agent = Agent::new(env);
+    assert_eq!(clients[0].status(), crate::mcp::Status::Connecting);
+    let end = agent
+        .run_turn("hi", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    assert!(
+        matches!(end, TurnEnd::Done(ref t) if t == "done"),
+        "{end:?}"
+    );
+    let req = seen.lock().unwrap()[0].clone();
+    let names: Vec<&str> = req["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["function"]["name"].as_str())
+        .collect();
+    assert!(names.contains(&"mcp__slow__echo"), "{names:?}");
+    assert!(names.contains(&"ListMcpResources"), "{names:?}");
+    // Startup wrote the prompt before the server connected; the request
+    // names it all the same.
+    assert!(
+        req["messages"].to_string().contains("## slow"),
+        "the prompt names the server"
+    );
+    clients[0].shutdown(crate::mcp::Status::Off("test over".into()));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_model_switch_doesnt_wait_for_a_slow_lookup() {
+    let dir = tmpdir("switch-vision");
+    let env = make_env("http://127.0.0.1:1", &dir, Mode::Default, 8192);
+    // A lookup for the startup model that hasn't answered: the switch drops it.
+    *env.pending_model_info.lock().unwrap() = Some(crate::agent::PendingModelInfo {
+        lookup: tokio::spawn(async {
+            tokio::time::sleep(Duration::from_secs(3600)).await;
+            None
+        }),
+        explicit_ctx: false,
+        serving_kind: ProviderKind::Openai,
+    });
+    // Slow: the assumption holds until the next request, which waits for it.
+    let slow = tokio::spawn(async {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Some((8192, false))
+    });
+    let t = std::time::Instant::now();
+    env.switch_vision(slow, true).await;
+    assert!(
+        t.elapsed() < Duration::from_millis(250),
+        "{:?}",
+        t.elapsed()
+    );
+    assert!(env.vision());
+    assert!(env.pending_model_info.lock().unwrap().is_none());
+    env.settle_model_info().await;
+    assert!(!env.vision());
+    // Quick: it applies at once.
+    env.switch_vision(tokio::spawn(async { Some((8192, true)) }), false)
+        .await;
+    assert!(env.vision() && env.pending_vision.lock().unwrap().is_none());
+    // Unknown: the assumption.
+    env.switch_vision(tokio::spawn(async { None }), false).await;
+    assert!(!env.vision());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn a_read_only_turn_takes_no_snapshot_but_still_rewinds() {
+    let dir = tmpdir("lazy-snapshot");
+    std::fs::write(dir.join("shell"), "before\n").unwrap();
+    let (base, _) = mock_server(vec![
+        json!({"tool_calls": tc("Read", json!({"file_path": "shell"}))}),
+        json!({"content": "It says before."}),
+        json!({"content": "Nothing to do."}),
+        json!({"tool_calls": tc("Bash", json!({"command": "echo after > shell"}))}),
+        json!({"content": "done"}),
+    ])
+    .await;
+    let env = make_env_with(&base, &dir, Mode::Bypass, 32768, |c| {
+        c.sandbox.enabled = false;
+        c.history.timeout_ms = 10000;
+    });
+    let mut agent = Agent::new(env.clone());
+    for prompt in ["what does shell say?", "anything to do?"] {
+        agent
+            .run_turn(prompt, vec![], CancellationToken::new())
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        env.snapshot_attempts.load(Ordering::Relaxed),
+        0,
+        "turns that only read take no snapshot"
+    );
+    agent
+        .run_turn("change it", vec![], CancellationToken::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shell")).unwrap(),
+        "after\n"
+    );
+    // The changing turn took one, before the change; the read-only turns
+    // before it share it, since nothing changed in between.
+    let trees: Vec<_> = env
+        .checkpoints
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|c| c.tree.clone())
+        .collect();
+    assert!(trees[2].is_some(), "{trees:?}");
+    assert!(trees.iter().all(|t| *t == trees[2]), "{trees:?}");
+    assert!(env.snapshot_attempts.load(Ordering::Relaxed) >= 1);
+    // So rewinding to the first, read-only turn undoes the shell's change.
+    agent.rewind_mode(0, "both").unwrap();
+    assert_eq!(
+        std::fs::read_to_string(dir.join("shell")).unwrap(),
+        "before\n"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[tokio::test]
+async fn subagents_nest_only_as_deep_as_configured() {
+    let task = |prompt: &str| tc("Task", json!({"description": "d", "prompt": prompt}));
+    let run = async |depth: Option<usize>, replies: Vec<serde_json::Value>| {
+        let dir = tmpdir("nesting");
+        let (base, seen) = mock_server(replies).await;
+        let mut agent = Agent::new(make_env_with(&base, &dir, Mode::Bypass, 32768, |c| {
+            c.resources.max_agent_depth = depth
+        }));
+        agent
+            .run_turn("go", vec![], CancellationToken::new())
+            .await
+            .unwrap();
+        seen.lock().unwrap().clone()
+    };
+    let first_prompt = |body: &serde_json::Value| {
+        body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["role"] == "user")
+            .unwrap()["content"]
+            .to_string()
+    };
+    // The default: a subagent asking for one doesn't get it.
+    let bodies = run(
+        None,
+        vec![
+            json!({"tool_calls": task("one")}),
+            json!({"tool_calls": task("two")}),
+            json!({"content": "one done"}),
+            json!({"content": "done"}),
+        ],
+    )
+    .await;
+    assert_eq!(bodies.len(), 4);
+    assert!(bodies.iter().all(|b| first_prompt(b) != "\"two\""));
+    // Depth 2: the subagent's own subagent runs, and one more level doesn't.
+    let bodies = run(
+        Some(2),
+        vec![
+            json!({"tool_calls": task("one")}),
+            json!({"tool_calls": task("two")}),
+            json!({"tool_calls": task("three")}),
+            json!({"content": "two done"}),
+            json!({"content": "one done"}),
+            json!({"content": "done"}),
+        ],
+    )
+    .await;
+    assert_eq!(bodies.len(), 6);
+    assert_eq!(first_prompt(&bodies[2]), "\"two\"");
+    assert!(bodies.iter().all(|b| first_prompt(b) != "\"three\""));
+    assert!(bodies[4].to_string().contains("two done"));
+    assert!(bodies[5].to_string().contains("one done"));
+}
+
+#[test]
+fn nesting_is_capped_and_gives_its_room_back() {
+    let held: Vec<_> = std::iter::from_fn(crate::resources::nested_agent).collect();
+    assert!(held.len() <= 20);
+    assert!(crate::resources::nested_agent().is_none());
+    drop(held);
+    assert!(crate::resources::nested_agent().is_some());
+}
+
+#[tokio::test]
+async fn every_waiter_waits_for_the_snapshot() {
+    // Two foreground Task calls run concurrently and each subagent waits for
+    // the turn's snapshot before its first edit. Only the first used to wait:
+    // the second found the slot empty and edited while the snapshot was still
+    // being taken, so rewind could keep that edit.
+    let dir = tmpdir("snapshot-waiters");
+    let env = make_env("http://127.0.0.1:1", &dir, Mode::Bypass, 32768);
+    let done = Arc::new(AtomicBool::new(false));
+    let flag = done.clone();
+    *env.pending_snapshot.lock().unwrap() =
+        Some(pending_snapshot(tokio::task::spawn_blocking(move || {
+            std::thread::sleep(Duration::from_millis(800));
+            flag.store(true, Ordering::SeqCst);
+        })));
+    let waiter = |env: Arc<Env>, done: Arc<AtomicBool>| {
+        tokio::spawn(async move {
+            env.wait_snapshot().await;
+            done.load(Ordering::SeqCst)
+        })
+    };
+    let a = waiter(env.clone(), done.clone());
+    let b = waiter(env.clone(), done.clone());
+    assert!(a.await.unwrap(), "the first waiter saw the snapshot finish");
+    assert!(
+        b.await.unwrap(),
+        "the second waiter saw the snapshot finish"
+    );
+    // A finished snapshot doesn't hold up later callers.
+    let start = Instant::now();
+    env.wait_snapshot().await;
+    assert!(start.elapsed() < Duration::from_millis(500));
 }

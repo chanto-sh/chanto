@@ -150,7 +150,9 @@ pub(super) fn windows_caches(home: &std::path::Path) -> Vec<String> {
 /// Windows: grant the sandbox's write access to the tool caches in the
 /// background at startup. The first grant on a big cache (~/.cargo) spreads
 /// to every file in it and can take a while; done here, a command doesn't wait
-/// for it. Later grants only check the existing entry.
+/// for it. Later grants only check the existing entry. Only for a session
+/// someone is waiting in: this starts the sandbox probe, which a one-shot run
+/// that never runs a command shouldn't pay for.
 pub fn prime_sandbox_caches(cfg: &crate::config::SandboxConfig) {
     #[cfg(windows)]
     if cfg.enabled {
@@ -350,11 +352,16 @@ pub(super) fn seatbelt_ipc(project: Option<&str>, tmp: &str, ssh_agent: bool) ->
 }
 
 /// The fixed part of [`seatbelt_ipc`]: launch requests, Apple Events,
-/// preference writes, the clipboard and Shortcuts.
+/// preference writes, the clipboard, Shortcuts and the keychain, which hands
+/// out logins (`gh`, git's credential helper) that files alone wouldn't.
 pub(crate) const IPC_DENIES: &str = concat!(
     "(deny mach-lookup (global-name \"com.apple.coreservices.launchservicesd\")",
     " (global-name \"com.apple.coreservices.appleevents\")",
     " (global-name \"com.apple.pasteboard.1\")",
+    " (global-name \"com.apple.SecurityServer\")",
+    " (global-name \"com.apple.securityd\")",
+    " (global-name \"com.apple.securityd.xpc\")",
+    " (global-name \"com.apple.secd\")",
     " (global-name-regex \"^com\\\\.apple\\\\.lsd\\\\.\")",
     " (global-name-regex \"^com\\\\.apple\\\\.shortcuts\")",
     // The Shortcuts daemon (`shortcuts run` talks to it).
@@ -383,7 +390,10 @@ pub fn sandbox_on() -> bool {
 /// Operation not permitted`), e.g. when Chanto itself runs inside another
 /// tool's sandbox. Then every command would fail; instead treat the sandbox as
 /// off (the outer one still applies) so nothing assumes isolation it lacks.
-/// The probe starts at launch in the background; the first check waits for it.
+/// Only a process already in a sandbox can hit this, and the kernel says
+/// whether it is, so the usual unsandboxed process starts no probe at all.
+/// Otherwise the probe starts at launch in the background; the first check
+/// waits for it.
 pub(super) static PROBE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 pub(super) static PROBE_THREAD: std::sync::Mutex<Option<std::thread::JoinHandle<bool>>> =
     std::sync::Mutex::new(None);
@@ -391,12 +401,37 @@ pub(super) static NESTED_WARNED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 pub fn start_sandbox_probe() {
+    if !already_sandboxed() {
+        let _ = PROBE.set(true);
+        return;
+    }
     if cfg!(target_os = "macos") && PROBE.get().is_none() {
         let mut t = PROBE_THREAD.lock().unwrap_or_else(|e| e.into_inner());
         if t.is_none() {
             *t = Some(std::thread::spawn(probe_nested));
         }
     }
+}
+
+/// Whether this process already runs inside a sandbox: `sandbox_check` with
+/// no operation, a system call where the probe below starts a process.
+#[cfg(target_os = "macos")]
+pub(super) fn already_sandboxed() -> bool {
+    unsafe extern "C" {
+        fn sandbox_check(
+            pid: libc::pid_t,
+            operation: *const libc::c_char,
+            kind: libc::c_int,
+            ...
+        ) -> libc::c_int;
+    }
+    unsafe { sandbox_check(libc::getpid(), std::ptr::null(), 0) != 0 }
+}
+
+/// Nothing to probe off macOS: its sandbox is the only one that can't nest.
+#[cfg(not(target_os = "macos"))]
+pub(super) fn already_sandboxed() -> bool {
+    false
 }
 
 pub(super) fn probe_nested() -> bool {
@@ -414,8 +449,34 @@ pub(super) fn probe_nested() -> bool {
         .is_ok_and(|s| s.success())
 }
 
-/// Whether the OS sandbox can actually start here (always true off macOS).
+/// Set by a test to act as if the sandbox can't start on this machine.
+#[cfg(test)]
+pub(crate) static SANDBOX_FAILS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Whether the sandbox is worth turning on at startup, without starting
+/// anything: on Windows only launching a command can tell, so `sandbox_on`
+/// does that when something first needs the answer.
+pub fn sandbox_supported() -> bool {
+    cfg!(windows) || sandbox_available()
+}
+
+/// Whether the OS sandbox can actually start here. macOS can't nest one, and
+/// Windows launches a probe command the first time this is asked; it blocks
+/// until that answers, so nothing sees the sandbox as on before it's proven.
 pub fn sandbox_works() -> bool {
+    #[cfg(test)]
+    if SANDBOX_FAILS.load(std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    #[cfg(all(windows, not(test)))]
+    return crate::windows_sandbox::available();
+    #[cfg(any(not(windows), test))]
+    sandbox_works_unix()
+}
+
+#[cfg(any(not(windows), test))]
+fn sandbox_works_unix() -> bool {
     if !cfg!(target_os = "macos") || cfg!(test) {
         return true;
     }
@@ -434,7 +495,11 @@ pub fn sandbox_works() -> bool {
 pub(super) fn nested_sandbox_notice() -> Option<&'static str> {
     let configured = SANDBOX_ACTIVE.load(std::sync::atomic::Ordering::Relaxed);
     (configured && !sandbox_works() && !NESTED_WARNED.swap(true, std::sync::atomic::Ordering::Relaxed)).then_some(
-        "chanto's sandbox can't start here: this process already runs inside another sandbox (likely the tool that launched chanto). Commands run under that outer sandbox only, and nothing is auto-approved on the assumption of chanto's own.",
+        if cfg!(windows) {
+            "Shell commands aren't sandboxed on this system: chanto's Windows restricted-token sandbox couldn't start. Nothing is auto-approved on the assumption of it. Set `[sandbox] enabled = false` to hide this."
+        } else {
+            "chanto's sandbox can't start here: this process already runs inside another sandbox (likely the tool that launched chanto). Commands run under that outer sandbox only, and nothing is auto-approved on the assumption of chanto's own."
+        },
     )
 }
 
@@ -443,6 +508,7 @@ pub fn secret_read_denies(home: &std::path::Path, extra: &[String]) -> Vec<(bool
     // (is_regex, path or pattern)
     let h = home.display().to_string();
     let mut out = vec![
+        (false, format!("{h}/Library/Keychains")),
         (
             true,
             format!(

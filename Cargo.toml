@@ -1,6 +1,6 @@
 [package]
 name = "chanto"
-version = "0.1.7"
+version = "0.1.25"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -27,7 +27,7 @@ include = [
 # reach the CLI: `cargo build` here builds only `chanto`. proto/ holds the wire
 # types the CLI shares with the hosted service.
 [workspace]
-members = [".", "desktop", "proto"]
+members = [".", "core", "desktop", "proto", "web"]
 # fuzz/ builds on nightly with cargo-fuzz, as a workspace of its own.
 exclude = ["fuzz"]
 
@@ -42,8 +42,12 @@ repository = "https://github.com/chanto-sh/chanto.git"
 [features]
 # Exposes `chanto::fuzzing`, the entry points the fuzz targets in fuzz/ call.
 fuzzing = []
+# JSON Schema for the `chanto serve` API (src/wire.rs), which sdk/schema.json
+# and the SDKs' types come from. Off in builds: only its test uses it.
+schema = ["dep:schemars"]
 
 [dependencies]
+chanto-core = { path = "core", version = "=0.1.25" }
 chanto-proto = { path = "proto", version = "0.1.0" }
 aho-corasick = "1.1.5"
 memchr = "2.8.3"
@@ -68,20 +72,24 @@ globset = "0.4.20"
 htmd = "0.5.5"
 ignore = "0.4.33"
 libc = "0.2.190"
-pulldown-cmark = "0.13.5"
+pulldown-cmark = "0.13.6"
 ratatui = { version = "0.30.2", default-features = false, features = ["crossterm", "underline-color", "layout-cache"] }
-reedline = "0.52.1"
+reedline = "0.53.0"
 regex = "1.13.1"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls", "gzip", "http2", "charset", "system-proxy", "query", "form"] }
 webpki-root-certs = "1"
+# The TLS settings every HTTP client shares (src/http.rs); the same versions
+# reqwest builds on, so there is one copy of each.
+rustls = { version = "0.23.46", default-features = false, features = ["aws_lc_rs", "std"] }
+rustls-platform-verifier = "0.7.1"
 scraper = "0.29.0"
-serde = { version = "1.0.229", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive", "rc"] }
 serde_json = "1.0.152"
+schemars = { version = "1.2.3", optional = true }
 sha2 = "0.11.1"
 shell-words = "1.1.1"
 similar = "3.2.0"
 syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy", "parsing"] }
-sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tokio = { version = "1.53.2", features = ["full"] }
 tokio-tungstenite = "0.30.0"
 tokio-util = "0.7.20"
@@ -157,6 +165,12 @@ security-framework = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4.7"
+
+# Memory and process information (src/procs.rs). macOS asks the kernel
+# directly instead: sysinfo links IOKit and CoreFoundation, which macOS then
+# loads at every launch.
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+sysinfo = { version = "0.40", default-features = false, features = ["system"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Isolation", "Win32_Security_Authorization", "Win32_System_JobObjects", "Win32_System_Power", "Win32_System_Threading", "Win32_System_Console", "Win32_System_StationsAndDesktops", "Win32_Storage_FileSystem"] }

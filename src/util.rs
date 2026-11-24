@@ -26,9 +26,31 @@ pub fn timing(label: &str) {
     let (on, t0) = timing_state();
     if *on {
         eprintln!(
-            "[timing] {:>7.1} ms  {label}",
-            t0.elapsed().as_secs_f64() * 1000.0
+            "[timing] {:>7.1} ms  {label}  (cpu {:.2} ms)",
+            t0.elapsed().as_secs_f64() * 1000.0,
+            process_cpu_ms()
         );
+    }
+}
+
+/// CPU time (user and system, every thread) this process has used so far,
+/// in milliseconds; what startup work actually costs, unlike wall time, which
+/// includes waiting on the model server. Zero where it isn't measured.
+fn process_cpu_ms() -> f64 {
+    #[cfg(unix)]
+    {
+        // SAFETY: getrusage only writes the struct it is given.
+        let u = unsafe {
+            let mut u: libc::rusage = std::mem::zeroed();
+            libc::getrusage(libc::RUSAGE_SELF, &mut u);
+            u
+        };
+        let ms = |t: libc::timeval| t.tv_sec as f64 * 1000.0 + t.tv_usec as f64 / 1000.0;
+        ms(u.ru_utime) + ms(u.ru_stime)
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
     }
 }
 
@@ -45,58 +67,6 @@ fn timing_state() -> &'static (bool, std::time::Instant) {
             std::time::Instant::now(),
         )
     })
-}
-
-/// The changed middle of two texts, for diffing large files cheaply: drops
-/// the identical lines at the start and end, keeping `context` of them on
-/// each side. Returns (lines dropped from the start, old middle, new middle).
-pub fn changed_region<'a>(old: &'a str, new: &'a str, context: usize) -> (usize, &'a str, &'a str) {
-    let (a, b) = (old.as_bytes(), new.as_bytes());
-    let mut pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
-    // Back up to the start of the line, then `context` more lines.
-    pre = a[..pre]
-        .iter()
-        .rposition(|&c| c == b'\n')
-        .map_or(0, |i| i + 1);
-    for _ in 0..context {
-        if pre == 0 {
-            break;
-        }
-        pre = a[..pre - 1]
-            .iter()
-            .rposition(|&c| c == b'\n')
-            .map_or(0, |i| i + 1);
-    }
-    let max_suf = a.len().min(b.len()) - pre;
-    let mut suf = a
-        .iter()
-        .rev()
-        .zip(b.iter().rev())
-        .take(max_suf)
-        .take_while(|(x, y)| x == y)
-        .count();
-    // Only drop whole lines from the end, then keep `context` of them.
-    let mut cut = a.len() - suf;
-    cut = a[cut..]
-        .iter()
-        .position(|&c| c == b'\n')
-        .map_or(a.len(), |i| cut + i + 1);
-    for _ in 0..context {
-        if cut >= a.len() {
-            break;
-        }
-        cut = a[cut..]
-            .iter()
-            .position(|&c| c == b'\n')
-            .map_or(a.len(), |i| cut + i + 1);
-    }
-    suf = a.len() - cut;
-    let lines_before = memchr::memchr_iter(b'\n', &a[..pre]).count();
-    (
-        lines_before,
-        &old[pre..old.len() - suf],
-        &new[pre..new.len() - suf],
-    )
 }
 
 pub fn capitalize(s: &str) -> String {
@@ -124,80 +94,7 @@ pub fn unescape_path(s: &str) -> String {
     s.replace("\\ ", " ")
 }
 
-/// A unique sibling temp path for an atomic write, so two writers never collide.
-fn temp_sibling(path: &Path) -> PathBuf {
-    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("file");
-    let nanos = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    path.with_file_name(format!(".{name}.{}.{nanos}.tmp", std::process::id()))
-}
-
-/// Write a file atomically: stage the bytes in a sibling temp file, flush them
-/// to disk, then rename over the target. A crash, full disk or kill mid-write
-/// leaves the original untouched rather than a truncated file — the failure
-/// mode that turns "the agent edited my file" into "the agent ate my file".
-pub async fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    use tokio::io::AsyncWriteExt;
-    // A symlink (CLAUDE.md -> AGENTS.md) is written through, as editors do:
-    // renaming over it replaced the link with a copy and left its target stale.
-    // Permission checks already judged the resolved path.
-    let resolved;
-    let path = match tokio::fs::symlink_metadata(path).await {
-        Ok(md) if md.file_type().is_symlink() => match tokio::fs::canonicalize(path).await {
-            Ok(target) => {
-                resolved = target;
-                resolved.as_path()
-            }
-            Err(_) => path,
-        },
-        _ => path,
-    };
-    // Renaming over a read-only file would succeed (only the directory's
-    // permissions count), silently defeating a `chmod a-w` meant to keep it.
-    if tokio::fs::metadata(path)
-        .await
-        .is_ok_and(|m| m.permissions().readonly())
-    {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::PermissionDenied,
-            format!("{} is read-only", path.display()),
-        ));
-    }
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
-    }
-    let tmp = temp_sibling(path);
-    let res = async {
-        let mut f = tokio::fs::File::create(&tmp).await?;
-        f.write_all(data).await?;
-        // tokio writes in the background and reports a failed write (a full
-        // disk) on the next write or flush, not from sync_all: without the
-        // flush, a short temp file was renamed over the original.
-        f.flush().await?;
-        f.sync_all().await?;
-        drop(f);
-        // And check what reached the disk before replacing anything.
-        let written = tokio::fs::metadata(&tmp).await?.len();
-        if written != data.len() as u64 {
-            return Err(std::io::Error::other(format!(
-                "short write: {written} of {} bytes",
-                data.len()
-            )));
-        }
-        // Keep the original's permissions (an executable stays executable).
-        if let Ok(md) = tokio::fs::metadata(path).await {
-            let _ = tokio::fs::set_permissions(&tmp, md.permissions()).await;
-        }
-        tokio::fs::rename(&tmp, path).await
-    }
-    .await;
-    if res.is_err() {
-        let _ = tokio::fs::remove_file(&tmp).await;
-    }
-    res
-}
+use chanto_core::fs::temp_sibling;
 
 /// Atomic write readable only by the owner (0600). For anything derived from a
 /// conversation — exports, histories — which can contain secrets.
@@ -267,17 +164,7 @@ pub fn append_private(path: &Path) -> std::io::Result<std::fs::File> {
     Ok(f)
 }
 
-/// Truncate to at most `max` bytes on a char boundary, appending a marker.
-pub fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
-        return s.to_string();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}… [truncated {} chars]", &s[..end], s.len() - end)
-}
+pub use chanto_core::text::{changed_region, truncate};
 
 /// Keep the head and tail of long output (errors usually live at the end).
 pub fn truncate_middle(s: &str, max: usize) -> String {
@@ -489,165 +376,7 @@ pub fn strip_terminal_escapes(s: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        append_private, duration, free_bytes, is_image_path, plural, short_num,
-        strip_terminal_escapes, unescape_path, write_atomic, write_private,
-    };
-    use std::path::Path;
-
-    #[cfg(unix)]
-    #[test]
-    fn reports_free_space_for_an_existing_directory() {
-        let free = free_bytes(&std::env::temp_dir()).expect("statvfs on a real directory");
-        assert!(free > 0);
-        assert_eq!(free_bytes(Path::new("/definitely/not/here")), None);
-    }
-
-    #[test]
-    fn counts_agree_with_their_nouns() {
-        assert_eq!(plural(1, "line"), "1 line");
-        assert_eq!(plural(0, "line"), "0 lines");
-        assert_eq!(plural(2, "line"), "2 lines");
-        assert_eq!(plural(1, "entry"), "1 entry");
-        assert_eq!(plural(3, "entry"), "3 entries");
-        assert_eq!(plural(2, "day"), "2 days");
-    }
-
-    #[test]
-    fn terminal_escapes_are_stripped_from_model_text() {
-        let raw = "\x1b]0;pwned\x07Hi \x1b[31mred\x1b[0m\r\nclip\x1b]52;c;ZXZpbA==\x1b\\ \x1bPdcs\x1b\\ok\x1b(B\x08\x07\u{9b}\tend\n";
-        assert_eq!(strip_terminal_escapes(raw), "Hi red\nclip ok\tend\n");
-        assert_eq!(strip_terminal_escapes("plain ünïcode ✓"), "plain ünïcode ✓");
-    }
-
-    #[test]
-    fn durations_read_in_minutes_and_hours() {
-        assert_eq!(duration(0), "0s");
-        assert_eq!(duration(59), "59s");
-        assert_eq!(duration(60), "1m 0s");
-        assert_eq!(duration(1069), "17m 49s");
-        assert_eq!(duration(3599), "59m 59s");
-        assert_eq!(duration(3600), "1h 0m");
-        assert_eq!(duration(7_500), "2h 5m");
-    }
-
-    #[tokio::test]
-    async fn atomic_write_keeps_the_original_on_failure() {
-        let dir = std::env::temp_dir().join(format!("chanto-atomic-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("a.rs");
-        std::fs::write(&f, "one\n").unwrap();
-        write_atomic(&f, b"two\n").await.unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "two\n");
-        // Writes create missing parents (the Write tool's create_dir_all).
-        let nested = dir.join("x/y/z.rs");
-        write_atomic(&nested, b"deep\n").await.unwrap();
-        assert_eq!(std::fs::read_to_string(&nested).unwrap(), "deep\n");
-        // No temp files are left behind on the happy path.
-        let leftovers: Vec<_> = std::fs::read_dir(&dir)
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_name().to_string_lossy().ends_with(".tmp"))
-            .collect();
-        assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
-        // A symlink is written through: it stays a link and its target changes.
-        #[cfg(unix)]
-        {
-            std::fs::write(dir.join("AGENTS.md"), "rule one\n").unwrap();
-            std::os::unix::fs::symlink("AGENTS.md", dir.join("CLAUDE.md")).unwrap();
-            write_atomic(&dir.join("CLAUDE.md"), b"rule ONE\n")
-                .await
-                .unwrap();
-            assert!(
-                std::fs::symlink_metadata(dir.join("CLAUDE.md"))
-                    .unwrap()
-                    .file_type()
-                    .is_symlink()
-            );
-            assert_eq!(
-                std::fs::read_to_string(dir.join("AGENTS.md")).unwrap(),
-                "rule ONE\n"
-            );
-        }
-        // A read-only file is refused, not replaced.
-        let ro = dir.join("ro.txt");
-        std::fs::write(&ro, "locked\n").unwrap();
-        let mut perms = std::fs::metadata(&ro).unwrap().permissions();
-        perms.set_readonly(true);
-        std::fs::set_permissions(&ro, perms).unwrap();
-        assert_eq!(
-            write_atomic(&ro, b"changed\n").await.unwrap_err().kind(),
-            std::io::ErrorKind::PermissionDenied
-        );
-        assert_eq!(std::fs::read_to_string(&ro).unwrap(), "locked\n");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn conversation_files_are_readable_only_by_the_owner() {
-        use std::io::Write;
-        use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("chanto-private-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let f = dir.join("export.md");
-        write_private(&f, b"secret\n").unwrap();
-        assert_eq!(std::fs::read_to_string(&f).unwrap(), "secret\n");
-        assert_eq!(
-            std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        // Rewriting an existing, world-readable file tightens its mode.
-        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o644)).unwrap();
-        write_private(&f, b"again\n").unwrap();
-        assert_eq!(
-            std::fs::metadata(&f).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        // Append-only files are created 0600 too, and an existing loose one is fixed.
-        let h = dir.join("history.jsonl");
-        std::fs::write(&h, "old\n").unwrap();
-        std::fs::set_permissions(&h, std::fs::Permissions::from_mode(0o644)).unwrap();
-        let mut fh = append_private(&h).unwrap();
-        writeln!(fh, "new").unwrap();
-        assert_eq!(
-            std::fs::metadata(&h).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-        assert!(std::fs::read_to_string(&h).unwrap().contains("new"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn short_num_abbreviates_consistently() {
-        assert_eq!(short_num(0), "0");
-        assert_eq!(short_num(999), "999");
-        assert_eq!(short_num(1_000), "1.0k");
-        assert_eq!(short_num(13_648), "13.6k");
-        assert_eq!(short_num(999_499), "999.5k");
-        // Rounds up into the next unit rather than printing 1000.0k.
-        assert_eq!(short_num(999_600), "1.0M");
-        assert_eq!(short_num(1_500_000), "1.5M");
-    }
-
-    #[test]
-    fn image_paths_are_recognized_by_extension_case_insensitively() {
-        assert!(is_image_path(Path::new("/tmp/Screen.PNG")));
-        assert!(is_image_path(Path::new("a/b/c.webp")));
-        assert!(!is_image_path(Path::new("/tmp/notes.txt")));
-        assert!(!is_image_path(Path::new("/tmp/noext")));
-    }
-
-    #[test]
-    fn shell_escaped_spaces_in_dropped_paths_are_unescaped() {
-        // This is what a terminal inserts when a file with spaces is dragged in.
-        assert_eq!(
-            unescape_path("/var/folders/x/Screenshot\\ 2026-10-12\\ at\\ 7.46.25\\ PM.png"),
-            "/var/folders/x/Screenshot 2026-10-12 at 7.46.25 PM.png"
-        );
-    }
-}
+mod tests;
 
 /// `path` with the home directory written as `~`, for display.
 pub fn tilde(path: &std::path::Path) -> String {
@@ -820,14 +549,43 @@ pub fn emoji_shortcodes(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod emoji_tests {
-    #[test]
-    fn replaces_known_shortcodes_only() {
-        use super::emoji_shortcodes as e;
-        assert_eq!(e("shipped it :tada: :+1:"), "shipped it 🎉 👍");
-        assert_eq!(e("std::io::Write and a:b:c"), "std::io::Write and a:b:c");
-        assert_eq!(e(":notanemoji: stays"), ":notanemoji: stays");
-        assert_eq!(e("time 10:30:45"), "time 10:30:45");
-        assert_eq!(e(":fire::rocket:"), "🔥🚀");
+mod emoji_tests;
+
+/// Characters that put text in front of a model that a person can't see in it:
+/// Unicode tags, which spell out hidden ASCII, and the bidi controls that make
+/// text display in a different order. Tags after a black flag are how subdivision
+/// flag emoji are spelled, so those stay. Directional marks and joiners stay too:
+/// real writing needs them.
+pub fn strip_hidden(s: &str) -> std::borrow::Cow<'_, str> {
+    let hidden = |c: char| matches!(c, '\u{E0000}'..='\u{E007F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}');
+    // This runs on every tool result, so look for the bytes they encode to and
+    // leave most text alone without decoding it.
+    let bytes = s.as_bytes();
+    let found = memchr::memchr2_iter(0xE2, 0xF3, bytes).any(|i| {
+        matches!(
+            bytes[i..],
+            [0xF3, 0xA0, 0x80 | 0x81, ..]
+                | [0xE2, 0x80, 0xAA..=0xAE, ..]
+                | [0xE2, 0x81, 0xA6..=0xA9, ..]
+        )
+    });
+    if !found {
+        return s.into();
     }
+    let mut out = String::with_capacity(s.len());
+    let mut in_flag = false;
+    for c in s.chars() {
+        if ('\u{E0000}'..='\u{E007F}').contains(&c) && in_flag {
+            out.push(c);
+            continue;
+        }
+        in_flag = c == '\u{1F3F4}';
+        if !hidden(c) {
+            out.push(c);
+        }
+    }
+    out.into()
 }
+
+#[cfg(test)]
+mod strip_hidden_tests;

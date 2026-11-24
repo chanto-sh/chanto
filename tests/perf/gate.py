@@ -6,19 +6,30 @@ Two measurements are taken against the instant mock model in
 time is zero:
 
   startup   one `-p` request: process CPU and peak RSS of a one-shot run.
+            It must also start no `git`: a question that changes nothing
+            needs no checkpoint (Unix; a logging `git` leads PATH).
   turns     40 requests that each read a 40 KB file, the same workload the
-            published benchmark uses: CPU per request and peak RSS.
+            published benchmark uses: CPU per request and peak RSS. One more
+            run of it must start no login shell: a session that runs no
+            command needs no snapshot of the user's shell setup (Unix;
+            $SHELL is a logging `bash`).
+  first screen  the interactive app's startup, in a folder of 100,000 files
+            and in an empty one: the big folder may not cost more than
+            BIG_FOLDER_SLACK_MS before the first screen, since nothing there
+            should walk the project (Unix; it runs in a pseudo-terminal).
 
 Each one is compared with the same measurement of another binary (in CI, the
 pull request's base commit built from its own source) and with a fixed
 ceiling in `tests/perf/budgets.json`. A metric fails when it is over its
 ceiling, when it is both outside `tolerance` and significantly slower than
 the base by a one-sided Mann-Whitney U test at `alpha`, or when it is slower
-by more than `large_change` whatever the p-value. Requiring a tolerance keeps
-a lucky run of a few milliseconds from failing a pull request; the hard cap
-catches a real regression that noise spread over both groups, and it only
-counts a difference larger than the clock's own step, so a single tick of a
-coarse timer is not a regression.
+by more than `large_change` and the test at least leans that way (p below
+`large_change_p`). Requiring a tolerance keeps a lucky run of a few
+milliseconds from failing a pull request; the hard cap catches a real
+regression that noise spread over both groups. It only counts a difference
+larger than a few of the clock's own steps, so a few ticks of a coarse timer are
+not a regression, and not a median that moved while the two sample sets still
+overlap evenly: a few milliseconds of runner jitter on a 30 ms startup.
 
 Runs of the two binaries are interleaved, and the binaries are measured
 through the kernel, not the wall clock, so scheduling and an idle machine do
@@ -131,7 +142,9 @@ def child_env(home, port):
 
 def wait_with_usage(binary, args, env):
     """Run one child to completion and return its usage and exit code."""
-    start = time.monotonic()
+    # perf_counter, not monotonic: Windows' monotonic clock ticks every
+    # 15.6 ms, so a quick child could measure as taking no time at all.
+    start = time.perf_counter()
     p = subprocess.Popen(
         [binary, *args],
         env=env,
@@ -151,7 +164,7 @@ def wait_with_usage(binary, args, env):
         code = p.returncode
         cpu_ms = (ru.ru_utime + ru.ru_stime) * 1000
         rss_mb = peak_rss_mb(ru)
-    return Usage(cpu_ms, rss_mb, (time.monotonic() - start) * 1000), code
+    return Usage(cpu_ms, rss_mb, (time.perf_counter() - start) * 1000), code
 
 
 def peak_rss_mb(ru):
@@ -264,6 +277,169 @@ def pinned(binary, cpus):
         raise GateError("taskset is needed to simulate a small device")
     cores = ",".join(str(i) for i in range(cpus))
     return taskset, ["-c", cores, binary]
+
+
+# Programs a one-shot question that changes nothing must not start. Each gets
+# a stub ahead of the real one on PATH that logs its arguments and then runs
+# the real program, so the run behaves as it would without the stub.
+HELPERS = ("git",)
+
+
+def helper_calls(bench, binary, runs=3):
+    """The helper programs `runs` one-shot requests started, as `name args`
+    lines. The runs share a home of their own: another binary's leftovers
+    (the base's checkpoint repository) would start legitimate maintenance,
+    and a later run catches work an earlier one exited before starting.
+
+    None on Windows, where a stub would have to be a `.cmd` file found
+    through PATHEXT, and the run would differ from a real one.
+    """
+    if sys.platform == "win32":
+        return None
+    stubs = bench.work / "helper-stubs"
+    stubs.mkdir(exist_ok=True)
+    log = bench.work / "helper-calls.log"
+    log.write_text("")
+    path = bench.env["PATH"]
+    for name in HELPERS:
+        real = shutil.which(name, path=path)
+        stub = stubs / name
+        stub.write_text(
+            "#!/bin/sh\n"
+            f"printf '%s\\n' \"{name} $*\" >> '{log}'\n"
+            + (f"exec '{real}' \"$@\"\n" if real else "exit 127\n")
+        )
+        stub.chmod(0o755)
+    home = bench.work / "helper-home"
+    shutil.rmtree(home, ignore_errors=True)
+    env = dict(
+        bench.env,
+        PATH=f"{stubs}{os.pathsep}{path}",
+        HOME=str(home),
+        CHANTO_HOME=str(home / "chanto"),
+        CHANTO_COMPAT_HOME=str(home / "compat"),
+    )
+    for _ in range(runs):
+        _, code = wait_with_usage(binary, ["-p", "hello", "--cwd", str(bench.work)], env)
+        if code != 0:
+            raise GateError(f"{binary} exited {code} on a one-shot run")
+    return [line for line in log.read_text().splitlines() if line]
+
+
+def shell_starts(binary, work, home, project):
+    """The login shells a read-only session started, as the arguments each was
+    given. The session reads a file and answers, running no command, so it
+    needs no snapshot of the user's shell setup. $SHELL is a stub that logs
+    its arguments and runs the real bash, so the run behaves as it would
+    without it.
+
+    It runs as the published benchmark does, with permissions bypassed so
+    Bash is offered (a `-p` run in the default mode leaves it out). The first
+    reply takes a second, as a real model's does: a build that starts the
+    capture early reaches the shell every time, instead of only when the
+    instant mock happens to be slower than it.
+
+    None on Windows, which has no login shell to snapshot.
+    """
+    if sys.platform == "win32":
+        return None
+    real = shutil.which("bash")
+    stub = work / "shell-stub" / "bash"
+    stub.parent.mkdir(exist_ok=True)
+    log = work / "shell-starts.log"
+    log.write_text("")
+    stub.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"bash $*\" >> '{log}'\n"
+        + (f"exec '{real}' \"$@\"\n" if real else "exit 127\n")
+    )
+    stub.chmod(0o755)
+    scenario = work / "read-once.json"
+    scenario.write_text(json.dumps([
+        {"sleep_s": 1, "tool_calls": [{"name": "Read", "args": {"file_path": "f0.txt"}}]},
+        {"text": "done."},
+    ]))
+    mock, port = mock_start(scenario, work / "read-once.log")
+    try:
+        _, code = wait_with_usage(
+            binary,
+            ["-p", "--mode", "bypassPermissions", "read f0.txt", "--cwd", str(project)],
+            dict(child_env(home, port), SHELL=str(stub)),
+        )
+    finally:
+        mock.kill()
+    if code != 0:
+        raise GateError(f"{binary} exited {code} in the read-only session")
+    # A login shell started counts as one `bash -i -l` call; the capture
+    # script it was given spans several lines.
+    return [line for line in log.read_text().splitlines() if line.startswith("bash ")]
+
+
+# How much longer the first screen may take in a folder of 100,000 files than
+# in an empty one. A walk of that folder before the first screen costs over
+# 100 ms (the secret-file scan once did); without one the two match within a
+# few milliseconds.
+BIG_FOLDER_SLACK_MS = 50
+
+
+def first_screen_ms(binary, cwd, home):
+    """Milliseconds from the interactive app's start to its first screen
+    (`setup done` in CHANTO_TIMING's log), run in a pseudo-terminal in `cwd`."""
+    import fcntl, pty, re, select, signal, struct, termios
+
+    env = dict(child_env(home, 1), CHANTO_TIMING="1", TERM="xterm-256color")
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.chdir(cwd)
+        os.execve(binary, [binary], env)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 120, 0, 0))
+    out, found, start = b"", None, time.monotonic()
+    while found is None and time.monotonic() - start < 20:
+        if select.select([fd], [], [], 0.05)[0]:
+            try:
+                out += os.read(fd, 65536)
+            except OSError:
+                break
+        found = re.search(rb"\[timing\]\s+([\d.]+) ms\s+setup done", out)
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+    os.close(fd)
+    if found is None:
+        raise GateError(f"{binary} never reached its first screen in {cwd}")
+    return float(found.group(1))
+
+
+def big_folder_startup(binary, work, runs=3):
+    """The interactive app's median time to its first screen in an empty
+    folder and in one of 100,000 files: {"empty_ms", "big_ms"}.
+
+    None on Windows, which has no pseudo-terminal of this kind.
+    """
+    if sys.platform == "win32":
+        return None
+    root = work / "first-screen"
+    home = root / "home"
+    (home / "chanto").mkdir(parents=True, exist_ok=True)
+    # Answers the first-run question about error reports, which would
+    # otherwise come before the first screen.
+    (home / "chanto" / "config.toml").write_text("[feedback]\nshare_errors = false\n")
+    empty = root / "empty"
+    empty.mkdir(exist_ok=True)
+    big = root / "big"
+    for i in range(1000):
+        d = big / f"pkg{i}"
+        d.mkdir(parents=True, exist_ok=True)
+        for j in range(100):
+            (d / f"f{j}").touch()
+    times = {"empty_ms": [], "big_ms": []}
+    for _ in range(runs):
+        times["empty_ms"].append(first_screen_ms(binary, empty, home))
+        times["big_ms"].append(first_screen_ms(binary, big, home))
+    return {k: statistics.median(v) for k, v in times.items()}
+
+
+def big_folder_slow(big_folder):
+    return big_folder is not None and big_folder["big_ms"] - big_folder["empty_ms"] > BIG_FOLDER_SLACK_MS
 
 
 class StartupBench:
@@ -416,6 +592,13 @@ def mann_whitney_greater(base, head):
     return 0.5 * math.erfc(z / math.sqrt(2))
 
 
+# On a coarse clock the same code's median moves by this many of its steps from
+# one run to the next: Windows' per-request CPU swung -19% to +15% across 12 runs
+# on unrelated changes, in ticks of 0.39 ms. Only more than that is a large change.
+# A real shift smaller than this still fails on significance.
+LARGE_CHANGE_TICKS = 3
+
+
 def clock_step(samples):
     """The smallest positive gap between two measured values.
 
@@ -455,7 +638,7 @@ def binary_mb(path):
     return Path(path).stat().st_size / 1e6
 
 
-def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
+def judge(metric, base, head, budget, tolerance, alpha, large_change=None, large_change_p=1.0):
     """Apply the ceiling and the significance test to one metric."""
     head_value = aggregate(metric, head)
     base_value = aggregate(metric, base) if base else None
@@ -470,12 +653,16 @@ def judge(metric, base, head, budget, tolerance, alpha, large_change=None):
             p_value = mann_whitney_greater(base, head)
             significant = p_value < alpha
         # A small-sample test can miss a large regression that noise spreads
-        # over both groups; a jump this big fails without asking for a p-value.
-        # A difference the clock cannot resolve is never such a jump.
+        # over both groups; a jump this big fails on a weak p-value too. Not on
+        # none at all: a median can move this far by chance on a short metric
+        # while the two sets overlap evenly. A difference the clock cannot
+        # resolve is never such a jump.
         too_big = (
             large_change is not None
             and change > large_change
-            and head_value - base_value > clock_step(base + head)
+            and head_value - base_value > LARGE_CHANGE_TICKS * clock_step(base + head)
+            and p_value is not None
+            and p_value < large_change_p
         )
     if over_budget or significant or too_big:
         verdict = "fail"
@@ -536,10 +723,13 @@ def run(head, base, config, device=False):
                     if i >= warmup:
                         samples[name]["startup_cpu_ms"].append(usage.cpu_ms)
                         samples[name]["startup_rss_mb"].append(usage.rss_mb)
+            helpers = helper_calls(bench, head)
         finally:
             bench.close()
 
         project, scenario = write_turn_scenario(work, turns, blob_kb)
+        shells = shell_starts(head, work, home, project)
+        big_folder = big_folder_startup(head, work)
         for i in range(warmup + reps["turns"]):
             for name, binary in alternating(binaries, i):
                 usage = turn_run(
@@ -567,6 +757,7 @@ def run(head, base, config, device=False):
             cfg["tolerance"][metric],
             cfg["alpha"],
             cfg["large_change"],
+            cfg["large_change_p"],
         )
     metrics["binary_mb"] = judge_size(
         binary_mb(base) if base else None,
@@ -580,6 +771,9 @@ def run(head, base, config, device=False):
         "workload": cfg["workload"],
         "reps": reps,
         "metrics": metrics,
+        "helpers": helpers,
+        "shells": shells,
+        "big_folder": big_folder,
     }
     if device_metrics is not None:
         report["device"] = {
@@ -587,7 +781,7 @@ def run(head, base, config, device=False):
             "reps": cfg["device"]["reps"],
             "metrics": device_metrics,
         }
-    report["ok"] = all(
+    report["ok"] = not helpers and not shells and not big_folder_slow(big_folder) and all(
         m["verdict"] == "pass"
         for group in (report["metrics"], report.get("device", {}).get("metrics", {}))
         for m in group.values()
@@ -632,6 +826,25 @@ def markdown(report):
             f"| {label(metric)} | {number(m['base'])} | {number(m['head'])} | "
             f"{change} | {number(m['budget'])} | {verdict} |"
         )
+    helpers = report.get("helpers")
+    if helpers is not None:
+        lines.append(
+            f"| Helper programs ({', '.join(HELPERS)}) | | {len(helpers)} | | 0 | "
+            f"{'pass' if not helpers else 'fail'} |"
+        )
+    shells = report.get("shells")
+    if shells is not None:
+        lines.append(
+            f"| Login shells, read-only session | | {len(shells)} | | 0 | "
+            f"{'pass' if not shells else 'fail'} |"
+        )
+    big_folder = report.get("big_folder")
+    if big_folder is not None:
+        extra = big_folder["big_ms"] - big_folder["empty_ms"]
+        lines.append(
+            f"| First screen, 100,000-file folder vs empty (ms) | | {extra:+.1f} | | "
+            f"{BIG_FOLDER_SLACK_MS} | {'fail' if big_folder_slow(big_folder) else 'pass'} |"
+        )
     passing = [label(k) for k, m in report["metrics"].items() if m["verdict"] == "pass"]
     device = report.get("device", {})
     if report["ok"]:
@@ -644,6 +857,16 @@ def markdown(report):
         lines += [""]
         if failed:
             lines += ["**A metric regressed:** " + ", ".join(failed)]
+        if helpers:
+            lines += ["**A one-shot question started a helper program it doesn't need:** "
+                      + "; ".join(f"`{c}`" for c in helpers[:5])]
+        if shells:
+            lines += ["**A session that ran no command started a login shell:** "
+                      + "; ".join(f"`{c[:80]}`" for c in shells[:3])]
+        if big_folder_slow(big_folder):
+            lines += ["**The first screen waits on the folder it starts in:** "
+                      f"{big_folder['big_ms']:.0f} ms in 100,000 files against "
+                      f"{big_folder['empty_ms']:.0f} ms in an empty folder"]
         if failed_device:
             lines += ["**The small device could not keep up:** "
                       + ", ".join(failed_device)]

@@ -24,10 +24,17 @@ def run(code):
 
 class UsageTest(unittest.TestCase):
     def test_a_finished_child_reports_cpu_time_and_peak_memory(self):
-        usage, code = run("sum(range(200000))")
+        # Spin for 50 ms of the child's own CPU time: Windows counts CPU in
+        # 15.6 ms ticks, and a fixed sum on a fast runner could finish, start-up
+        # included, inside one tick and read as 0.
+        usage, code = run(
+            "import time\n"
+            "end = time.process_time() + 0.05\n"
+            "while time.process_time() < end:\n"
+            "    pass"
+        )
         self.assertEqual(code, 0)
-        # A Python start-up is milliseconds of CPU and megabytes of memory;
-        # the point is that the kernel reported something, not the value.
+        # The point is that the kernel reported something, not the value.
         self.assertGreater(usage.cpu_ms, 0)
         self.assertGreater(usage.rss_mb, 1)
         self.assertLess(usage.rss_mb, 4096)
@@ -40,8 +47,16 @@ class UsageTest(unittest.TestCase):
 
     def test_more_work_costs_more_cpu(self):
         idle, _ = run("pass")
-        busy, _ = run("sum(range(4000000))")
-        self.assertGreater(busy.cpu_ms, idle.cpu_ms)
+        # Spin for 300 ms of the child's own CPU time rather than a fixed
+        # amount of work: Windows counts CPU in 15.6 ms ticks, and on a fast
+        # runner a fixed sum took as many ticks as starting Python did.
+        busy, _ = run(
+            "import time\n"
+            "end = time.process_time() + 0.3\n"
+            "while time.process_time() < end:\n"
+            "    pass"
+        )
+        self.assertGreater(busy.cpu_ms, idle.cpu_ms + 150)
 
     def test_the_exit_code_is_reported(self):
         _, code = run("raise SystemExit(3)")

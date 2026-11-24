@@ -88,6 +88,24 @@ pub(super) fn attachments_dir() -> std::path::PathBuf {
     d
 }
 
+/// Save text too large to send, readable only by this user, and return its path.
+pub(super) fn save_oversized_text(text: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    let path = attachments_dir().join(format!(
+        "pasted-{}.txt",
+        &uuid::Uuid::new_v4().simple().to_string()[..12]
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(&path)?.write_all(text.as_bytes())?;
+    Ok(path)
+}
+
 /// The image files in a paste or drag-and-drop: one path, or several separated
 /// by spaces (Unix terminals escape spaces inside a dropped path as `\ `),
 /// possibly quoted. On Windows a backslash is the path separator, never an

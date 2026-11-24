@@ -5,6 +5,8 @@
 #   (the main ruleset requires this check before merging);
 # - a Developer Certificate of Origin sign-off on every commit in a pull
 #   request, from the commit's author (bots excepted);
+# - a changelog.d fragment for a user-visible pull request (feat, fix,
+#   perf), or a `Changelog: none (<why>)` line in its description;
 # - every commit pushed to main, which catches a direct push that bypassed
 #   the pull request flow.
 name: commits
@@ -24,8 +26,9 @@ jobs:
   hook-tests:
     name: commit-msg hook tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: sh .githooks/test-commit-msg.sh
@@ -34,8 +37,9 @@ jobs:
     name: PR title
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       # The title goes through the environment, never into the script text,
@@ -55,43 +59,67 @@ jobs:
     name: PR description
     if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # The body goes through the environment, never into the script text.
       # Each section from .github/pull_request_template.md must have text of
-      # its own, not just the template's comments.
+      # its own, not just the template's comments. scripts/pr.sh runs the same
+      # script before calling gh.
       - env:
           BODY: ${{ github.event.pull_request.body }}
-        run: |
-          python3 - <<'PY'
-          import os, re, sys
-          raw = os.environ.get("BODY") or ""
-          # A squash merge copies the description into the commit on main, so
-          # it follows the commit message rule on AI attribution
-          # (.githooks/commit-msg): checked here, before it can land.
-          ai = "claude|anthropic|openai|gpt|copilot|gemini|cursor|codex|devin"
-          credits = (
-              re.search(rf"co-authored-by:.*({ai})", raw, re.I)
-              or re.search(r"(generated|written|created|made) with .*(claude|copilot|chatgpt|gpt|cursor|codex|gemini|devin)", raw, re.I)
-              or re.search(r"Generated with \[Claude Code\]|\U0001F916", raw)
-          )
-          if credits:
-              print(f"::error::The PR description credits an AI assistant ({credits.group(0)!r}); remove the attribution, since a squash merge copies it into the commit on main.")
-          body = re.sub(r"<!--.*?-->", "", raw, flags=re.S)
-          sections = {}
-          for m in re.finditer(r"^##\s+(.+?)\s*$\n(.*?)(?=^##\s|\Z)", body, re.M | re.S):
-              sections[m.group(1).strip().lower()] = m.group(2).strip()
-          missing = [s for s in ("What this changes", "Testing") if not sections.get(s.lower())]
-          for s in missing:
-              print(f"::error::The PR description needs a filled-in '## {s}' section (see .github/pull_request_template.md).")
-          sys.exit(1 if missing or credits else 0)
-          PY
+        run: printf '%s' "$BODY" | python3 scripts/check-pr.py
+
+  # A pull request whose title says users can notice it (feat, fix, perf)
+  # adds a changelog.d fragment, or its description says why it needs none
+  # (`Changelog: none (<why>)`). Reruns when the description is edited.
+  changelog:
+    name: changelog entry
+    if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      # The title and body go through the environment, never into the script.
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 packaging/changelog.py --require --base "$BASE" --head "$HEAD"
+
+  tests-changed:
+    name: tests changed
+    if: github.event_name == 'pull_request' && !endsWith(github.event.pull_request.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      # The title and body go through the environment, never into the script.
+      - env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 scripts/test_gate.py require --base "$BASE" --head "$HEAD"
 
   sign-off:
     name: DCO sign-off
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -117,8 +145,9 @@ jobs:
     name: commits on main
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0

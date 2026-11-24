@@ -247,6 +247,7 @@ impl App {
         if self.help {
             self.draw_help(f, area);
         }
+        self.paint_hover(f);
         // The overlay owns the screen: nothing under it should appear selected.
         if let Some(sel) = self.selection.filter(|_| !self.help) {
             self.paint_selection(f, sel);
@@ -841,7 +842,7 @@ impl App {
                     crate::util::short_num(toks as u64)
                 ));
             }
-            detail.push_str(" · esc to interrupt)");
+            detail.push_str(" · esc to interrupt · ctrl+x ctrl+s to send)");
             lines.push(Line::from({
                 let mut spans = vec![Span::styled(
                     format!(" {frame} "),
@@ -928,7 +929,13 @@ impl App {
                 Some((kind, id, false)) => format!(
                     "{kind} ({id}) runs in the foreground and can't take messages · esc returns to main"
                 ),
-                None if self.busy => "Type a message…".to_string(),
+                None if self.busy => {
+                    // While a turn runs these are the ways to get a message in;
+                    // the status bar repeats send-now once text replaces this
+                    // placeholder.
+                    "Type a message… · ctrl+x ctrl+s sends now · enter waits for its next step"
+                        .to_string()
+                }
                 None if self
                     .blocks
                     .iter()
@@ -965,8 +972,10 @@ impl App {
                 ])),
             }
         } else {
+            // A `!shell` line's own `!` is its marker, in the marker's colour.
+            let shell_mark = Style::default().fg(pal().code_block);
             let marker = if shell {
-                ("! ".to_string(), Style::default().fg(pal().code_block))
+                ("  ".to_string(), Style::default())
             } else {
                 ("> ".to_string(), Style::default().fg(pal().dim))
             };
@@ -980,7 +989,14 @@ impl App {
                 // all one colour already, so it isn't re-styled.
                 let mut spans = vec![Span::styled(p.0, p.1)];
                 if shell {
-                    spans.push(Span::raw(r.clone()));
+                    match r.split_once('!').filter(|_| i == 0) {
+                        Some((before, after)) => {
+                            spans.push(Span::raw(before.to_string()));
+                            spans.push(Span::styled("!", shell_mark));
+                            spans.push(Span::raw(after.to_string()));
+                        }
+                        None => spans.push(Span::raw(r.clone())),
+                    }
                 } else {
                     spans.extend(input_row_spans(r, i == 0));
                 }

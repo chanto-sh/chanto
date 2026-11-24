@@ -446,10 +446,25 @@ fn effort_maps_to_each_api() {
         max_tokens: Some(4000),
         json: false,
     };
-    // Responses: `max` is capped at `xhigh`; thinking off stays `low`.
+    // Responses: `max` from GPT-5.6 on, capped at `xhigh` before it; `ultra`
+    // is `xhigh` everywhere; thinking off stays `low`.
+    for (model, effort, sent) in [
+        ("gpt-6", "max", "max"),
+        ("gpt-6.1-sol", "max", "max"),
+        ("gpt-5.6-sol", "max", "max"),
+        ("gpt-5.5", "max", "xhigh"),
+        ("gpt-6.1-sol", "ultra", "xhigh"),
+        ("gpt-5.5", "ultra", "xhigh"),
+    ] {
+        assert_eq!(
+            responses::body(&req(model, true, effort))["reasoning"]["effort"],
+            sent,
+            "{model} {effort}"
+        );
+    }
     assert_eq!(
-        responses::body(&req("gpt-6", true, "max"))["reasoning"]["effort"],
-        "xhigh"
+        responses::body(&req("gpt-6.1-sol", false, "ultra"))["reasoning"]["effort"],
+        "low"
     );
     assert_eq!(
         responses::body(&req("gpt-6", true, "high"))["reasoning"]["effort"],
@@ -678,6 +693,30 @@ async fn live_smoke() {
 }
 
 #[tokio::test]
+async fn a_model_list_without_a_size_is_remembered_but_an_unreachable_server_is_not() {
+    let j = |v: Value| v.to_string().into_bytes();
+    // DeepSeek's shape: the list answers but names no window, and there is no
+    // `/model/info`. Asking again on every start cost each launch ~600 ms.
+    let (base, seen) = super::mock::serve_bytes(vec![
+        (200, "application/json", j(json!({"data": [{"id": "m"}]}))),
+        (404, "application/json", j(json!({}))),
+    ])
+    .await;
+    let p = Provider::new(ProviderKind::Openai, &base, None, 32768);
+    assert_eq!(p.model_info("m").await, None);
+    let asked = seen.lock().unwrap().headers.len();
+    assert_eq!(asked, 2);
+    // The next start answers from the cache, without a request.
+    assert_eq!(p.model_info("m").await, None);
+    assert_eq!(seen.lock().unwrap().headers.len(), asked);
+    // A server that can't be reached is asked again next time.
+    let down = "http://127.0.0.1:9";
+    let p = Provider::new(ProviderKind::Openai, down, None, 32768);
+    assert_eq!(p.model_info("m").await, None);
+    assert_eq!(super::model_info_cached(down, "m"), None);
+}
+
+#[tokio::test]
 async fn openai_compatible_servers_report_their_context_window() {
     let j = |v: Value| v.to_string().into_bytes();
     // vLLM-style: the model list carries the window.
@@ -778,7 +817,7 @@ async fn deepseek_reasoning_content_goes_back_with_its_assistant_turn() {
     // Another model never gets this model's reasoning.
     let fields = json!({});
     let other =
-        serde_json::to_value(Provider::openai_body(&fields, &history, "other-model")).unwrap();
+        serde_json::to_value(Provider::openai_body(&fields, &[], &history, "other-model")).unwrap();
     assert!(other["messages"][1].get("reasoning_content").is_none());
 }
 
@@ -1243,4 +1282,233 @@ async fn a_coding_plan_without_a_model_list_offers_its_documented_models() {
     p.base_url = format!("{base}/coding/v1");
     assert_eq!(p.list_models().await.unwrap(), vec!["kimi-for-coding"]);
     assert!(p.list_models().await.is_err());
+}
+
+#[tokio::test]
+async fn opencode_go_sends_the_conversation_session_id() {
+    let _g = crate::compat::TEST_HOME_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let d = std::env::temp_dir().join(format!("chanto-opencode-go-{}", uuid::Uuid::new_v4()));
+    let saved_home = std::env::var_os("CHANTO_HOME");
+    unsafe { std::env::set_var("CHANTO_HOME", &d) };
+    let result = async {
+        crate::auth::set_as(
+            "opencode-go",
+            None,
+            crate::auth::Credential::ApiKey {
+                key: "oc_sk_go".into(),
+            },
+        )
+        .unwrap();
+        let mut p = builtin_provider("opencode-go", "kimi-k3").unwrap();
+        assert_eq!(p.base_url, "https://opencode.ai/inference/go/openai/v1");
+        assert!(p.opencode_go);
+        assert_eq!(
+            p.models_url.as_deref(),
+            Some("https://opencode.ai/inference/go/v1/models")
+        );
+        let reply = chat_sse(&[json!({
+            "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]
+        })]);
+        let (base, seen) = serve(vec![(200, reply)]).await;
+        p.with_session_id(Some("ses_conversation"));
+        p.base_url = format!("{base}/openai/v1");
+        let r = p
+            .chat(&chat_req("kimi-k3", vec![Message::user("hi")]), &mut |_| {})
+            .await
+            .unwrap();
+        assert_eq!(r.text, "ok");
+        let head = seen.lock().unwrap().headers[0].to_ascii_lowercase();
+        assert!(
+            head.contains("x-opencode-session: ses_conversation"),
+            "{head}"
+        );
+        assert!(
+            head.contains("authorization: bearer oc_sk_go") && head.contains("user-agent: chanto/"),
+            "{head}"
+        );
+        // A one-shot run with no Chanto session gets one id per process.
+        let reply = chat_sse(&[json!({
+            "choices": [{"delta": {"content": "ok"}, "finish_reason": "stop"}]
+        })]);
+        let (base, seen) = serve(vec![(200, reply)]).await;
+        let mut p = Provider::new(
+            ProviderKind::Openai,
+            "https://opencode.ai/inference/go/openai/v1",
+            Some("k".into()),
+            1000,
+        );
+        p.with_session_id(None);
+        p.base_url = format!("{base}/openai/v1");
+        p.chat(&chat_req("kimi-k3", vec![Message::user("hi")]), &mut |_| {})
+            .await
+            .unwrap();
+        let head = seen.lock().unwrap().headers[0].to_ascii_lowercase();
+        assert!(head.contains("x-opencode-session: chanto-"), "{head}");
+        // The Zen (pay-as-you-go) endpoint takes no session id.
+        let mut zen = Provider::new(
+            ProviderKind::Openai,
+            "https://opencode.ai/zen/v1",
+            Some("k".into()),
+            1000,
+        );
+        zen.with_session_id(Some("ses_conversation"));
+        assert!(!zen.opencode_go && zen.headers.is_empty());
+    };
+    let result = futures::FutureExt::catch_unwind(std::panic::AssertUnwindSafe(result)).await;
+    unsafe {
+        match saved_home {
+            Some(home) => std::env::set_var("CHANTO_HOME", home),
+            None => std::env::remove_var("CHANTO_HOME"),
+        }
+    }
+    let _ = std::fs::remove_dir_all(d);
+    if let Err(e) = result {
+        std::panic::resume_unwind(e);
+    }
+}
+
+#[tokio::test]
+async fn a_models_url_lists_openai_and_cloud_shapes() {
+    // OpenCode Go answers with OpenAI's `{"object":"list","data":[…]}`, while
+    // Chanto cloud's catalog uses `{"models":[…]}`; both must list.
+    let mut p = Provider::new(ProviderKind::Openai, "http://127.0.0.1:1/v1", None, 1000);
+    let (base, seen) = serve(vec![
+        (
+            200,
+            json!({"object": "list", "data": [{"id": "kimi-k3"}, {"id": "glm-5.3"}]}).to_string(),
+        ),
+        (200, json!({"models": [{"id": "chanto-model"}]}).to_string()),
+    ])
+    .await;
+    p.models_url = Some(format!("{base}/v1/models"));
+    assert_eq!(p.list_models().await.unwrap(), vec!["kimi-k3", "glm-5.3"]);
+    assert_eq!(p.list_models().await.unwrap(), vec!["chanto-model"]);
+    assert!(seen.lock().unwrap().headers[0].starts_with("GET /v1/models "));
+}
+
+/// Each body through a fresh mock server: the error text, or the response.
+async fn chat_each(kind: ProviderKind, bodies: Vec<String>) -> Vec<Result<ChatResponse, String>> {
+    let mut out = Vec::new();
+    for body in bodies {
+        let (base, _) = serve(vec![(200, body)]).await;
+        let base = match kind {
+            ProviderKind::Anthropic => base,
+            _ => format!("{base}/v1"),
+        };
+        let p = Provider::new(kind, &base, Some("k-test".into()), 200_000);
+        let req = ChatRequest {
+            tools: vec![read_tool()],
+            ..chat_req("m", vec![Message::user("hi".to_string())])
+        };
+        out.push(
+            p.chat(&req, &mut |_| {})
+                .await
+                .map_err(|e| format!("{e:#}")),
+        );
+    }
+    out
+}
+
+#[tokio::test]
+async fn an_anthropic_stream_cut_off_before_message_stop_is_an_error() {
+    let ev = |v: Value| (v["type"].as_str().unwrap().to_string(), v);
+    let tool = vec![
+        ev(
+            json!({"type": "message_start", "message": {"usage": {"input_tokens": 5, "output_tokens": 1}}}),
+        ),
+        ev(
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {}}}),
+        ),
+        ev(
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": "{\"command\":\"rm -rf build/ca"}}),
+        ),
+    ];
+    let text = vec![
+        tool[0].clone(),
+        ev(
+            json!({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        ),
+        ev(
+            json!({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "The answer is"}}),
+        ),
+    ];
+    let mut whole = text.clone();
+    whole.extend([
+        ev(json!({"type": "content_block_stop", "index": 0})),
+        ev(
+            json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+        ),
+        ev(json!({"type": "message_stop"})),
+    ]);
+    let sse_of = |evs: &[(String, Value)]| {
+        let evs: Vec<(&str, Value)> = evs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        sse(&evs)
+    };
+    let r = chat_each(
+        ProviderKind::Anthropic,
+        vec![sse_of(&tool), sse_of(&text), sse_of(&whole)],
+    )
+    .await;
+    for e in &r[..2] {
+        let e = e.as_ref().unwrap_err();
+        assert!(e.contains(CUT_OFF) && e.contains("message_stop"), "{e}");
+    }
+    let ok = r[2].as_ref().unwrap();
+    assert_eq!(ok.text, "The answer is");
+    assert_eq!(ok.finish_reason.as_deref(), Some("stop"));
+}
+
+#[tokio::test]
+async fn a_responses_stream_cut_off_before_completed_is_an_error_not_a_repaired_call() {
+    let ev = |v: Value| (v["type"].as_str().unwrap().to_string(), v);
+    let tool = vec![
+        ev(
+            json!({"type": "response.output_item.added", "output_index": 0, "item": {"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "Bash", "arguments": ""}}),
+        ),
+        ev(
+            json!({"type": "response.function_call_arguments.delta", "output_index": 0, "delta": "{\"command\":\"rm -rf build/ca"}),
+        ),
+    ];
+    let text = vec![ev(
+        json!({"type": "response.output_text.delta", "output_index": 0, "delta": "The answer is"}),
+    )];
+    let mut whole = text.clone();
+    whole.push(ev(
+        json!({"type": "response.completed", "response": {"status": "completed", "usage": {"input_tokens": 5, "output_tokens": 3}}}),
+    ));
+    // Hitting the output cap still ends the stream properly, as `length`.
+    let mut capped = tool.clone();
+    capped.push(ev(
+        json!({"type": "response.incomplete", "response": {"status": "incomplete", "incomplete_details": {"reason": "max_output_tokens"}, "usage": {"input_tokens": 5, "output_tokens": 3}}}),
+    ));
+    let sse_of = |evs: &[(String, Value)]| {
+        let evs: Vec<(&str, Value)> = evs.iter().map(|(k, v)| (k.as_str(), v.clone())).collect();
+        sse(&evs)
+    };
+    let r = chat_each(
+        ProviderKind::OpenaiResponses,
+        vec![
+            sse_of(&tool),
+            sse_of(&text),
+            sse_of(&whole),
+            sse_of(&capped),
+        ],
+    )
+    .await;
+    for e in &r[..2] {
+        let e = e.as_ref().unwrap_err();
+        assert!(
+            e.contains(CUT_OFF) && e.contains("response.completed"),
+            "{e}"
+        );
+    }
+    let ok = r[2].as_ref().unwrap();
+    assert_eq!(ok.text, "The answer is");
+    assert_eq!(ok.finish_reason.as_deref(), Some("stop"));
+    assert_eq!(
+        r[3].as_ref().unwrap().finish_reason.as_deref(),
+        Some("length")
+    );
 }

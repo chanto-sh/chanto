@@ -8,6 +8,16 @@ use super::anthropic::sse_json;
 use super::*;
 
 /// Models that accept `reasoning` (and reject sampling parameters).
+/// The highest effort a model takes: `max` from GPT-5.6 on.
+fn effort_cap(model: &str) -> &'static str {
+    let m = model.to_ascii_lowercase();
+    if m.starts_with("gpt-6") || m.starts_with("gpt-5.6") {
+        "max"
+    } else {
+        "xhigh"
+    }
+}
+
 pub(super) fn reasoning_model(m: &str) -> bool {
     let m = m.to_ascii_lowercase();
     m.starts_with("o1")
@@ -41,7 +51,7 @@ pub(super) fn body(req: &ChatRequest) -> Value {
             input.push(user_images(&std::mem::take(&mut pending_images)));
         }
         match m.role {
-            Role::System if input.is_empty() => instructions.push(m.content.clone()),
+            Role::System if input.is_empty() => instructions.push(String::clone(&m.content)),
             Role::System => input.push(json!({"role": "developer", "content": m.content})),
             Role::User => {
                 let mut parts = vec![json!({"type": "input_text", "text": m.content})];
@@ -101,7 +111,11 @@ pub(super) fn body(req: &ChatRequest) -> Value {
         let effort = if req.think == Some(false) {
             "low"
         } else {
-            effort_for(req, "xhigh").unwrap_or("medium")
+            if req.think != Some(false) && req.effort.as_deref() == Some("ultra") {
+                "xhigh"
+            } else {
+                effort_for(req, effort_cap(&req.model)).unwrap_or("medium")
+            }
         };
         body["reasoning"] = json!({"effort": effort, "summary": "auto"});
         body["include"] = json!(["reasoning.encrypted_content"]);
@@ -150,6 +164,8 @@ impl Provider {
         let mut done: std::collections::BTreeMap<u64, Value> = Default::default();
         let mut refused = false;
         let mut refusal_text_sent = false;
+        // A terminal event arrived: the body didn't just end early.
+        let mut finished = false;
         sse_json(self.body(resp), |v| {
             let idx = v["output_index"].as_u64().unwrap_or(0);
             match v["type"].as_str().unwrap_or("") {
@@ -188,6 +204,9 @@ impl Provider {
                 "response.output_item.added" => {
                     let it = &v["item"];
                     if it["type"] == "function_call" {
+                        if let Some(name) = it["name"].as_str().filter(|n| !n.is_empty()) {
+                            on_delta(Delta::ToolCall(name.to_string()));
+                        }
                         partial.insert(
                             idx,
                             (
@@ -221,6 +240,7 @@ impl Provider {
                     out.usage.cached_tokens = r["usage"]["input_tokens_details"]["cached_tokens"]
                         .as_u64()
                         .unwrap_or(0);
+                    finished = true;
                     let reason = r["incomplete_details"]["reason"].as_str();
                     out.finish_reason = Some(match reason {
                         Some("max_output_tokens") => "length".into(),
@@ -263,6 +283,12 @@ impl Provider {
             Ok(true)
         })
         .await?;
+        // Without `response.completed` (or `.incomplete`/`.failed`) the
+        // connection dropped: a function call's arguments may be cut short,
+        // and repairing them would run a truncated command.
+        if !finished {
+            bail!("{CUT_OFF} its reply (no response.completed)");
+        }
         // Prefer completed items; fall back to what streamed.
         for (i, (call_id, name, args)) in &partial {
             let item = done.get(i);

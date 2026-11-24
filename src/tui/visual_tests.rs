@@ -55,7 +55,7 @@ fn fixture(case: &str, now: Instant, unix: i64) -> (TestApp, Replies) {
             };
             t.on_agent(Event::ToolStart {
                 id: "poll-1".into(),
-                label: "BashOutput(Build release binary · bash_6)".into(),
+                label: "BashOutput(Build release binary)".into(),
                 parent: None,
             });
             if let Some(progress) = progress {

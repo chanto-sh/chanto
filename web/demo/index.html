@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chanto in the browser</title>
+<style>
+  :root { --bg: #fbfaf7; --fg: #1d1d1b; --muted: #6b6a66; --line: #e2e0da; --panel: #ffffff; --accent: #c2410c; --ok: #15803d; --bad: #b91c1c; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #141412; --fg: #ecebe6; --muted: #9b9a94; --line: #2c2b28; --panel: #1c1b19; --accent: #fb923c; --ok: #4ade80; --bad: #f87171; } }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .grid { display: grid; grid-template-columns: 280px 1fr; gap: 16px; margin-top: 16px; }
+  .grid.even { grid-template-columns: 1fr 1fr; }
+  @media (max-width: 760px) { .grid, .grid.even { grid-template-columns: 1fr; } }
+  .presets button { background: none; color: var(--fg); border: 1px solid var(--line); font-weight: 400; font-size: 13px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+  select, input, button, textarea { font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  button { cursor: pointer; background: var(--accent); color: #fff; border: 0; font-weight: 600; }
+  button:disabled { opacity: .5; cursor: default; }
+  textarea { width: 100%; min-height: 64px; resize: vertical; }
+  pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  #files button { display: block; width: 100%; text-align: left; background: none; color: var(--fg); padding: 4px 6px; font: 13px ui-monospace, Menlo, monospace; border-radius: 6px; }
+  #files button:hover, #files button.on { background: var(--line); }
+  #log { max-height: 420px; overflow: auto; }
+  .ev { padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .ev .k { color: var(--muted); font-size: 12px; }
+  .ev.err { color: var(--bad); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 4px 6px; border-bottom: 1px solid var(--line); }
+  th:first-child, td:first-child { text-align: left; }
+  .stat { display: inline-block; margin-right: 18px; }
+  .stat b { font-size: 18px; display: block; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--muted); font-size: 12px; }
+  #warn { color: var(--bad); }
+  .bar { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .2s; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Chanto in your browser</h1>
+  <p class="lead">The agent runs as WebAssembly on a small project held in memory; the model runs on your GPU through WebGPU. Nothing is sent to a server.</p>
+  <p id="warn"></p>
+
+  <div class="panel">
+    <h2>Startup</h2>
+    <div class="row" id="startup">
+      <div class="stat"><b id="s-wasm">–</b><span>agent download (gzip)</span></div>
+      <div class="stat"><b id="s-init">–</b><span>agent start</span></div>
+      <div class="stat"><b id="s-model">–</b><span>model load</span></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <select id="model">
+        <option value="Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC">Qwen2.5 Coder 3B (~2 GB)</option>
+        <option value="Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC">Qwen2.5 Coder 1.5B (~1 GB, faster, weaker)</option>
+        <option value="Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC">Qwen2.5 Coder 7B (~4.5 GB, best, needs a strong GPU)</option>
+      </select>
+      <button id="load">Load model</button>
+      <span id="progress-text" class="k"></span>
+    </div>
+    <div class="bar"><div id="progress"></div></div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Project</h2>
+      <div id="files"></div>
+    </div>
+    <div class="panel">
+      <h2 id="file-name">File</h2>
+      <pre id="file-view"></pre>
+    </div>
+  </div>
+
+  <div class="panel" style="margin-top:16px">
+    <h2>Ask</h2>
+    <textarea id="prompt">Read src/greet.py, then use Edit to change "Helo" to "Hello".</textarea>
+    <div class="row presets" id="presets" style="margin-top:8px"></div>
+    <p class="k" style="color:var(--muted);font-size:13px;margin:6px 0 0">Small local models do best with precise instructions; the agent around them is the same either way.</p>
+    <div class="row" style="margin-top:8px">
+      <button id="run" disabled>Run</button>
+      <span id="run-state" class="k"></span>
+    </div>
+  </div>
+
+  <div class="grid even">
+    <div class="panel">
+      <h2>Where the time went</h2>
+      <table>
+        <thead><tr><th>Step</th><th>First token</th><th>Model total</th><th>Tokens/s</th><th>Tools</th><th>Chanto</th></tr></thead>
+        <tbody id="timings"></tbody>
+        <tfoot id="totals"></tfoot>
+      </table>
+    </div>
+    <div class="panel">
+      <h2>Turn</h2>
+      <div id="log"></div>
+    </div>
+  </div>
+</main>
+<script type="module" src="./demo.js"></script>
+</body>
+</html>

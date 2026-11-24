@@ -14,13 +14,14 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASE_RUST_VERSION: 1.99.1
+  RELEASE_RUST_VERSION: 1.100.0
 
 jobs:
   preflight:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -33,7 +34,7 @@ jobs:
       # The licenses of every crate in the binary, which MIT, BSD and Apache-2.0
       # ask to travel with it. Every archive, the npm packages and the container
       # image carry this file next to LICENSE and NOTICE.
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           toolchain: ${{ env.RELEASE_RUST_VERSION }}
       - name: Third-party licenses
@@ -41,7 +42,7 @@ jobs:
           cargo install cargo-about --version 0.9.2 --features cli --locked
           cargo about generate --locked -o THIRD_PARTY_LICENSES.txt packaging/third-party-licenses.hbs
           grep -q "Apache License 2.0" THIRD_PARTY_LICENSES.txt
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: third-party-licenses
           path: THIRD_PARTY_LICENSES.txt
@@ -65,16 +66,17 @@ jobs:
           - target: x86_64-pc-windows-msvc
             os: windows-latest
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     # Build provenance attestations.
     permissions:
       contents: read
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           toolchain: ${{ env.RELEASE_RUST_VERSION }}
           targets: ${{ matrix.target }}
@@ -85,7 +87,7 @@ jobs:
         run: cargo install cross --version 0.2.5 --locked
       - name: Install NASM (aws-lc-sys on Windows)
         if: matrix.os == 'windows-latest'
-        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1
+        uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       - name: Build
         shell: bash
         run: |
@@ -122,7 +124,7 @@ jobs:
           } finally {
             Remove-Item -Force $pfx -ErrorAction SilentlyContinue
           }
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: third-party-licenses
       - name: Package
@@ -138,7 +140,7 @@ jobs:
             *) tar -C dist -czf "dist/$name.tar.gz" "$name" ;;
           esac
       # GitHub only stores attestations for public (or organization) repositories.
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         id: attest
         if: ${{ !github.event.repository.private }}
         with:
@@ -153,7 +155,7 @@ jobs:
           BUNDLE: ${{ steps.attest.outputs.bundle-path }}
           TARGET: ${{ matrix.target }}
         run: jq -c . "$BUNDLE" > "dist/chanto-${GITHUB_REF_NAME}-${TARGET}.intoto.jsonl"
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ matrix.target }}
           path: |
@@ -161,10 +163,68 @@ jobs:
             dist/*.zip
             dist/*.intoto.jsonl
 
-  release:
-    # The desktop app and editor plugins aren't released yet; only the CLI is.
-    needs: build
+  # @chanto/web: chanto-core's agent loop and file tools as WebAssembly, for
+  # pages (chanto.sh/try embeds it). Built from this tag with the release's
+  # Rust and the wasm-bindgen CLI that web/Cargo.toml pins, packed with npm,
+  # attested like the CLI archives, and listed in SHA256SUMS; npm.yml publishes
+  # this same file.
+  web:
+    needs: preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: ${{ env.RELEASE_RUST_VERSION }}
+          targets: wasm32-unknown-unknown
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: third-party-licenses
+      - name: Build and pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The bindings generator has to match the wasm-bindgen crate exactly.
+          bindgen=$(sed -n 's/^wasm-bindgen = "=\(.*\)"$/\1/p' web/Cargo.toml)
+          [ -n "$bindgen" ] || { echo "::error::web/Cargo.toml must pin wasm-bindgen exactly"; exit 1; }
+          cargo install wasm-bindgen-cli --version "$bindgen" --locked
+          cargo build --release --locked -p chanto-web --target wasm32-unknown-unknown
+          wasm-bindgen --target web --out-dir web/pkg \
+            target/wasm32-unknown-unknown/release/chanto_web.wasm
+          python3 packaging/npm/web.py "$GITHUB_REF_NAME" web/pkg
+          mkdir -p dist
+          (cd web/pkg && npm pack --pack-destination "$GITHUB_WORKSPACE/dist")
+          mv dist/chanto-web-*.tgz "dist/chanto-web-${GITHUB_REF_NAME}.tgz"
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        id: attest
+        if: ${{ !github.event.repository.private }}
+        with:
+          subject-path: dist/*.tgz
+      - if: ${{ !github.event.repository.private }}
+        shell: bash
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+        run: jq -c . "$BUNDLE" > "dist/chanto-web-${GITHUB_REF_NAME}.intoto.jsonl"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: web
+          path: |
+            dist/*.tgz
+            dist/*.intoto.jsonl
+
+  release:
+    # The desktop app and editor plugins aren't released yet: the CLI and
+    # @chanto/web are.
+    needs: [build, web]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     # RELEASE_SIGNING_KEY lives in the `publish` environment, which only v*
     # tags can use, so a workflow pushed on a branch can't read it.
     environment: publish
@@ -172,14 +232,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
-      # dist/ holds the CLI archives; SHA256SUMS covers all of them.
+      # dist/ holds the CLI archives and @chanto/web; SHA256SUMS covers them all.
       # After a security release, raise min_version in install.sh and
       # $minVersion in install.ps1 to it (tests/install.sh checks they match),
       # so a hostile host can't serve an older signed release as "latest".
@@ -190,7 +250,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
+          (cd dist && sha256sum -- *.tar.gz *.zip *.tgz > SHA256SUMS)
           # Sign the checksum file so self-update can verify it (see src/update.rs
           # RELEASE_PUBKEY_B64). `chanto upgrade` refuses an unsigned release, so
           # no release goes out without the signature.
@@ -212,13 +272,13 @@ jobs:
           ssh-keygen -Y verify -f packaging/release-allowed-signers -I chanto-release -n chanto-release \
             -s dist/SHA256SUMS.sshsig < dist/SHA256SUMS
           # Every archive carries its build provenance (attested in the build job).
-          for a in dist/*.tar.gz dist/*.zip; do
+          for a in dist/*.tar.gz dist/*.zip dist/*.tgz; do
             if [ ! -f "${a%.*}.intoto.jsonl" ] && [ ! -f "${a%.tar.gz}.intoto.jsonl" ]; then
               echo "::error::no provenance for $a; refusing to publish"
               exit 1
             fi
           done
-          assets=(dist/*.tar.gz dist/*.zip dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.sshsig dist/*.intoto.jsonl)
+          assets=(dist/*.tar.gz dist/*.zip dist/*.tgz dist/SHA256SUMS dist/SHA256SUMS.sig dist/SHA256SUMS.sshsig dist/*.intoto.jsonl)
           awk -v h="## $GITHUB_REF_NAME " 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on' \
             CHANGELOG.md > "$RUNNER_TEMP/notes.md"
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
@@ -228,13 +288,14 @@ jobs:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # HOMEBREW_TAP_DEPLOY_KEY lives in the `publish` environment (v* tags only).
     environment: publish
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           merge-multiple: true
@@ -242,7 +303,7 @@ jobs:
         run: |
           (cd dist && sha256sum -- *.tar.gz *.zip > SHA256SUMS)
           python3 packaging/homebrew/render.py "$GITHUB_REF_NAME" dist/SHA256SUMS chanto.rb
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: homebrew-formula
           path: chanto.rb
@@ -283,6 +344,7 @@ jobs:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     # Pushes the image, its provenance and its signature.
     permissions:
       contents: read
@@ -290,10 +352,10 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           path: dist
           pattern: "*-unknown-linux-musl"
@@ -326,7 +388,7 @@ jobs:
         env:
           VERSION: ${{ steps.meta.outputs.version }}
         run: packaging/docker/test.sh "$RUNNER_TEMP/image" "$VERSION"
-      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -348,35 +410,39 @@ jobs:
             VERSION=${{ steps.meta.outputs.version }}
             REVISION=${{ github.sha }}
       # GitHub only stores attestations for public (or organization) repositories.
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         if: ${{ !github.event.repository.private }}
         with:
           subject-name: ${{ steps.meta.outputs.image }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - name: Sign the image
         env:
           IMAGE: ${{ steps.meta.outputs.image }}
           DIGEST: ${{ steps.build.outputs.digest }}
         run: cosign sign --yes "$IMAGE@$DIGEST"
 
-  # crates.io: `cargo install chanto`. chanto-proto (the wire types) is
-  # published first, and only when its version is new. No stored token:
-  # crates.io trusted publishing swaps this workflow's OIDC identity for a
-  # short-lived one (both crates list chanto-sh/chanto release.yml).
+  # crates.io: `cargo install chanto`. The workspace crates chanto depends
+  # on (CRATES below: chanto-proto, the wire types; chanto-core, the shared
+  # agent code) are published first, each only when its version is new.
+  # packaging/test_release.py checks that list against Cargo.toml. No stored
+  # token: crates.io trusted publishing swaps this workflow's OIDC identity
+  # for a short-lived one (every crate lists chanto-sh/chanto release.yml;
+  # a new crate's first version has to be published by hand to set that up).
   crates:
     needs: release
     if: ${{ !cancelled() && needs.release.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
         with:
           toolchain: ${{ env.RELEASE_RUST_VERSION }}
       - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1.0.6
@@ -387,10 +453,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          proto=$(sed -n 's/^version = "\(.*\)"$/\1/p' proto/Cargo.toml | head -1)
-          code=$(curl -s -o /dev/null -w '%{http_code}' -A 'chanto-release (https://github.com/chanto-sh/chanto)' \
-            "https://crates.io/api/v1/crates/chanto-proto/$proto")
-          if [ "$code" != 200 ]; then cargo publish --locked -p chanto-proto; fi
+          CRATES="proto:chanto-proto core:chanto-core"
+          for entry in $CRATES; do
+            dir=${entry%%:*}
+            name=${entry#*:}
+            version=$(sed -n 's/^version = "\(.*\)"$/\1/p' "$dir/Cargo.toml" | head -1)
+            code=$(curl -s -o /dev/null -w '%{http_code}' -A 'chanto-release (https://github.com/chanto-sh/chanto)' \
+              "https://crates.io/api/v1/crates/$name/$version")
+            if [ "$code" != 200 ]; then cargo publish --locked -p "$name"; fi
+          done
           cargo publish --locked -p chanto
 
   # npm: see npm.yml.
@@ -401,7 +472,7 @@ jobs:
     permissions:
       contents: read
       id-token: write
-    uses: ./.github/workflows/npm.yml
+    uses: ./.github/workflows/npm.yml # zizmor: ignore[self-repository] the documented form
     with:
       tag: ${{ github.ref_name }}
 
@@ -415,7 +486,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Verify public archives and provenance
@@ -459,7 +530,7 @@ jobs:
         env:
           TAG: ${{ github.ref_name }}
         run: python3 packaging/check-published.py "$TAG" dist/SHA256SUMS --wait-seconds 600 --npm-binary "$RUNNER_TEMP/chanto-$TAG-x86_64-unknown-linux-musl/chanto"
-      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - name: Verify published container signature and provenance
         env:
           GH_TOKEN: ${{ github.token }}
@@ -476,3 +547,103 @@ jobs:
           gh attestation verify "oci://$image" --repo "$GITHUB_REPOSITORY" \
             --signer-workflow "$GITHUB_REPOSITORY/.github/workflows/release.yml" \
             --source-ref "refs/tags/$TAG" --source-digest "$GITHUB_SHA"
+
+  # Once the release checks out, tell what picks it up elsewhere: the
+  # benchmarks repository's overhead measurement (a `chanto-release`
+  # repository_dispatch, which leaves a release alone once its hourly check
+  # has picked it up) and the website's docs release (which deploys only when
+  # the live site is behind). Both go through the chanto-automation GitHub
+  # App, with one token per repository holding only the permission its
+  # dispatch needs. The website's repository is private, so its name comes
+  # from the SITE_REPOSITORY variable and is masked in this public log; unset,
+  # that dispatch is skipped with a notice. A failed dispatch only warns: the
+  # release is already out, and both repositories also check for new releases
+  # on a schedule.
+  dispatch:
+    name: start dependent workflows
+    needs: verify
+    if: ${{ !cancelled() && needs.verify.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # AUTOMATION_APP_ID and AUTOMATION_APP_KEY live in the `publish`
+    # environment (v* tags only).
+    environment: publish
+    # Only the app's tokens are used.
+    permissions: {}
+    steps:
+      - name: Find the website's repository
+        id: site
+        env:
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: |
+          if [ -z "$SITE_REPOSITORY" ]; then
+            echo "::notice title=No website repository::SITE_REPOSITORY isn't set, so the website's docs release isn't started."
+          elif ! [[ $SITE_REPOSITORY =~ ^chanto-sh/[A-Za-z0-9._-]+$ ]]; then
+            echo "::warning title=Website repository::SITE_REPOSITORY must be chanto-sh/<name>; the website's docs release isn't started."
+          else
+            echo "::add-mask::$SITE_REPOSITORY"
+            echo "::add-mask::${SITE_REPOSITORY#*/}"
+            echo "name=${SITE_REPOSITORY#*/}" >> "$GITHUB_OUTPUT"
+          fi
+      # repository_dispatch needs contents: write on the benchmarks repository.
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        id: bench-token
+        continue-on-error: true
+        with:
+          # The app ID works here too: GitHub takes either as the JWT issuer.
+          client-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_KEY }}
+          owner: chanto-sh
+          repositories: benchmarks
+          permission-contents: write
+      # auto-overhead measures releases only (X.Y.Z), not pre-releases.
+      - name: Start the benchmarks' overhead run
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.bench-token.outputs.token }}
+          OUTCOME: ${{ steps.bench-token.outcome }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=${TAG#v}
+          case "$version" in
+            *-*) echo "::notice::$TAG is a pre-release; the benchmarks measure releases only."; exit 0 ;;
+          esac
+          if [ "$OUTCOME" != success ]; then
+            echo "::warning title=Benchmarks::Couldn't get the automation app's token for chanto-sh/benchmarks (are AUTOMATION_APP_ID and AUTOMATION_APP_KEY set in the publish environment?); its hourly check will pick up $TAG."
+            exit 1
+          fi
+          if ! jq -n --arg version "$version" '{event_type: "chanto-release", client_payload: {version: $version}}' \
+            | gh api repos/chanto-sh/benchmarks/dispatches --input - --silent; then
+            echo "::warning title=Benchmarks::Couldn't send chanto-sh/benchmarks the chanto-release dispatch; its hourly check will pick up $TAG."
+            exit 1
+          fi
+      # workflow_dispatch needs actions: write on the website's repository.
+      - uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        id: site-token
+        if: steps.site.outputs.name != ''
+        continue-on-error: true
+        with:
+          # The app ID works here too: GitHub takes either as the JWT issuer.
+          client-id: ${{ secrets.AUTOMATION_APP_ID }}
+          private-key: ${{ secrets.AUTOMATION_APP_KEY }}
+          owner: chanto-sh
+          repositories: ${{ steps.site.outputs.name }}
+          permission-actions: write
+      - name: Start the website's docs release
+        if: steps.site.outputs.name != ''
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.site-token.outputs.token }}
+          OUTCOME: ${{ steps.site-token.outcome }}
+          SITE_REPOSITORY: ${{ vars.SITE_REPOSITORY }}
+        run: |
+          if [ "$OUTCOME" != success ]; then
+            echo "::warning title=Website::Couldn't get the automation app's token for the website's repository; its daily check will pick up this release."
+            exit 1
+          fi
+          # --ref: without it gh looks up the default branch, which a token
+          # limited to actions: write can't read.
+          if ! gh workflow run docs-release.yml --repo "$SITE_REPOSITORY" --ref main > /dev/null; then
+            echo "::warning title=Website::Couldn't start the website's docs-release workflow; its daily check will pick up this release."
+            exit 1
+          fi

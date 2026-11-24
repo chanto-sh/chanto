@@ -1,0 +1,10 @@
+# Left out of the docs on purpose. Each line: what, then # why.
+flag --no-open  # only for `chanto web`, which isn't ready to document (src/web/README.md)
+key HookConfig.allowed_env_vars  # the reference points to the hook protocol for per-hook fields
+key HookConfig.async_rewake  # the reference points to the hook protocol for per-hook fields
+key HookConfig.condition  # the reference points to the hook protocol for per-hook fields
+key HookConfig.continue_on_block  # the reference points to the hook protocol for per-hook fields
+key HookConfig.on_failure  # the reference points to the hook protocol for per-hook fields
+key HookConfig.run_async  # the reference points to the hook protocol for per-hook fields
+key HookConfig.status_message  # the reference points to the hook protocol for per-hook fields
+key McpServerConfig.imported_from  # internal: set when a server is imported, not by people

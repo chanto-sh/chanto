@@ -9,9 +9,20 @@
 //! dies). Linux: `systemd-inhibit --what=idle:sleep`. Windows:
 //! `SetThreadExecutionState(ES_SYSTEM_REQUIRED)` on a thread that lives as long
 //! as the hold. None of these can stop a laptop lid from forcing sleep.
+//!
+//! A hold only takes effect once work has gone on for [`DELAY`]: no system
+//! idles into sleep sooner (the shortest setting is a minute), so a quick
+//! turn, like a one-shot question, never pays for one.
 
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::time::Duration;
+
+/// How long work goes on before the machine is kept awake (short in tests).
+#[cfg(not(test))]
+const DELAY: Duration = Duration::from_secs(20);
+#[cfg(test)]
+const DELAY: Duration = Duration::from_millis(100);
 
 /// `keep_awake` in config: while working (default), never, or for the whole session.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,12 +53,29 @@ struct State {
     inhibitor: Option<Inhibitor>,
     /// The hold `Always` takes for the whole session.
     session: bool,
+    /// Counts the times holding started from none, so a delayed start meant
+    /// for work that has since ended doesn't fire.
+    epoch: u64,
+    /// Inhibitors started, in tests, which never start a real one.
+    #[cfg(test)]
+    started: u64,
 }
 static STATE: Mutex<State> = Mutex::new(State {
     holders: 0,
     inhibitor: None,
     session: false,
+    epoch: 0,
+    #[cfg(test)]
+    started: 0,
 });
+
+fn state() -> std::sync::MutexGuard<'static, State> {
+    lock(&STATE)
+}
+
+fn lock(cell: &'static Mutex<State>) -> std::sync::MutexGuard<'static, State> {
+    cell.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Set the policy from config; `Always` takes a hold that lasts until exit.
 pub fn init(policy: Policy) {
@@ -59,10 +87,10 @@ pub fn init(policy: Policy) {
         },
         Ordering::Relaxed,
     );
-    let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let mut s = state();
     if policy == Policy::Always && !s.session {
         s.session = true;
-        acquire(&mut s);
+        acquire(&STATE, &mut s, Duration::ZERO);
     }
 }
 
@@ -76,16 +104,14 @@ pub fn hold() -> Guard {
     if POLICY.load(Ordering::Relaxed) == NEVER {
         return Guard { held: false };
     }
-    let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
-    acquire(&mut s);
+    acquire(&STATE, &mut state(), DELAY);
     Guard { held: true }
 }
 
 impl Drop for Guard {
     fn drop(&mut self) {
         if self.held {
-            let mut s = STATE.lock().unwrap_or_else(|e| e.into_inner());
-            release(&mut s);
+            release(&mut state());
         }
     }
 }
@@ -98,9 +124,36 @@ pub fn active() -> bool {
         .unwrap_or(false)
 }
 
-fn acquire(s: &mut State) {
+/// Take a hold on `cell` (locked as `s`); the first one starts the inhibitor
+/// after `delay`, if work is still going on then.
+fn acquire(cell: &'static Mutex<State>, s: &mut State, delay: Duration) {
     s.holders += 1;
-    if s.holders == 1 && !cfg!(test) {
+    if s.holders != 1 {
+        return;
+    }
+    s.epoch += 1;
+    if delay.is_zero() {
+        start(s);
+        return;
+    }
+    let epoch = s.epoch;
+    let _ = std::thread::Builder::new()
+        .name("keep-awake".into())
+        .spawn(move || {
+            std::thread::sleep(delay);
+            let mut s = lock(cell);
+            if s.holders > 0 && s.epoch == epoch && s.inhibitor.is_none() {
+                start(&mut s);
+            }
+        });
+}
+
+fn start(s: &mut State) {
+    #[cfg(test)]
+    {
+        s.started += 1;
+    }
+    if !cfg!(test) {
         s.inhibitor = Inhibitor::start();
     }
 }
@@ -122,52 +175,100 @@ enum Inhibitor {
     Assertion(u32),
 }
 
+/// IOKit's power assertions, loaded the first time one is taken rather than
+/// linked: a linked framework is loaded at every launch, and most runs end
+/// before the keep-awake delay is up.
 #[cfg(target_os = "macos")]
 mod iokit {
-    use std::ffi::c_void;
-    #[link(name = "IOKit", kind = "framework")]
-    unsafe extern "C" {
-        pub fn IOPMAssertionCreateWithName(
-            kind: *const c_void,
-            level: u32,
-            name: *const c_void,
-            id: *mut u32,
-        ) -> i32;
-        pub fn IOPMAssertionRelease(id: u32) -> i32;
+    use std::ffi::{CStr, c_void};
+    use std::sync::OnceLock;
+
+    type Create = unsafe extern "C" fn(*const c_void, u32, *const c_void, *mut u32) -> i32;
+    type Release = unsafe extern "C" fn(u32) -> i32;
+    type CfString = unsafe extern "C" fn(*const c_void, *const u8, isize, u32, u8) -> *const c_void;
+    type CfRelease = unsafe extern "C" fn(*const c_void);
+
+    pub struct Api {
+        pub create: Create,
+        pub release: Release,
+        string: CfString,
+        pub cf_release: CfRelease,
     }
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFStringCreateWithBytes(
-            alloc: *const c_void,
-            bytes: *const u8,
-            len: isize,
-            encoding: u32,
-            external: u8,
-        ) -> *const c_void;
-        pub fn CFRelease(cf: *const c_void);
+
+    impl Api {
+        /// A CFString the caller releases.
+        pub fn cfstr(&self, s: &str) -> *const c_void {
+            const UTF8: u32 = 0x0800_0100;
+            // SAFETY: the bytes and length describe `s`, valid for the call.
+            unsafe { (self.string)(std::ptr::null(), s.as_ptr(), s.len() as isize, UTF8, 0) }
+        }
     }
-    /// A CFString the caller releases.
-    pub fn cfstr(s: &str) -> *const c_void {
-        const UTF8: u32 = 0x0800_0100;
-        unsafe { CFStringCreateWithBytes(std::ptr::null(), s.as_ptr(), s.len() as isize, UTF8, 0) }
+
+    /// `None` if either framework or one of its functions can't be found.
+    pub fn api() -> Option<&'static Api> {
+        static API: OnceLock<Option<Api>> = OnceLock::new();
+        API.get_or_init(|| {
+            let iokit = open(c"/System/Library/Frameworks/IOKit.framework/IOKit")?;
+            let cf = open(c"/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")?;
+            // SAFETY: each symbol is the system function with this signature.
+            unsafe {
+                Some(Api {
+                    create: std::mem::transmute::<*mut c_void, Create>(sym(
+                        iokit,
+                        c"IOPMAssertionCreateWithName",
+                    )?),
+                    release: std::mem::transmute::<*mut c_void, Release>(sym(
+                        iokit,
+                        c"IOPMAssertionRelease",
+                    )?),
+                    string: std::mem::transmute::<*mut c_void, CfString>(sym(
+                        cf,
+                        c"CFStringCreateWithBytes",
+                    )?),
+                    cf_release: std::mem::transmute::<*mut c_void, CfRelease>(sym(
+                        cf,
+                        c"CFRelease",
+                    )?),
+                })
+            }
+        })
+        .as_ref()
+    }
+
+    /// Kept open for the rest of the process: the functions are cached.
+    fn open(path: &CStr) -> Option<*mut c_void> {
+        // SAFETY: a valid C string; RTLD_LOCAL keeps its symbols to itself.
+        let h = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL) };
+        (!h.is_null()).then_some(h)
+    }
+
+    fn sym(handle: *mut c_void, name: &CStr) -> Option<*mut c_void> {
+        // SAFETY: an open handle and a valid C string.
+        let f = unsafe { libc::dlsym(handle, name.as_ptr()) };
+        (!f.is_null()).then_some(f)
     }
 }
 
 impl Inhibitor {
     #[cfg(target_os = "macos")]
     fn start() -> Option<Self> {
+        let api = iokit::api()?;
         // `kIOPMAssertionTypePreventUserIdleSystemSleep` at `kIOPMAssertionLevelOn`.
-        let kind = iokit::cfstr("PreventUserIdleSystemSleep");
-        let name = iokit::cfstr("chanto is working");
-        if kind.is_null() || name.is_null() {
-            return None;
-        }
+        let kind = api.cfstr("PreventUserIdleSystemSleep");
+        let name = api.cfstr("chanto is working");
         let mut id = 0u32;
-        let ok = unsafe { iokit::IOPMAssertionCreateWithName(kind, 255, name, &mut id) } == 0;
-        unsafe {
-            iokit::CFRelease(kind);
-            iokit::CFRelease(name);
-        }
+        // SAFETY: CFStrings just created (released once), and an out-pointer
+        // to a local.
+        let ok = unsafe {
+            let ok =
+                !kind.is_null() && !name.is_null() && (api.create)(kind, 255, name, &mut id) == 0;
+            for s in [kind, name] {
+                if !s.is_null() {
+                    (api.cf_release)(s);
+                }
+            }
+            ok
+        };
         ok.then_some(Self::Assertion(id))
     }
 
@@ -241,53 +342,16 @@ impl Drop for Inhibitor {
                 let _ = tx.send(());
             }
             #[cfg(target_os = "macos")]
-            Self::Assertion(id) => unsafe {
-                iokit::IOPMAssertionRelease(*id);
-            },
+            // Loaded: the assertion was taken through it.
+            Self::Assertion(id) => {
+                if let Some(api) = iokit::api() {
+                    // SAFETY: an assertion id IOKit gave us, released once.
+                    unsafe { (api.release)(*id) };
+                }
+            }
         }
     }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn policy_parses_the_documented_values() {
-        assert_eq!(Policy::parse("working"), Some(Policy::Working));
-        assert_eq!(Policy::parse(" Never "), Some(Policy::Never));
-        assert_eq!(Policy::parse("always"), Some(Policy::Always));
-        assert_eq!(Policy::parse("off"), Some(Policy::Never));
-        assert_eq!(Policy::parse("sometimes"), None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn the_macos_assertion_holds_until_dropped() {
-        let listed = || {
-            std::process::Command::new("pmset")
-                .args(["-g", "assertions"])
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains("chanto is working"))
-                .unwrap_or(false)
-        };
-        let i = Inhibitor::start().expect("power assertion");
-        assert!(matches!(i, Inhibitor::Assertion(_)));
-        assert!(listed(), "pmset lists the assertion while it's held");
-        drop(i);
-        assert!(!listed(), "released on drop");
-    }
-
-    #[test]
-    fn holds_nest_and_the_last_release_lets_go() {
-        // Tests never start a real inhibitor; this checks the counting.
-        let count = || STATE.lock().unwrap().holders;
-        let before = count();
-        let a = hold();
-        let b = hold();
-        assert!(count() >= before + 2);
-        drop(a);
-        drop(b);
-        assert_eq!(count(), before);
-    }
-}
+mod tests;

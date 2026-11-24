@@ -716,3 +716,67 @@ async fn live_cloud_smoke() {
         "set CHANTO_LIVE_BEDROCK_MODEL, CHANTO_LIVE_VERTEX_MODEL, CHANTO_LIVE_AZURE_MODEL or CHANTO_LIVE_FOUNDRY_MODEL"
     );
 }
+
+#[tokio::test]
+async fn a_bedrock_stream_cut_off_at_a_frame_boundary_is_an_error() {
+    let converse_tool = [
+        converse_event("messageStart", json!({"role": "assistant"})),
+        converse_event(
+            "contentBlockStart",
+            json!({"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_1", "name": "Bash"}}}),
+        ),
+        converse_event(
+            "contentBlockDelta",
+            json!({"contentBlockIndex": 0, "delta": {"toolUse": {"input": "{\"command\":\"rm -rf build/ca"}}}),
+        ),
+    ];
+    let converse_text = vec![
+        converse_event("messageStart", json!({"role": "assistant"})),
+        converse_event(
+            "contentBlockDelta",
+            json!({"contentBlockIndex": 0, "delta": {"text": "The answer is"}}),
+        ),
+    ];
+    // The usage metadata after `messageStop` is optional.
+    let mut converse_whole = converse_text.clone();
+    converse_whole.push(converse_event(
+        "messageStop",
+        json!({"stopReason": "end_turn"}),
+    ));
+    let claude = claude_events();
+    // InvokeModel: cut mid tool input, and mid text.
+    let invoke_tool: Vec<u8> = claude[..6].iter().cloned().flat_map(chunk).collect();
+    let invoke_text: Vec<u8> = claude[..3].iter().cloned().flat_map(chunk).collect();
+    let es = "application/vnd.amazon.eventstream";
+    let (base, _) = serve_bytes(vec![
+        (200, es, converse_tool.concat()),
+        (200, es, converse_text.concat()),
+        (200, es, converse_whole.concat()),
+        (200, es, invoke_tool),
+        (200, es, invoke_text),
+    ])
+    .await;
+    let p = Provider::new(ProviderKind::Bedrock, &base, Some("key".into()), 128_000)
+        .with_vars(Vars::new("/nonexistent", &[("AWS_REGION", "us-east-1")]));
+    let chat = |model: &'static str| {
+        let p = &p;
+        async move {
+            p.chat(&req(model, vec![Message::user("hi")]), &mut |_| {})
+                .await
+                .map_err(|e| format!("{e:#}"))
+        }
+    };
+    for _ in 0..2 {
+        let e = chat("openai.gpt-oss-120b-1:0").await.unwrap_err();
+        assert!(e.contains(CUT_OFF) && e.contains("messageStop"), "{e}");
+    }
+    let r = chat("openai.gpt-oss-120b-1:0").await.unwrap();
+    assert_eq!(r.text, "The answer is");
+    assert_eq!(r.finish_reason.as_deref(), Some("stop"));
+    for _ in 0..2 {
+        let e = chat("us.anthropic.claude-sonnet-4-5-20250929-v1:0")
+            .await
+            .unwrap_err();
+        assert!(e.contains(CUT_OFF) && e.contains("message_stop"), "{e}");
+    }
+}

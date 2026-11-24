@@ -26,6 +26,13 @@ Please include, as far as you can:
 Please give us a reasonable chance to release a fix before any public
 disclosure.
 
+## How fixes are disclosed
+
+Details stay in a private advisory while a fix is prepared. The fix ships in a
+release whose changelog marks it as a security fix and names the kind of bug.
+The advisory is then published with the impact and the affected and fixed
+versions, crediting the reporter if they'd like.
+
 ## How we respond
 
 1. **Acknowledge** the report within 3 business days.

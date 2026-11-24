@@ -22,6 +22,7 @@ env:
   # (seconds from Hugging Face) rather than filling the shared Actions cache.
   LLAMA_BUILD: b11966
   LLAMA_SHA256: c83ad2d4652fa270619f9ec2140d78b27cb731e17c676ae468122737083afb56
+  LLAMA_WINDOWS_SHA256: 1f1a2d203a2b3fb996c59bf4c20f37042d9265976c558cbbf621390c26a8932c
   OLLAMA_VERSION: v0.40.5
   OLLAMA_SHA256: dc5eabc292f9949546c90a97c820f924b035e05243b0de13c7f366182562169c
 
@@ -64,25 +65,42 @@ jobs:
             model: qwen3.5:4b
             sha256: a9d0a3e1d8c91732a3812becd31f8d4a8ff57414903f226306069f0437e2ac50
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
       # One leg on main writes the build cache; every leg restores it.
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           save-if: ${{ github.ref == 'refs/heads/main' && matrix.model == 'qwen3.5-4b' }}
       - run: cargo build --locked
+      # A 4B GGUF is ~2.5 GB; fetching it every run made this step take as long
+      # as Hugging Face's throughput allowed. Key it by the pinned checksum, so
+      # a changed model is a new cache entry.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ matrix.server == 'llama' }}
+        with:
+          path: ${{ runner.temp }}/model.gguf
+          key: model-${{ matrix.sha256 }}
       - name: Start llama-server
         if: ${{ matrix.server == 'llama' }}
+        timeout-minutes: 25
         env:
           MODEL_URL: ${{ matrix.url }}
           MODEL_SHA256: ${{ matrix.sha256 }}
         run: |
           cd "$RUNNER_TEMP"
-          curl -fsSL --retry 5 --retry-all-errors -o model.gguf "$MODEL_URL"
+          # Download to a side file first: a release whose cache save happens
+          # after a failed transfer must not store a partial model.
+          if [ ! -f model.gguf ]; then
+            curl -fsSL --retry 5 --retry-all-errors --max-time 900 \
+              -o model.gguf.part "$MODEL_URL"
+            mv model.gguf.part model.gguf
+          fi
           echo "$MODEL_SHA256  model.gguf" | sha256sum -c -
-          curl -fsSL --retry 5 -o llama.tar.gz \
+          curl -fsSL --retry 5 --max-time 300 -o llama.tar.gz \
             "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_BUILD/llama-$LLAMA_BUILD-bin-ubuntu-x64.tar.gz"
           echo "$LLAMA_SHA256  llama.tar.gz" | sha256sum -c -
           tar -xzf llama.tar.gz
@@ -91,7 +109,9 @@ jobs:
           "llama-$LLAMA_BUILD/llama-server" -m model.gguf --port 8080 \
             --jinja --reasoning off \
             -c 16384 -t 4 --temp 0 --seed 1 > server.log 2>&1 &
-          for _ in $(seq 120); do
+          # A 4B model with a 16k context on four cores can take minutes to
+          # load; the old 120 s cap failed a healthy server.
+          for _ in $(seq 300); do
             curl -fs http://127.0.0.1:8080/health > /dev/null && exit 0
             sleep 1
           done
@@ -116,7 +136,18 @@ jobs:
             curl -fs http://127.0.0.1:11434/api/version > /dev/null && break
             sleep 1
           done
-          ollama/bin/ollama pull "$MODEL"
+          # The registry has brief outages (503 "upstream connect error"); a
+          # pull resumes what it already has, so retry with backoff before
+          # failing, as the curl downloads do.
+          for attempt in 1 2 3 4 5; do
+            ollama/bin/ollama pull "$MODEL" && break
+            if [ "$attempt" = 5 ]; then
+              echo "::error title=Ollama registry::couldn't pull $MODEL after 5 attempts"
+              exit 1
+            fi
+            echo "::warning title=Ollama registry::pull failed (attempt $attempt); retrying in $((attempt * 15))s"
+            sleep $((attempt * 15))
+          done
           # Ollama rewrites the manifest it stores, so check the weights instead:
           # the pulled manifest must name the pinned layer, whose file must match.
           grep -q "sha256:$MODEL_SHA256" "$HOME/.ollama/models/manifests/registry.ollama.ai/library/${MODEL%%:*}/${MODEL#*:}"
@@ -135,6 +166,55 @@ jobs:
             export SMOKE_FLAGS=--no-think
           fi
           tests/real-model/smoke.sh target/debug/chanto "$base" "$MODEL" "$PROVIDER"
+      - name: Server log
+        if: ${{ !cancelled() }}
+        run: grep -E -i "chat format|prompt eval time|eval time|error" "$RUNNER_TEMP/server.log" | tail -40 || true
+
+  # The same task on Windows with the sandbox on, its default: the model's
+  # commands run in PowerShell inside the sandbox, on a machine with Git Bash.
+  smoke-windows:
+    name: smoke (qwen3.5-4b, openai, windows)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable zizmor: ignore[ref-version-mismatch] upstream publishes no version tags
+        with:
+          toolchain: "1.100.0"
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo build --locked
+      - name: Start llama-server
+        env:
+          MODEL_URL: https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/e87f176479d0855a907a41277aca2f8ee7a09523/Qwen3.5-4B-Q4_K_M.gguf
+          MODEL_SHA256: 00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4
+        run: |
+          cd "$RUNNER_TEMP"
+          curl -fsSL --retry 5 --retry-all-errors -o model.gguf "$MODEL_URL"
+          echo "$MODEL_SHA256  model.gguf" | sha256sum -c -
+          curl -fsSL --retry 5 -o llama.zip \
+            "https://github.com/ggml-org/llama.cpp/releases/download/$LLAMA_BUILD/llama-$LLAMA_BUILD-bin-win-cpu-x64.zip"
+          echo "$LLAMA_WINDOWS_SHA256  llama.zip" | sha256sum -c -
+          mkdir llama && unzip -q llama.zip -d llama
+          llama/llama-server.exe -m model.gguf --port 8080 \
+            --jinja --reasoning off \
+            -c 16384 -t 4 --temp 0 --seed 1 > server.log 2>&1 &
+          for _ in $(seq 120); do
+            curl -fs http://127.0.0.1:8080/health > /dev/null && exit 0
+            sleep 1
+          done
+          cat server.log
+          exit 1
+      - name: Smoke test
+        env:
+          SMOKE_PYTHON: python
+        run: tests/real-model/smoke.sh target/debug/chanto http://127.0.0.1:8080/v1 qwen3.5-4b openai
       - name: Server log
         if: ${{ !cancelled() }}
         run: grep -E -i "chat format|prompt eval time|eval time|error" "$RUNNER_TEMP/server.log" | tail -40 || true

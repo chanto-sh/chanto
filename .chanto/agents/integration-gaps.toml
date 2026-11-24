@@ -1,0 +1,32 @@
+name = "integration-gaps"
+description = "Finds an integration path nobody tests and opens a pull request that covers it"
+repo = "https://github.com/chanto-sh/chanto"
+placement = "self-hosted"
+model_keys = "own"
+labels = ["gha"]
+schedule = "0 6 * * 1"
+checks = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo test --lib",
+]
+instructions = """
+Find the highest-risk behaviour in this repository that has no test, or only a
+unit test where an integration test would catch a regression, then add the
+smallest test that would have caught it.
+
+Areas to prefer, in order: src/runs/ (queue, runner, pull), src/llm.rs provider
+parsing, src/wire.rs and the proto types, src/remote.rs. Start with what changed
+most recently: `git log --oneline -40` and `git diff` against the last run.
+
+Read AGENTS.md first. Tests live in foo/tests.rs declared with
+`#[cfg(test)] mod tests;`, never inline. Never edit an existing test to make it
+pass. A new test must be able to fail for the reason it describes: check that it
+exercises real behaviour (a returned value, a written file, an emitted event),
+not that a function was called.
+
+Open exactly one pull request whose body says which path was untested, why it
+matters (what regression it would catch), and what the test covers. If nothing
+worth covering is missing, say so in one sentence and stop without opening a
+pull request.
+"""

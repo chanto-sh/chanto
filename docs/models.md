@@ -33,7 +33,7 @@ Chanto is tuned for small local models: it parses text-format tool calls, repair
 | `openai-responses`                      | OpenAI Responses API                  | `api_key` or `OPENAI_API_KEY`    |
 | `bedrock`, `vertex`, `azure`, `foundry` | Cloud platforms                       | the cloud's own credentials      |
 
-Built-in providers need no config. Besides Anthropic and OpenAI, they include OpenRouter, Gemini, DeepSeek, xAI, Mistral, Groq, Cerebras, Together, Fireworks, Moonshot, Z.ai, MiniMax, DashScope, Hugging Face, NVIDIA, Vercel AI Gateway, OpenCode Zen and Baseten. Each works with its usual key variable (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) or `chanto login <provider>`, and `chanto providers` shows which ones you're logged in to. For example, with `ANTHROPIC_API_KEY` set, `chanto -m anthropic/<model>` just works.
+Built-in providers need no config. Besides Anthropic and OpenAI, they include OpenRouter, Gemini, DeepSeek, xAI, Mistral, Groq, Cerebras, Together, Fireworks, Moonshot, Z.ai, MiniMax, DashScope, Hugging Face, NVIDIA, Vercel AI Gateway, OpenCode Zen, OpenCode Go and Baseten. Each works with its usual key variable (`ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, …) or `chanto login <provider>`, and `chanto providers` shows which ones you're logged in to. For example, with `ANTHROPIC_API_KEY` set, `chanto -m anthropic/<model>` just works.
 
 ## Free models
 

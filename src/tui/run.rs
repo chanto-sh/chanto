@@ -194,6 +194,9 @@ impl Region {
     }
 }
 
+/// How long a hint stays up without a key press.
+const HINT_LIFETIME: Duration = Duration::from_secs(10);
+
 impl App {
     /// The state a session starts with. `run` adds what needs a subprocess or
     /// a background watcher (the branch, the pull request status).
@@ -264,6 +267,7 @@ impl App {
             pr_status: Default::default(),
             mouse: !inline,
             pastes: vec![],
+            oversize_offer: None,
             images: vec![],
             pending_dialogs: VecDeque::new(),
             search: None,
@@ -282,6 +286,9 @@ impl App {
             viewing: None,
             work_area: Rect::default(),
             jump_area: Rect::default(),
+            hover_pos: None,
+            hover: None,
+            hover_opens: std::cell::Cell::new(None),
             scroll_new: 0,
             work_start: 0,
             agent_view: None,
@@ -355,6 +362,12 @@ impl App {
             self.input.insert(&format!("@{} ", t.replace(' ', "\\ ")));
         } else if (n_lines > 12 || s.len() > 1500) && self.env.config.collapse_pastes != Some(false)
         {
+            if let Some((tokens, max)) = self.oversized(&s) {
+                self.hint = Some((
+                    format!("That paste won't fit this model: ~{tokens} tokens of {max}"),
+                    Instant::now(),
+                ));
+            }
             self.pastes.push(s.clone());
             self.input.insert(&format!(
                 "[Pasted text #{} +{} lines]",
@@ -376,6 +389,16 @@ impl App {
         // knows one, and mid-session when one ships while this runs.
         if let Some(notice) = crate::update_check::take_notice() {
             self.note(notice, pal().accent);
+            dirty = true;
+        }
+        // A hint is redrawn on each tick, so one left up would keep an idle
+        // app drawing until the next key.
+        if self
+            .hint
+            .as_ref()
+            .is_some_and(|(_, since)| since.elapsed() >= HINT_LIFETIME)
+        {
+            self.hint = None;
             dirty = true;
         }
         // An in-flight `/btw` ask animates its panel's spinner.
@@ -470,6 +493,7 @@ pub async fn run(cli: Cli) -> Result<()> {
     let fe = crate::remote::mirror_tui(Arc::new(TuiFrontend { tx: tx.clone() }));
     // The TUI fires /loop iterations and scheduled tasks between turns.
     crate::cron::set_frontend_drives();
+    crate::mcp::connect_in_background();
     let Setup {
         env,
         agent,
@@ -648,6 +672,15 @@ pub async fn run(cli: Cli) -> Result<()> {
         }
         tokio::select! {
             ev = events.next() => {
+                // Most mouse movement changes nothing on screen, and a move
+                // isn't the user coming back after a pause: draw only when it
+                // lands on something new.
+                if let Some(Ok(TermEvent::Mouse(m))) = &ev
+                    && m.kind == MouseEventKind::Moved
+                {
+                    dirty |= app.on_mouse_moved(m.row, m.column);
+                    continue;
+                }
                 // Coming back after a pause: the window may have been restored
                 // or the terminal repainted its own content, so rewrite every
                 // cell on this first frame rather than leaving its glyphs in
@@ -667,6 +700,8 @@ pub async fn run(cli: Cli) -> Result<()> {
                     }
                     Some(Ok(TermEvent::FocusLost)) => {
                         app.focused = Some(false);
+                        app.hover_pos = None;
+                        app.hover = None;
                         app.check_attention();
                     }
                     Some(Ok(TermEvent::Paste(s))) => {

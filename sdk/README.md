@@ -1,9 +1,8 @@
 # Chanto server API and SDKs
 
 > [!WARNING]
-> **Not ready yet.** The SDKs are a work in progress: they aren't documented or
-> supported, and they may change or break without notice. For now, use Chanto
-> from the terminal.
+> **Experimental.** The SDKs may change or break in any release. See
+> [docs/sdk.md](../docs/sdk.md) to get started.
 
 `chanto serve` starts an HTTP server (default `127.0.0.1:4141`) that other programs can use to drive Chanto sessions: web or desktop UIs, editor plugins, scripts and CI. Each session is a full Chanto agent in its own working directory, with the same tools, permission modes, hooks and MCP servers as the terminal UI.
 
@@ -27,6 +26,21 @@ CHANTO_SERVER_TOKEN=... chanto serve --port 0 --model qwen3-coder:30b
   ```
 
 By default, permission prompts are **denied**. Pass a callback to approve actions, or create the session with `mode: "acceptEdits" | "auto" | "bypassPermissions"`.
+
+## Types
+
+Both SDKs type the API from one source. `src/wire.rs` defines what `chanto
+serve` streams and accepts, and the server builds its events from those types;
+`sdk/schema.json` is their JSON Schema, and `sdk/gen_types.py` turns it into
+`typescript/types.ts` and `python/chanto_types.py` (TypedDicts). A session's
+events are a union tagged by `type`, so `if (ev.type === "text") ev.text`
+type-checks. CI fails if the schema or the generated files fall behind; after
+changing `src/wire.rs`:
+
+```sh
+UPDATE_SCHEMA=1 cargo test --features schema --lib wire::
+python3 sdk/gen_types.py
+```
 
 ## Protocol
 

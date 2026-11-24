@@ -7,7 +7,7 @@ CMDS = {
     "binary": {"command": "head -c 3000000 /dev/urandom"},
     "longline": {"command": "head -c 5000000 /dev/zero | tr '\\0' x"},
     "forever": {"command": "yes", "timeout": 3000},
-    "stderr_flood": {"command": "yes err 1>&2 | head -c 20000000"},
+    "stderr_flood": {"command": "yes err | head -c 20000000 >&2"},
     "ansi": {"command": "printf '\\033]0;PWNED\\007\\033[2J\\033[31mred\\033[0m\\n'"},
     "bg_many": {"command": "sleep 30", "run_in_background": True},
     "child_daemon": {"command": "(sleep 30 &) ; echo started", "timeout": 10000},

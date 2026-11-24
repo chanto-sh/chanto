@@ -50,9 +50,9 @@ delivers the report later (keep working meanwhile). isolation: \"worktree\" give
         )
     }
     async fn run(&self, args: Value, ctx: &Ctx) -> Result<ToolOutput> {
-        if ctx.depth > 0 {
+        if ctx.depth >= crate::resources::agent_depth(&ctx.env.config.resources) {
             return Ok(ToolOutput::err(
-                "Subagents cannot launch further subagents.",
+                "Subagents cannot launch further subagents here (resources.max_agent_depth).",
             ));
         }
         let prompt = arg_str(&args, "prompt")?;

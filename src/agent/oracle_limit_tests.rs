@@ -1,6 +1,8 @@
 //! The oracle subagent and waiting out usage limits.
 
-use super::tests::{make_env, make_env_with, mock_server, mock_server_routed, tc, tmpdir};
+use super::tests::{make_env, make_env_with, mock_server, tmpdir};
+#[cfg(unix)]
+use super::tests::{mock_server_routed, tc};
 use super::*;
 
 #[test]

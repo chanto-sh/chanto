@@ -28,6 +28,7 @@ jobs:
   guard:
     name: scorecard guard
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     env:
       OSV_SCANNER_VERSION: 2.6.0
       OSV_SCANNER_SHA256: ca69b3d3cd08f889a49dc0a383122f71cc528b83803671df5fd874d97485b108
@@ -38,7 +39,7 @@ jobs:
       # A missing tool fails here rather than being skipped.
       SCORECARD_CHECK_REQUIRE: "1"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Test advisory exception boundaries

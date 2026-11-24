@@ -175,6 +175,32 @@ impl Drop for Home {
 // ------------------------------------------------------------ handle_env
 
 #[tokio::test]
+async fn sandbox_network_saves_a_policy_for_later_sessions() {
+    let home = Home::new("cmd-sandbox-network");
+    let fx = fixture("cmd-sandbox-network");
+    let mut agent = Agent::new(fx.env.clone());
+    let config = home.dir.join("config.toml");
+    for bad in ["/sandbox network", "/sandbox network open"] {
+        assert!(
+            run(&mut agent, bad)
+                .await
+                .starts_with("Usage: /sandbox network allow|allowlist|deny"),
+            "{bad}"
+        );
+    }
+    assert!(!config.exists(), "a bad policy saves nothing");
+    let said = run(&mut agent, "/sandbox network allowlist").await;
+    if cfg!(windows) {
+        assert!(said.contains("can't limit the network"), "{said}");
+        assert!(!config.exists(), "nothing to enforce it on Windows");
+    } else {
+        assert!(said.contains("**allowlist**"), "{said}");
+        let saved = std::fs::read_to_string(&config).unwrap();
+        assert!(saved.contains("network = \"allowlist\""), "{saved}");
+    }
+}
+
+#[tokio::test]
 async fn quiet_switches_on_off_and_toggles() {
     let fx = fixture("cmd-quiet");
     let env = &fx.env;
@@ -371,7 +397,7 @@ async fn think_and_effort() {
     assert_eq!(env.effort().as_deref(), Some("high"));
     assert_eq!(
         env_show(env, "/effort").await,
-        "Effort: high (set with /think low|medium|high|xhigh|max)"
+        "Effort: high (set with /think low|medium|high|xhigh|max|ultra)"
     );
     assert_eq!(env_show(env, "/think off").await, "Thinking disabled");
     assert!(!env.think());
@@ -961,7 +987,7 @@ async fn rewind_lists_checkpoints_and_validates_arguments() {
         ),
         o => panic!("expected Reset, got {}", kind(&o)),
     }
-    assert!(!agent.messages.iter().any(|m| m.content == "first prompt"));
+    assert!(!agent.messages.iter().any(|m| *m.content == "first prompt"));
 }
 
 #[tokio::test]
@@ -1021,7 +1047,7 @@ async fn sessions_are_listed_renamed_and_resumed() {
         agent
             .messages
             .iter()
-            .any(|m| m.content == "plan the migration")
+            .any(|m| *m.content == "plan the migration")
     );
     match handle(&mut agent, "/fork side-quest").await {
         Outcome::Reset(Some(note)) => assert!(note.starts_with("Forked session: "), "{note}"),
@@ -1286,7 +1312,7 @@ async fn login_logout_and_sandbox_without_side_effects() {
     );
     assert_eq!(
         run(&mut agent, "/sandbox maybe").await,
-        "Usage: /sandbox [on|off]"
+        "Usage: /sandbox [on|off|network allow|allowlist|deny]"
     );
     let s = run(&mut agent, "/sandbox").await;
     assert!(

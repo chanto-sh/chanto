@@ -77,7 +77,10 @@ impl Drop for TestHome {
 }
 
 pub(crate) fn sh(dir: &Path, args: &[&str]) -> String {
+    // As Chanto's own git calls do: temp paths plus object paths can pass
+    // Windows' 260-character limit.
     let o = Command::new("git")
+        .args(["-c", "core.longpaths=true"])
         .args(args)
         .current_dir(dir)
         .output()
@@ -1009,6 +1012,23 @@ async fn scheduled_jobs_become_background_runs() {
         401,
         "a job token is only good for its job"
     );
+    // The daemon's own clients pass the project and trigger as query
+    // parameters, so a webhook body is never parsed.
+    let mut local = reqwest::Url::parse(&url).unwrap();
+    local
+        .query_pairs_mut()
+        .append_pair("project", repo.to_str().unwrap())
+        .append_pair("trigger", "schedule");
+    let r = http
+        .post(local)
+        .bearer_auth("server-token")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 201);
+    let run: Run = r.json().await.unwrap();
+    assert_eq!(run.trigger.as_deref(), Some("schedule"));
+    wait_for(&m, &run.id, "finished", finished).await;
     server.abort();
 }
 
@@ -1134,7 +1154,7 @@ async fn container_isolation_runs_commands_in_docker() {
         // Killing a background shell stops its processes in the container,
         // not just the host's `docker exec` client.
         json!({"tool_calls": tc("Bash", json!({"command": "sleep 321", "run_in_background": true}))}),
-        json!({"tool_calls": tc("KillShell", json!({"shell_id": "bash_1"}))}),
+        json!({"tool_calls": tc("KillShell", json!({"shell_id": "sleep-321"}))}),
         bash("sleep 2; ps -o args | grep -c '^sleep 321' || true"),
         json!({"content": "Done."}),
     ])
@@ -1177,7 +1197,7 @@ async fn container_isolation_runs_commands_in_docker() {
         "{out}"
     );
     assert!(
-        out.contains("Killed bash_1") && out.trim_end().ends_with("\n0"),
+        out.contains("Killed sleep-321") && out.trim_end().ends_with("\n0"),
         "{out}"
     );
     assert_eq!(

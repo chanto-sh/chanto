@@ -23,7 +23,7 @@ Set these in the CI system's secret settings:
 
 | File | CI system | Starts the agent |
 |---|---|---|
-| `github-actions.yml` | GitHub Actions | On pull requests, with the `chanto-sh/chanto/action` step |
+| `github-actions.yml` | GitHub Actions | On pull requests, with the `chanto-sh/chanto-action` step |
 | `gitlab-ci.yml` | GitLab CI/CD | On merge request pipelines |
 | `bitbucket-pipelines.yml` | Bitbucket Pipelines | On pull requests |
 | `azure-pipelines.yml` | Azure Pipelines | On pull requests |
