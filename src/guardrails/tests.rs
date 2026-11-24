@@ -1218,3 +1218,85 @@ fn only_a_run_from_the_root_stands_for_the_root_check() {
     assert!(!covered("cd $DIR && cargo test", "/x/proj"));
     assert!(from("cd /x/proj", "/x/proj").is_none(), "runs nothing");
 }
+
+#[test]
+fn test_changes_are_sorted_into_weakened_and_changed() {
+    let d = std::env::temp_dir().join(format!(
+        "chanto-guard-kinds-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    let t = d.join("test_kinds.py");
+    std::fs::write(
+        &t,
+        "def test_a():\n    assert f(1) == 2\n    assert f(2) == 3\n",
+    )
+    .unwrap();
+    let s = snapshot(&d);
+    // A different expected value: changed, not weakened.
+    std::fs::write(
+        &t,
+        "def test_a():\n    assert f(1) == 5\n    assert f(2) == 3\n",
+    )
+    .unwrap();
+    let c = s.changes();
+    assert!(c.weakened.is_empty(), "{:?}", c.weakened);
+    assert!(
+        c.changed.iter().any(|v| v.contains("assertion(s) changed")),
+        "{:?}",
+        c.changed
+    );
+    // A dropped assertion: weakened.
+    std::fs::write(&t, "def test_a():\n    assert f(2) == 3\n").unwrap();
+    let c = s.changes();
+    assert!(
+        c.weakened
+            .iter()
+            .any(|v| v.contains("assertion(s) removed")),
+        "{:?}",
+        c.weakened
+    );
+    // violations() still lists both kinds, for --verify and goals.
+    assert!(!s.violations().is_empty());
+}
+
+#[test]
+fn an_expectation_the_request_quotes_may_change() {
+    let d = std::env::temp_dir().join(format!(
+        "chanto-guard-quoted-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&d).unwrap();
+    let t = d.join("test_skipping.py");
+    let test = |m: &str| {
+        format!(
+            "def test_module_level(testdir):\n    result = testdir.runpytest()\n    result.stdout.fnmatch_lines([\"*{m}*\"])\n    assert result.ret == 2\n"
+        )
+    };
+    std::fs::write(
+        &t,
+        test("Using pytest.skip outside of a test is not allowed"),
+    )
+    .unwrap();
+    let mut s = snapshot(&d);
+    let new = test("Using pytest.skip outside of a test will skip the entire module");
+    std::fs::write(&t, &new).unwrap();
+    // Without the request, the change is flagged.
+    assert!(!s.changes().changed.is_empty());
+    // A request quoting the old text (wrapped and in another case) asks
+    // for it to change.
+    s.set_request("The message\n  \"using pytest.skip outside of a test is\n not allowed. To decorate...\" is misleading");
+    let c = s.changes();
+    assert!(c.changed.is_empty() && c.weakened.is_empty(), "{c:?}");
+    // A short quoted fragment doesn't count: it would match by accident.
+    s.set_request("fix the skip error, it mentions \"not allowed\"");
+    assert!(!s.changes().changed.is_empty());
+    // Nor does quoting the text excuse dropping the assertion.
+    s.set_request("\"Using pytest.skip outside of a test is not allowed\" is wrong");
+    std::fs::write(
+        &t,
+        "def test_module_level(testdir):\n    result = testdir.runpytest()\n",
+    )
+    .unwrap();
+    assert!(!s.changes().weakened.is_empty());
+}
