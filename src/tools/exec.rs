@@ -20,15 +20,16 @@ use tokio::io::AsyncWriteExt;
 const MAX_OUTPUT: usize = 20_000;
 
 const HARNESS: &str = r#"
-import sys, re, json, math, pathlib, importlib, importlib.abc
+import sys, os, re, json, math, pathlib, importlib, importlib.abc
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
 
 def _p(p):
-    q = (ROOT / p).resolve()
-    if q != ROOT and ROOT not in q.parents:
+    root = os.path.realpath(str(ROOT))
+    q = os.path.realpath(os.path.join(root, str(p)))
+    if q != root and not q.startswith(root + os.sep):
         raise ValueError("path outside workspace: %s" % p)
-    return q
+    return pathlib.Path(q)
 
 def read(path):
     return _p(path).read_text(encoding="utf-8", errors="replace")
