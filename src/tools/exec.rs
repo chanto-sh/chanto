@@ -20,7 +20,7 @@ use tokio::io::AsyncWriteExt;
 const MAX_OUTPUT: usize = 20_000;
 
 const HARNESS: &str = r#"
-import sys, re, json, math, pathlib, importlib.abc
+import sys, re, json, math, pathlib, importlib, importlib.abc
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
 
@@ -55,14 +55,27 @@ class Block(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, Block())
 
-src = sys.stdin.read()
-g = {
-    "__name__": "__main__",
-    "read": read, "glob": glob, "grep": grep, "print": print,
-    "len": len, "range": range, "enumerate": enumerate, "zip": zip,
+def _safe_import(name, *args, **kwargs):
+    if name.split(".")[0] not in ALLOWED:
+        raise ImportError("module not allowed in Exec: %s" % name)
+    return importlib.import_module(name)
+
+BUILTINS = {
+    "__import__": _safe_import,
+    "print": print, "len": len, "range": range, "enumerate": enumerate, "zip": zip,
     "sorted": sorted, "min": min, "max": max, "sum": sum,
     "any": any, "all": all, "str": str, "int": int, "float": float,
     "bool": bool, "list": list, "dict": dict, "set": set, "tuple": tuple,
+    "abs": abs, "round": round, "repr": repr, "isinstance": isinstance,
+    "Exception": Exception, "ValueError": ValueError, "KeyError": KeyError,
+    "TypeError": TypeError, "IndexError": IndexError, "RuntimeError": RuntimeError,
+}
+
+src = sys.stdin.read()
+g = {
+    "__name__": "__main__",
+    "__builtins__": BUILTINS,
+    "read": read, "glob": glob, "grep": grep,
 }
 exec(compile(src, "<exec>", "exec"), g)
 "#;
@@ -114,11 +127,13 @@ pub fn available() -> bool {
 }
 
 fn truncate(s: &str) -> String {
+    const SUFFIX: &str = "\n... (output truncated)";
     if s.chars().count() <= MAX_OUTPUT {
         s.to_string()
     } else {
-        let mut out: String = s.chars().take(MAX_OUTPUT).collect();
-        out.push_str("\n... (output truncated)");
+        let keep = MAX_OUTPUT.saturating_sub(SUFFIX.chars().count());
+        let mut out: String = s.chars().take(keep).collect();
+        out.push_str(SUFFIX);
         out
     }
 }
@@ -224,3 +239,6 @@ impl Tool for Exec {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

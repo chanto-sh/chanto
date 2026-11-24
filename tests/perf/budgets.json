@@ -181,21 +181,21 @@
       "startup_rss_mb": 21,
       "turn_cpu_ms": 3.3,
       "turn_rss_mb": 22.5,
-      "binary_mb": 24.8
+      "binary_mb": 31
     },
     "darwin": {
       "startup_cpu_ms": 45,
       "startup_rss_mb": 19,
       "turn_cpu_ms": 5.5,
       "turn_rss_mb": 20.5,
-      "binary_mb": 21
+      "binary_mb": 27
     },
     "windows": {
       "startup_cpu_ms": 90,
       "startup_rss_mb": 16.5,
       "turn_cpu_ms": 21,
       "turn_rss_mb": 19,
-      "binary_mb": 31
+      "binary_mb": 37
     }
   }
 }

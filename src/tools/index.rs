@@ -437,6 +437,10 @@ impl Tool for Index {
         let mut truncated = false;
         for path in &files {
             let lang = language_for(path);
+            if lang.is_none() && !is_fallback_ext(path) {
+                skipped += 1;
+                continue;
+            }
             let too_big = std::fs::metadata(path)
                 .map(|m| m.len() > MAX_FILE_BYTES)
                 .unwrap_or(false);
@@ -486,3 +490,6 @@ impl Tool for Index {
         )))
     }
 }
+
+#[cfg(test)]
+mod tests;
