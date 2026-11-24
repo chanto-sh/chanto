@@ -21,6 +21,9 @@ const MAX_OUTPUT: usize = 20_000;
 
 const HARNESS: &str = r#"
 import sys, os, re, json, math, pathlib, importlib, importlib.abc
+# Pre-imported so pathlib's lazily imported helpers (Path.glob on 3.15+) never
+# reach the import block below; they are part of the harness, not the script.
+import glob, fnmatch, stat, contextlib, io
 
 ROOT = pathlib.Path(sys.argv[1]).resolve()
 
@@ -46,7 +49,7 @@ def grep(pattern, paths):
                 out.append("%s:%d: %s" % (p, i, line.strip()[:120]))
     return out
 
-ALLOWED = {"re", "json", "math", "collections", "itertools", "statistics", "functools", "glob", "fnmatch"}
+ALLOWED = {"re", "json", "math", "collections", "itertools", "statistics", "functools", "glob", "fnmatch", "stat", "contextlib", "io"}
 
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
