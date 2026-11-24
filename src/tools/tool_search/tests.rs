@@ -110,3 +110,44 @@ fn announcements_and_loads_are_read_back() {
     msgs.push(a);
     assert_eq!(loaded(&msgs, &tools), ["mcp__a__y", "mcp__a__x"]);
 }
+
+/// Prints the prompt cost of the deferred built-ins, for tuning `defer_tools`.
+#[test]
+fn deferred_builtins_size() {
+    use crate::llm::ToolSpec;
+    use crate::tools::{Registry, Tool};
+
+    let reg = Registry::builtin();
+    let mut specs: Vec<ToolSpec> = Vec::new();
+    for n in DEFERRED_BUILTINS {
+        if let Some(t) = reg.get(n) {
+            specs.push(ToolSpec {
+                name: t.name(),
+                description: t.description(),
+                parameters: t.schema(),
+            });
+        }
+    }
+    let comp =
+        crate::tools::computer::Computer::new(&crate::tools::computer::ComputerConfig::default());
+    specs.push(ToolSpec {
+        name: comp.name(),
+        description: comp.description(),
+        parameters: comp.schema(),
+    });
+    let cloud = crate::tools::cloud::ChantoCloud;
+    specs.push(ToolSpec {
+        name: cloud.name(),
+        description: cloud.description(),
+        parameters: cloud.schema(),
+    });
+
+    let deferred = serde_json::to_string(&specs).unwrap().len();
+    let all = serde_json::to_string(&reg.specs(&|_| true)).unwrap().len();
+    println!(
+        "deferred built-ins: {deferred} bytes (~{} tokens); all built-in schemas: {all} bytes (~{} tokens)",
+        deferred / 4,
+        all / 4
+    );
+    assert!(!specs.is_empty());
+}
