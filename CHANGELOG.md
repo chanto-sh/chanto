@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## v0.1.27 (November 24, 2026)
+
+- **Readable secondary text.** The default dark and light themes raise the contrast of
+  tool-result lines, the footer and hints such as "(ctrl+o to expand)": `dim` goes from
+  #808080 to #a0a0a0 on dark and to #5f5f5f on light, and `faint` from #5a5a5a to #7d7d7d
+  on dark and from #969696 to #767676 on light.
+- **Leaner context.** Two new tools keep bulk work out of the prompt: `Index`
+  returns a tree-sitter skeleton of a file (imports, type definitions and function
+  signatures with line ranges) for Rust, Python, JavaScript, TypeScript and Go, with a
+  regex outline for other languages, and `Exec` runs a short Python script in which
+  `read`, `glob` and `grep` are functions, so only what the script prints enters the
+  context. `Exec` is only offered when `python3` (or `python`) is on `PATH`.
+- **Rare tools behind `ToolSearch`.** Browser, Computer, ChantoCloud, Monitor,
+  NotebookEdit, RepoMap and SemanticSearch can be deferred from the prompt and loaded
+  on demand with `optimize.defer_tools`.
+
 ## v0.1.26 (November 23, 2026)
 
 - **The send-now hint works on every terminal.** The status line and prompt now show `ctrl+x ctrl+s` (or `ctrl+x enter` to queue), since macOS Terminal.app can't report `ctrl+enter`; it still works where the terminal sends it. `esc` still interrupts.
