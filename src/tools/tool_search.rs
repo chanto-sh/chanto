@@ -258,6 +258,8 @@ pub fn search<'a>(
 /// loaded: big schemas that went unused across ~1,850 benchmark sessions.
 pub const DEFERRED_BUILTINS: &[&str] = &[
     "Browser",
+    "ChantoCloud",
+    "Computer",
     "Monitor",
     "NotebookEdit",
     "SemanticSearch",
@@ -301,6 +303,14 @@ pub fn upfront_builtins(root: &Path, request: &str, used: &[String]) -> Vec<Stri
         ]),
     );
     keep("NotebookEdit", notebooks || says(&[".ipynb", "notebook"]));
+    keep(
+        "Computer",
+        says(&["computer use", "click", "desktop", "gui", "mouse"]),
+    );
+    keep(
+        "ChantoCloud",
+        says(&["chanto cloud", "cloud run", "cloud agent", "cloud"]),
+    );
     // Big repositories are where a map or a semantic index beats grep.
     keep("RepoMap", files > LARGE_REPO);
     keep("SemanticSearch", files > LARGE_REPO);
@@ -385,9 +395,13 @@ impl Tool for ToolSearch {
         NAME.into()
     }
     fn description(&self) -> String {
-        "Load the full definitions of deferred tools (listed by name in a system reminder) so you can call them. \
-         Query forms: \"select:A,B\" loads those exact tools; keywords (\"github issue\") search names and descriptions and load the best matches; \
-         \"+slack send\" requires \"slack\" in the name. Loaded tools stay callable for the rest of the session; load several at once when you know you need them."
+        "Load the full definitions of deferred tools so you can call them. \
+         Deferred built-ins: Browser, Computer, ChantoCloud, Monitor, NotebookEdit, \
+         RepoMap, SemanticSearch (MCP tools are deferred too). Query forms: \"select:A,B\" \
+         loads those exact tools; keywords (\"browser screenshot\") search names and \
+         descriptions and load the best matches; \"+slack send\" requires \"slack\" in the \
+         name. Loaded tools stay callable for the rest of the session; load several at \
+         once when you know you need them."
             .into()
     }
     fn schema(&self) -> Value {

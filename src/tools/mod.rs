@@ -4,7 +4,9 @@ pub mod bash;
 pub mod browser;
 pub mod cloud;
 pub mod computer;
+pub mod exec;
 pub mod fs;
+pub mod index;
 pub mod lsp;
 pub mod memory;
 pub mod misc;
@@ -150,7 +152,7 @@ pub struct Registry {
 
 impl Registry {
     pub fn builtin() -> Registry {
-        let tools: Vec<Arc<dyn Tool>> = vec![
+        let mut tools: Vec<Arc<dyn Tool>> = vec![
             Arc::new(bash::Bash),
             Arc::new(bash::BashOutput),
             Arc::new(bash::KillShell),
@@ -163,6 +165,7 @@ impl Registry {
             Arc::new(search::Glob),
             Arc::new(search::Grep),
             Arc::new(search::Ls),
+            Arc::new(index::Index),
             Arc::new(repomap::RepoMap),
             Arc::new(semantic::SemanticSearch),
             Arc::new(web::WebFetch),
@@ -175,6 +178,10 @@ impl Registry {
             Arc::new(misc::Skill),
             Arc::new(task::Task),
         ];
+        // Exec needs a Python interpreter; don't advertise a tool that cannot run.
+        if exec::available() {
+            tools.push(Arc::new(exec::Exec));
+        }
         // The scheduling tools are advertised only where a frontend fires
         // scheduled tasks (see `crate::cron::available`).
         let hidden: Vec<Arc<dyn Tool>> = vec![
