@@ -40,6 +40,7 @@ pub const RECOMMENDED: &[(&str, &str)] = &[
     ("nvidia", "qwen/qwen3-coder-480b-a35b-instruct"),
     ("vercel", "anthropic/claude-sonnet-4.5"),
     ("opencode-zen", "big-pickle"),
+    ("opencode-go", "deepseek-v4.1-flash"),
     ("baseten", "Qwen/Qwen3-Coder-480B-A35B-Instruct"),
     (
         "bedrock",

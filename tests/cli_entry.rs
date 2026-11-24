@@ -347,6 +347,157 @@ fn init_only_runs_setup_and_exits() {
 
 // ------------------------------------------------------------ setup
 
+/// `chanto setup --plain` as the binary in a pseudo-terminal, so the
+/// interactive picker sees the terminal it checks for.
+#[cfg(unix)]
+struct SetupPty {
+    child: std::process::Child,
+    input: std::process::ChildStdin,
+    lines: std::sync::mpsc::Receiver<String>,
+    home: PathBuf,
+    seen: String,
+}
+
+#[cfg(unix)]
+fn setup_pty(s: &Sandbox, env: &[(&str, &str)]) -> SetupPty {
+    let wrapper = s.dir.join("wrapper");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nstty rows 40 cols 240\nexec '{}' setup --plain\n",
+            bin()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let mut cmd = Command::new("script");
+    if cfg!(target_os = "macos") {
+        cmd.args(["-q", "/dev/null", wrapper.to_str().unwrap()]);
+    } else {
+        cmd.args(["-qfc", wrapper.to_str().unwrap(), "/dev/null"]);
+    }
+    let mut child = cmd
+        .current_dir(&s.dir)
+        .env("CHANTO_HOME", s.home())
+        .env("CHANTO_COMPAT_HOME", s.home())
+        .env("CODEX_HOME", s.home().join(".codex"))
+        .env("CHANTO_NO_UPDATE_CHECK", "1")
+        .env("TERM", "xterm-256color")
+        .envs(env.iter().copied())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start chanto under script");
+    let input = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, lines) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        use std::io::BufRead;
+        for line in std::io::BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            if tx.send(line).is_err() {
+                break;
+            }
+        }
+    });
+    SetupPty {
+        child,
+        input,
+        lines,
+        home: s.home(),
+        seen: String::new(),
+    }
+}
+
+#[cfg(unix)]
+impl SetupPty {
+    /// The next printed line containing `needle`, or a panic naming everything
+    /// printed so far.
+    fn expect(&mut self, needle: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            let Ok(line) = self
+                .lines
+                .recv_timeout(std::time::Duration::from_millis(200))
+            else {
+                continue;
+            };
+            self.seen.push_str(&line);
+            self.seen.push('\n');
+            if line.contains(needle) {
+                return line;
+            }
+        }
+        panic!("never saw {needle:?}:\n{}", self.seen);
+    }
+
+    /// Answers a numbered choice, using the number that starts `line`.
+    fn pick(&mut self, line: &str) {
+        use std::io::Write;
+        let n: String = line
+            .trim()
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        assert!(!n.is_empty(), "not a numbered choice: {line}");
+        writeln!(self.input, "{n}").unwrap();
+        self.input.flush().unwrap();
+    }
+
+    /// Waits for the chosen model to reach the config.
+    fn wait_saved(&mut self, needle: &str) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            if std::fs::read_to_string(self.home.join("config.toml"))
+                .is_ok_and(|c| c.contains(needle))
+            {
+                return;
+            }
+            // Keep draining, so the child never blocks on a full pipe.
+            if let Ok(line) = self
+                .lines
+                .recv_timeout(std::time::Duration::from_millis(100))
+            {
+                self.seen.push_str(&line);
+                self.seen.push('\n');
+            }
+        }
+        panic!("config never contained {needle:?}:\n{}", self.seen);
+    }
+}
+
+#[cfg(unix)]
+impl Drop for SetupPty {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// An opencode-go login is offered straight away with a default model, and
+/// picking it writes that model to the config. Without a default this used to
+/// fail with "candidate has no model".
+#[cfg(unix)]
+#[test]
+fn setup_picker_saves_the_opencode_go_default() {
+    let s = Sandbox::new();
+    let mut picker = setup_pty(&s, &[("OPENCODE_API_KEY", "sk-test-never-sent")]);
+    let model = "opencode-go/deepseek-v4.1-flash";
+    // The plan is offered with its default model straight after login.
+    let line = picker.expect(model);
+    assert!(line.contains(model), "{line}");
+    picker.pick(&line);
+    picker.wait_saved(model);
+    let cfg = std::fs::read_to_string(s.home().join("config.toml")).unwrap();
+    assert!(cfg.contains(&format!("model = \"{model}\"")), "{cfg}");
+    // A catalog plan keeps its own endpoint; the config must not pin one.
+    assert!(!cfg.contains("base_url"), "{cfg}");
+}
+
 #[test]
 fn setup_with_a_model_saves_it_and_checks_the_server() {
     let (base, _) = model_server(&["mock", "other"], &[]);
