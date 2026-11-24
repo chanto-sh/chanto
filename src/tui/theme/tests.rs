@@ -151,3 +151,55 @@ fn user_themes_load_from_the_themes_dir() {
     }
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// WCAG 2 relative luminance of an RGB color.
+fn luminance(c: Color) -> f64 {
+    let (r, g, b) = match c {
+        Color::Rgb(r, g, b) => (r, g, b),
+        other => panic!("expected an RGB color, got {other:?}"),
+    };
+    let channel = |v: u8| {
+        let v = f64::from(v) / 255.0;
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+fn contrast(a: Color, b: Color) -> f64 {
+    let (la, lb) = (luminance(a), luminance(b));
+    let (hi, lo) = if la > lb { (la, lb) } else { (lb, la) };
+    (hi + 0.05) / (lo + 0.05)
+}
+
+#[test]
+fn secondary_text_is_readable_on_the_default_backgrounds() {
+    let dark = builtin("dark").unwrap();
+    let light = builtin("light").unwrap();
+    let black = Color::Rgb(0, 0, 0);
+    let white = Color::Rgb(255, 255, 255);
+    // Hints may be faint but must still reach 4.5:1; body-secondary text more.
+    assert!(
+        contrast(dark.faint, black) >= 4.5,
+        "dark faint {:.2}",
+        contrast(dark.faint, black)
+    );
+    assert!(
+        contrast(dark.dim, black) >= 7.0,
+        "dark dim {:.2}",
+        contrast(dark.dim, black)
+    );
+    assert!(
+        contrast(light.faint, white) >= 4.4,
+        "light faint {:.2}",
+        contrast(light.faint, white)
+    );
+    assert!(
+        contrast(light.dim, white) >= 5.5,
+        "light dim {:.2}",
+        contrast(light.dim, white)
+    );
+}
