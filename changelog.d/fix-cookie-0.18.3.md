@@ -1,0 +1,1 @@
+- **Security:** `cookie` is updated to 0.18.3, which takes private-cookie nonces from the operating system's random generator instead of the thread-local one, so a process that forks can't reuse them (RUSTSEC-2026-0594). The desktop app never forks, so no released build was exposed.
