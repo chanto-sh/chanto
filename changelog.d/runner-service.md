@@ -1,1 +1,0 @@
-- **Cloud runners as a service.** `chanto runner connect --register-only` registers a machine and saves its runner token without taking a job, so a launchd agent or systemd unit can start the runner without the registration token on every restart. `scripts/runner-service.sh` installs that service on macOS and Linux.
