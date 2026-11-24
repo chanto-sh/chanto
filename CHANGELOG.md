@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## v0.1.26 (November 23, 2026)
+
+- **The send-now hint works on every terminal.** The status line and prompt now show `ctrl+x ctrl+s` (or `ctrl+x enter` to queue), since macOS Terminal.app can't report `ctrl+enter`; it still works where the terminal sends it. `esc` still interrupts.
+- **Security:** Background-run and webhook-trigger requests are parsed into typed, size-limited structs with unknown fields refused, so a malformed or oversized body can't make the daemon deserialize an arbitrary document.
+- **Cloud runners as a service.** `chanto runner connect --register-only` registers a machine and saves its runner token without taking a job, so a launchd agent or systemd unit can start the runner without the registration token on every restart. `scripts/runner-service.sh` installs that service on macOS and Linux.
+- **Security:** `cookie` is updated to 0.18.3, which takes private-cookie nonces from the operating system's random generator instead of the thread-local one, so a process that forks can't reuse them (RUSTSEC-2026-0594). The desktop app never forks, so no released build was exposed.
+- **Setup after logging in to opencode-go.** `chanto login opencode-go` followed by `chanto setup` now offers the plan with its default model, instead of failing with "candidate has no model". A provider whose default isn't known lists its own models and asks which one to use, rather than disappearing from the picker.
+- **Requests that change what a test checks.** Asking Chanto to change behaviour an existing test pins (a new error message, a different return value) no longer ends with it undoing the fix. Updating that test's expectation now gets a single note asking it to say why the old one no longer holds, instead of a demand to restore the test and a refusal to finish, and a test pinning text your request quotes may change freely. Deleting, skipping or loosening a test is still sent back.
+
 ## v0.1.25 (November 22, 2026)
 
 - **OpenCode Go.** `/models` now lists the Go plan's models: its list endpoint answers in OpenAI's `data` shape, which Chanto read as empty.

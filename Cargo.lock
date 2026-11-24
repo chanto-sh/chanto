@@ -468,7 +468,7 @@ dependencies = [
 
 [[package]]
 name = "chanto"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -525,7 +525,7 @@ dependencies = [
 
 [[package]]
 name = "chanto-core"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "anyhow",
  "futures",
@@ -541,7 +541,7 @@ dependencies = [
 
 [[package]]
 name = "chanto-desktop"
-version = "0.1.25"
+version = "0.1.26"
 dependencies = [
  "block2",
  "muda",
