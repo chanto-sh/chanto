@@ -87,10 +87,10 @@ fn on_path(name: &str) -> bool {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::PermissionsExt;
-                if let Ok(m) = cand.metadata() {
-                    if m.permissions().mode() & 0o111 != 0 {
-                        return true;
-                    }
+                if let Ok(m) = cand.metadata()
+                    && m.permissions().mode() & 0o111 != 0
+                {
+                    return true;
                 }
             }
             #[cfg(not(unix))]
@@ -188,11 +188,11 @@ impl Tool for Exec {
                 return Ok(ToolOutput::err(format!("could not run {prog}: {e}")));
             }
         };
-        if let Some(mut stdin) = child.stdin.take() {
-            if let Err(e) = stdin.write_all(script.as_bytes()).await {
-                let _ = std::fs::remove_file(&harness);
-                return Ok(ToolOutput::err(format!("could not send script: {e}")));
-            }
+        if let Some(mut stdin) = child.stdin.take()
+            && let Err(e) = stdin.write_all(script.as_bytes()).await
+        {
+            let _ = std::fs::remove_file(&harness);
+            return Ok(ToolOutput::err(format!("could not send script: {e}")));
         }
 
         let waited = tokio::time::timeout(

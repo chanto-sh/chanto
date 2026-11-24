@@ -198,10 +198,10 @@ fn sig(node: Node, src: &[u8]) -> String {
     let (start, end) = range(node);
     let kind = node.kind();
     let name = name_of(node, src);
-    if kind == "type_declaration" {
-        if let Some(spec) = first_descendant(node, "type_spec") {
-            return format!("type {}  [{start}-{end}]", name_of(spec, src));
-        }
+    if kind == "type_declaration"
+        && let Some(spec) = first_descendant(node, "type_spec")
+    {
+        return format!("type {}  [{start}-{end}]", name_of(spec, src));
     }
     if FUNC.contains(&kind) {
         let params = node
@@ -277,9 +277,8 @@ fn walk_container(node: Node, src: &[u8], out: &mut Vec<String>, indent: &str) {
         if FUNC.contains(&child.kind())
             || TYPES.contains(&child.kind())
             || SIMPLE.contains(&child.kind())
+            || child.kind() == "trait_item"
         {
-            out.push(format!("{indent}{}", sig(child, src)));
-        } else if child.kind() == "trait_item" {
             out.push(format!("{indent}{}", sig(child, src)));
         } else if CONTAINER.contains(&child.kind()) {
             out.push(format!("{indent}{}", container_sig(child, src)));
@@ -301,9 +300,11 @@ fn skeleton(name: &str, src: &[u8], lang: Language) -> Result<String> {
     let mut cursor = tree.root_node().walk();
     for node in tree.root_node().named_children(&mut cursor) {
         let kind = node.kind();
-        if FUNC.contains(&kind) || TYPES.contains(&kind) || SIMPLE.contains(&kind) {
-            out.push(sig(node, src));
-        } else if kind == "trait_item" {
+        if FUNC.contains(&kind)
+            || TYPES.contains(&kind)
+            || SIMPLE.contains(&kind)
+            || kind == "trait_item"
+        {
             out.push(sig(node, src));
         } else if CONTAINER.contains(&kind) {
             out.push(container_sig(node, src));
