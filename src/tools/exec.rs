@@ -46,7 +46,7 @@ def grep(pattern, paths):
                 out.append("%s:%d: %s" % (p, i, line.strip()[:120]))
     return out
 
-ALLOWED = {"re", "json", "math", "collections", "itertools", "statistics", "functools"}
+ALLOWED = {"re", "json", "math", "collections", "itertools", "statistics", "functools", "glob", "fnmatch"}
 
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path, target=None):
