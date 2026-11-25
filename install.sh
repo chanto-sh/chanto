@@ -193,4 +193,49 @@ if [ "$desktop" = true ]; then
             ;;
     esac
 fi
-case ":$PATH:" in *":$prefix/bin:"*) ;; *) echo "Add to PATH: export PATH=\"$prefix/bin:\$PATH\"";; esac
+# Put the prefix on PATH for the login shell, so `chanto` works without a
+# manual export. Opt out with CHANTO_NO_MODIFY_PATH=1.
+add_to_path() {
+    case ":$PATH:" in *":$prefix/bin:"*) return 0;; esac
+    if [ -n "${CHANTO_NO_MODIFY_PATH:-}" ]; then
+        echo "note: $prefix/bin is not on PATH (CHANTO_NO_MODIFY_PATH is set); add it with: export PATH=\"$prefix/bin:\$PATH\""
+        return 0
+    fi
+    shell_name=${SHELL##*/}
+    case "$shell_name" in
+        zsh)
+            rc=${ZDOTDIR:-$HOME}/.zshrc
+            line="export PATH=\"$prefix/bin:\$PATH\""
+            ;;
+        bash)
+            case "${os:-$(uname -s 2>/dev/null)}" in
+                Darwin) rc=$HOME/.bash_profile;;
+                *) rc=$HOME/.bashrc;;
+            esac
+            line="export PATH=\"$prefix/bin:\$PATH\""
+            ;;
+        fish)
+            rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/config.fish
+            line="fish_add_path \"$prefix/bin\""
+            ;;
+        *)
+            rc=$HOME/.profile
+            line="export PATH=\"$prefix/bin:\$PATH\""
+            ;;
+    esac
+    marker="# chanto: put $prefix/bin on PATH"
+    already=false
+    if [ -f "$rc" ]; then
+        while IFS= read -r existing || [ -n "$existing" ]; do
+            [ "$existing" = "$marker" ] && already=true
+        done < "$rc"
+    fi
+    if [ "$already" = true ]; then
+        echo "note: $prefix/bin is on PATH via $rc (open a new shell to pick it up)"
+        return 0
+    fi
+    mkdir -p "$(dirname "$rc")"
+    printf '\n%s\n%s\n' "$marker" "$line" >> "$rc"
+    echo "added $prefix/bin to PATH in $rc (start a new shell, or run: . $rc)"
+}
+add_to_path

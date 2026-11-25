@@ -147,6 +147,20 @@ if [ -n "${sshkg:-}" ]; then
     mv "$tmp/v0.1.3.sshsig" "$tmp/releases/download/v0.1.3/SHA256SUMS.sshsig"
 fi
 cp "$tmp/releases/download/v9.8.7/SHA256SUMS"* "$tmp/releases/latest/download/"
+# A normal install makes the prefix discoverable for the login shell: one
+# guarded line in the rc file, added once, and an opt-out.
+for home in path-zsh-1 path-zsh-2 path-off; do mkdir -p "$tmp/$home"; done
+pdest=$tmp/path-dest
+HOME="$tmp/path-zsh-1" SHELL=/bin/zsh TEST_OS=Linux TEST_ARCH=x86_64 sh "$root/install.sh" --prefix "$pdest" > "$tmp/log"
+grep -q -F "export PATH=\"$pdest/bin:\$PATH\"" "$tmp/path-zsh-1/.zshrc"
+grep -q -F "# chanto: put $pdest/bin on PATH" "$tmp/path-zsh-1/.zshrc"
+HOME="$tmp/path-zsh-1" SHELL=/bin/zsh TEST_OS=Linux TEST_ARCH=x86_64 sh "$root/install.sh" --prefix "$pdest" > "$tmp/log"
+[ "$(grep -c -F "# chanto: put $pdest/bin on PATH" "$tmp/path-zsh-1/.zshrc")" = 1 ]
+HOME="$tmp/path-off" SHELL=/bin/zsh CHANTO_NO_MODIFY_PATH=1 TEST_OS=Linux TEST_ARCH=x86_64 sh "$root/install.sh" --prefix "$pdest" > "$tmp/log"
+[ ! -e "$tmp/path-off/.zshrc" ]
+grep -q 'not on PATH' "$tmp/log"
+HOME="$tmp/path-zsh-2" SHELL=/bin/bash TEST_OS=Darwin TEST_ARCH=arm64 sh "$root/install.sh" --prefix "$pdest" > "$tmp/log"
+grep -q -F "$pdest/bin" "$tmp/path-zsh-2/.bash_profile"
 export TEST_OS=Linux TEST_ARCH=riscv64
 if sh "$root/install.sh" --prefix "$tmp/dest" > "$tmp/log" 2>&1; then exit 1; fi
 grep -q 'unsupported architecture' "$tmp/log"
@@ -206,4 +220,4 @@ PATH="$tmp/source-tools:$PATH" sh "$tmp/source/install.sh" --from-source --prefi
 [ "$("$tmp/source-dest/bin/chanto")" = from-source ]
 python3 "$root/packaging/homebrew/render.py" v9.8.7 "$tmp/releases/latest/download/SHA256SUMS" "$tmp/chanto.rb"
 if grep -E '@VERSION@|@SHA_' "$tmp/chanto.rb"; then exit 1; fi
-printf '%s\n' "installer: six OS/arch mappings, curl/wget, pinned/latest releases, signatures (OpenSSL, ssh-keygen ${sshkg:-not available}, none: refused), forged latest, rollback floor, pinned keys, install.ps1 ${psh:-not run (needs pwsh on x64)}, mismatch preservation, formula rendering passed"
+printf '%s\n' "installer: six OS/arch mappings, curl/wget, pinned/latest releases, signatures (OpenSSL, ssh-keygen ${sshkg:-not available}, none: refused), forged latest, rollback floor, pinned keys, PATH rc line (zsh/bash, idempotent, opt-out), install.ps1 ${psh:-not run (needs pwsh on x64)}, mismatch preservation, formula rendering passed"

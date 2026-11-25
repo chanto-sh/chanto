@@ -135,6 +135,11 @@ curl -fsSL https://chanto.sh/install.sh | sh
 curl -fsSL https://chanto.sh/install.sh | sh -s -- --version v0.1.12 --prefix "$HOME/.local"
 ```
 
+If `PREFIX/bin` is not already on `PATH`, the installer adds one guarded line to your
+shell's rc file (`~/.zshrc`, `~/.bashrc` or `~/.bash_profile`, or the fish config) so
+`chanto` works in a new terminal. Set `CHANTO_NO_MODIFY_PATH=1` to leave the file
+untouched.
+
 Windows x64, in PowerShell:
 
 ```powershell
