@@ -585,6 +585,25 @@ fn cloud_credentials_are_suggested_after_local_models_and_checked_by_doctor() {
         "{table}"
     );
     assert!(table.contains("project proj, global"), "{table}");
+    // A custom [providers.*] is listed with its endpoint, so a model like
+    // `fast/…` does not look like an unknown provider.
+    let mut cfg = crate::config::Config::default();
+    cfg.providers.insert(
+        "fast".into(),
+        crate::config::ProviderConfig {
+            kind: crate::llm::ProviderKind::Openai,
+            base_url: "http://studio:8082/v1".into(),
+            api_key: None,
+            num_ctx: None,
+            cloud: Default::default(),
+        },
+    );
+    let ours = auth::providers_table_with(Some(&cfg));
+    assert!(ours.contains("Yours (from config.toml"), "{ours}");
+    assert!(
+        ours.contains("fast") && ours.contains("http://studio:8082/v1"),
+        "{ours}"
+    );
 }
 
 #[test]

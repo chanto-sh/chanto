@@ -586,6 +586,11 @@ const VERTEX_LOGIN: &str = "Vertex AI uses Google Application Default Credential
 
 /// A one-line status per catalog provider.
 pub fn providers_table() -> String {
+    providers_table_with(None)
+}
+
+/// The catalog, plus the user's own `[providers.*]` from `config.toml`.
+pub fn providers_table_with(cfg: Option<&crate::config::Config>) -> String {
     let mut out = String::from("Providers (use as <provider>/<model>):\n");
     for h in crate::providers::CATALOG {
         let status = match crate::providers::credential(h) {
@@ -603,6 +608,20 @@ pub fn providers_table() -> String {
             ),
         };
         out.push_str(&format!("  {:<14} {:<32} {status}\n", h.id, h.name));
+    }
+    if let Some(cfg) = cfg.filter(|c| !c.providers.is_empty()) {
+        out.push_str("\nYours (from config.toml, use as <id>/<model>):\n");
+        let mut ids: Vec<&String> = cfg.providers.keys().collect();
+        ids.sort();
+        for id in ids {
+            let p = &cfg.providers[id];
+            out.push_str(&format!(
+                "  {:<14} {:<10} {}\n",
+                id,
+                format!("{:?}", p.kind).to_lowercase(),
+                p.base_url
+            ));
+        }
     }
     out
 }
@@ -668,7 +687,17 @@ pub async fn cli(args: &[String], print: &(dyn Fn(&str) + Send + Sync)) -> Resul
             if let Some(extra) = args.get(1) {
                 anyhow::bail!("unknown argument `{extra}`; usage: chanto providers");
             }
-            done(format!("{}\n{}", providers_table(), accounts_table()))
+            // The catalog plus the user's own `[providers.*]`, so a custom
+            // endpoint like `fast/…` is listed rather than looking unknown.
+            let cfg = std::env::current_dir()
+                .ok()
+                .and_then(|cwd| crate::config::Config::load(&cwd, true).ok())
+                .map(|(c, _)| c);
+            done(format!(
+                "{}\n{}",
+                providers_table_with(cfg.as_ref()),
+                accounts_table()
+            ))
         }
         Some("logout") => {
             let id = args

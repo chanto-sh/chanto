@@ -370,3 +370,31 @@ async fn an_openai_request_with_tools_sends_them() {
         json!([{"type": "function", "function": spec}])
     );
 }
+
+#[test]
+fn unknown_provider_prefix_names_the_provider_and_the_restart() {
+    let hint = failure_hint(
+        "Ollama error 404 Not Found: {\"error\":\"model 'fast/x' not found\"}",
+        ProviderKind::Ollama,
+        "http://localhost:11434",
+        "fast/x",
+        Some("ollama"),
+    )
+    .unwrap();
+    assert!(hint.contains("no `fast` provider is configured"), "{hint}");
+    assert!(hint.contains("[providers.fast]"), "{hint}");
+    assert!(hint.contains("restart chanto"), "{hint}");
+}
+
+#[test]
+fn namespaced_ollama_model_still_mentions_ollama_pull() {
+    let hint = failure_hint(
+        "Ollama error 404 Not Found: {\"error\":\"model 'library/llama3' not found\"}",
+        ProviderKind::Ollama,
+        "http://localhost:11434",
+        "library/llama3",
+        Some("ollama"),
+    )
+    .unwrap();
+    assert!(hint.contains("ollama pull library/llama3"), "{hint}");
+}

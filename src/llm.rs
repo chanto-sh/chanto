@@ -76,16 +76,19 @@ pub fn failure_hint(
         ));
     }
     if kind == ProviderKind::Ollama && lower.contains("not found") && lower.contains("model") {
-        // `foo/bar` with an unknown `foo` falls through to Ollama: say so in case a provider was meant.
-        let provider_note = model
+        // `foo/bar` with an unknown `foo` falls through to Ollama. Say what to
+        // do instead of leaving a misleading "ollama pull" for a provider that
+        // was meant, since a new [providers.*] needs a restart to load.
+        if let Some((p, _)) = model
             .split_once('/')
-            .filter(|(p, _)| !p.contains('.'))
-            .map(|(p, _)| {
-                format!(" (`{p}` isn't a provider chanto knows; `chanto providers` lists them)")
-            })
-            .unwrap_or_default();
+            .filter(|(p, _)| !p.contains('.') && crate::providers::find(p).is_none())
+        {
+            return Some(format!(
+                "`{model}` went to Ollama, and no `{p}` provider is configured: if it is an Ollama model, `ollama pull {model}`; otherwise add [providers.{p}] with `kind` and `base_url` in ~/.chanto/config.toml, then restart chanto (`chanto providers` lists them)"
+            ));
+        }
         return Some(format!(
-            "Ollama doesn't have `{model}`: `ollama pull {model}`, or `chanto models` to see what's installed{provider_note}"
+            "Ollama doesn't have `{model}`: `ollama pull {model}`, or `chanto models` to see what's installed"
         ));
     }
     // Chanto cloud's errors already say what to do (see `chanto_cloud::gateway_error`).
