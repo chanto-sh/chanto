@@ -55,6 +55,13 @@ pub fn failure_hint(
             "Can't reach the model server at {base_url}. Is it running? `chanto doctor` checks the setup"
         ));
     }
+    // Accepted the connection, then sent nothing: a plan limit, a queue, or a
+    // stalled server. Say that rather than waiting on the rest of the turn.
+    if lower.contains("timed out") {
+        return Some(format!(
+            "No response from the model server at {base_url}: it accepted the connection but sent nothing (a plan limit, a queue, or a stalled server). Try another model or provider, or check the provider's status"
+        ));
+    }
     // The request reached the server but the reply was cut off: a proxy or
     // the server dropped the connection, or it closed it early.
     if [
@@ -135,30 +142,39 @@ pub fn failure_hint(
     None
 }
 
-/// A streamed response body. The wait for the first chunk is unbounded (a
-/// local server can prefill for minutes before it sends anything); after
-/// that, a gap longer than `idle` fails the read with [`StreamStalled`].
+/// A streamed response body. The wait for the first chunk is unbounded for a
+/// local server, which can prefill for minutes; a hosted one is bounded by
+/// `first` ([`FirstByteTimeout`]). After the first chunk, a gap longer than
+/// `idle` fails the read with [`StreamStalled`].
 pub(crate) struct Body {
     inner: std::pin::Pin<Box<dyn futures::Stream<Item = reqwest::Result<Vec<u8>>> + Send>>,
     idle: Option<Duration>,
+    first: Option<Duration>,
     started: bool,
 }
 
 impl Body {
-    pub(crate) fn new(resp: reqwest::Response, idle: Option<Duration>) -> Body {
+    pub(crate) fn new(
+        resp: reqwest::Response,
+        idle: Option<Duration>,
+        first: Option<Duration>,
+    ) -> Body {
         Body {
             inner: Box::pin(resp.bytes_stream().map(|c| c.map(Vec::from))),
             idle,
+            first,
             started: false,
         }
     }
 
     pub(crate) async fn next(&mut self) -> Option<Result<Vec<u8>>> {
         let next = self.inner.next();
-        let r = match self.idle.filter(|_| self.started) {
-            Some(idle) => match tokio::time::timeout(idle, next).await {
+        let limit = if self.started { self.idle } else { self.first };
+        let r = match limit {
+            Some(limit) => match tokio::time::timeout(limit, next).await {
                 Ok(r) => r,
-                Err(_) => return Some(Err(StreamStalled(idle).into())),
+                Err(_) if self.started => return Some(Err(StreamStalled(limit).into())),
+                Err(_) => return Some(Err(FirstByteTimeout(limit).into())),
             },
             None => next.await,
         };
@@ -353,6 +369,10 @@ pub struct Provider {
     pub models_url: Option<String>,
     /// How long a started response stream may go silent (`stream_idle_timeout`).
     pub stream_idle: Option<Duration>,
+    /// How long a hosted server may take to send the first byte
+    /// (`first_byte_timeout`); `None` for local servers, which may prefill for
+    /// minutes.
+    pub first_byte: Option<Duration>,
     http: reqwest::Client,
 }
 
@@ -436,7 +456,7 @@ impl Provider {
                 .and_then(|v| std::env::var(v).ok())
                 .filter(|k| !k.is_empty())
         });
-        Provider {
+        let mut provider = Provider {
             kind,
             base_url: base_url.trim_end_matches('/').to_string(),
             opencode_go: base_url.contains("opencode.ai/inference/go"),
@@ -451,8 +471,15 @@ impl Provider {
             headers: Vec::new(),
             models_url: None,
             stream_idle: Some(STREAM_IDLE_DEFAULT),
+            first_byte: None,
             http,
+        };
+        // A local server may prefill for minutes before the first byte; only a
+        // hosted one gets the first-byte limit.
+        if !provider.is_local() {
+            provider.first_byte = Some(FIRST_BYTE_DEFAULT);
         }
+        provider
     }
 
     /// Give OpenCode Go the stable session id it requires (`x-opencode-session`)
@@ -474,9 +501,9 @@ impl Provider {
         }
     }
 
-    /// A response's body, read with this provider's stream idle limit.
+    /// A response's body, read with this provider's first-byte and stream idle limits.
     pub(crate) fn body(&self, resp: reqwest::Response) -> Body {
-        Body::new(resp, self.stream_idle)
+        Body::new(resp, self.stream_idle, self.first_byte)
     }
 
     pub fn with_cloud(mut self, settings: crate::cloud::Settings) -> Self {
@@ -1011,6 +1038,9 @@ impl Provider {
                     return Err(error.into());
                 }
             }
+            if let Some(error) = limits::quota_from_429(status, &text, retry_after.as_deref()) {
+                return Err(error.into());
+            }
             attempt += 1;
             if !retryable || attempt > 4 {
                 if self.login.as_deref() == Some("chatgpt")
@@ -1272,6 +1302,9 @@ impl Provider {
                     return Err(error.into());
                 }
             }
+            if let Some(error) = limits::quota_from_429(status, &text, retry_after.as_deref()) {
+                return Err(error.into());
+            }
             attempt += 1;
             if attempt > 4 {
                 if self.billing_provider.as_deref() == Some(crate::chanto_cloud::PROVIDER_ID) {
@@ -1378,6 +1411,11 @@ impl Provider {
                     retry_after.as_deref(),
                 )
             }) {
+                return Err(error.into());
+            }
+            if let Some(error) =
+                limits::quota_from_429(status.as_u16(), &text, retry_after.as_deref())
+            {
                 return Err(error.into());
             }
             // DeepSeek's thinking mode wants every earlier reasoning_content back. A
