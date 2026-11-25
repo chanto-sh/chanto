@@ -96,6 +96,29 @@ impl std::fmt::Display for StreamStalled {
 
 impl std::error::Error for StreamStalled {}
 
+/// Default for `first_byte_timeout`: how long a hosted model server may take to
+/// send the first byte before the request gives up. Local servers prefill for
+/// minutes, so they keep the unbounded wait.
+pub const FIRST_BYTE_DEFAULT: Duration = Duration::from_secs(180);
+
+/// A hosted model server accepted the request and then sent nothing at all.
+/// Unlike [`StreamStalled`] this is not retried automatically: a gated request
+/// looks the same (a plan limit, a queue, or a stalled server).
+#[derive(Debug)]
+pub struct FirstByteTimeout(pub Duration);
+
+impl std::fmt::Display for FirstByteTimeout {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "no response from the model server after {}s: it accepted the request and sent nothing (a plan limit, a queue, or a stalled server). Try another model or provider, or check the provider's status",
+            self.0.as_secs_f64()
+        )
+    }
+}
+
+impl std::error::Error for FirstByteTimeout {}
+
 /// How long to wait before retry number `attempt` (from 0): the server's
 /// `retry-after` seconds (at most a minute), else exponential backoff.
 pub fn retry_wait(retry_after: Option<&str>, attempt: u32) -> Duration {

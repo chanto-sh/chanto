@@ -118,5 +118,53 @@ pub(crate) fn quota_error(
     Some(QuotaExhausted(message, resets))
 }
 
+/// Providers that gate on a plan or window don't always send a structured
+/// `insufficient_quota` / `usage_limit_reached` code. On a 429, a body that
+/// talks about a limit is treated as exhausted rather than a transient rate
+/// limit, so the turn stops with a reason instead of retrying into a long wait.
+const LIMIT_PHRASES: &[&str] = &[
+    "usage limit",
+    "quota",
+    "5-hour",
+    "5 hour",
+    "five-hour",
+    "budget",
+    "limit reached",
+    "out of credits",
+    "credits exhausted",
+    "monthly limit",
+    "weekly limit",
+    "daily limit",
+];
+
+pub(crate) fn quota_from_429(
+    status: u16,
+    text: &str,
+    retry_after: Option<&str>,
+) -> Option<QuotaExhausted> {
+    if status != 429 {
+        return None;
+    }
+    let lower = text.to_lowercase();
+    if !LIMIT_PHRASES.iter().any(|p| lower.contains(p)) {
+        return None;
+    }
+    let mut message = format!(
+        "Hosted usage limit reached: {}",
+        crate::util::truncate(text.trim(), 800)
+    );
+    if let Some(retry_after) = retry_after {
+        message.push_str(&format!("\nRetry-After: {retry_after}"));
+    }
+    message.push_str(
+        "\nWait for the provider's usage limit to reset, or select another provider/model.",
+    );
+    let resets = serde_json::from_str::<Value>(text).ok().and_then(|v| {
+        let error = v.get("error").cloned().unwrap_or(v);
+        reset_time(&error, retry_after, now_secs())
+    });
+    Some(QuotaExhausted(message, resets))
+}
+
 #[cfg(test)]
 mod tests;

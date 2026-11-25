@@ -398,3 +398,37 @@ fn namespaced_ollama_model_still_mentions_ollama_pull() {
     .unwrap();
     assert!(hint.contains("ollama pull library/llama3"), "{hint}");
 }
+
+#[tokio::test]
+async fn a_hosted_first_byte_that_never_arrives_times_out() {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n".to_string();
+    // Send the headers at once, then stay silent far longer than the limit.
+    let base = stalling_server(Duration::ZERO, head).await;
+    let mut p = Provider::new(ProviderKind::Openai, &format!("{base}/v1"), None, 8192);
+    p.first_byte = Some(Duration::from_millis(300));
+    let t = std::time::Instant::now();
+    let r = tokio::time::timeout(Duration::from_secs(10), p.chat(&stall_req(), &mut |_| {}))
+        .await
+        .expect("the first-byte limit must not hang");
+    let e = r.expect_err("a silent first byte fails");
+    assert!(e.downcast_ref::<FirstByteTimeout>().is_some(), "{e:#}");
+    assert!(
+        format!("{e:#}").contains("no response from the model server"),
+        "{e:#}"
+    );
+    assert!(t.elapsed() < Duration::from_secs(5), "{:?}", t.elapsed());
+}
+
+#[test]
+fn a_read_timeout_says_the_server_sent_nothing() {
+    let hint = failure_hint(
+        "error sending request: operation timed out",
+        ProviderKind::Openai,
+        "https://api.example.com/v1",
+        "m",
+        Some("openai"),
+    )
+    .unwrap();
+    assert!(hint.contains("No response from the model server"), "{hint}");
+    assert!(hint.contains("sent nothing"), "{hint}");
+}

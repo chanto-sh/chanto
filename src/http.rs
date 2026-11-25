@@ -42,14 +42,21 @@ pub fn model_client(base_url: &str) -> reqwest::Client {
         } else {
             builder()
         };
-        let b = b
+        let mut b = b
             .connect_timeout(std::time::Duration::from_secs(10))
             .pool_idle_timeout(std::time::Duration::from_secs(300))
             // Plans used from third-party tools (Kimi Code) ask clients to identify themselves truthfully.
             .user_agent(concat!("chanto/", env!("CARGO_PKG_VERSION")));
-        if local { b.no_proxy() } else { b }
-            .build()
-            .expect("http client")
+        if local {
+            b = b.no_proxy();
+        } else {
+            // A hosted server that accepts the connection and never answers (a
+            // plan limit, a queue, or a stalled server) must not hold the turn
+            // forever. Local servers may prefill for minutes, so keep them
+            // unbounded here; stream_idle and first-byte handle their bodies.
+            b = b.read_timeout(std::time::Duration::from_secs(120));
+        }
+        b.build().expect("http client")
     })
     .clone()
 }

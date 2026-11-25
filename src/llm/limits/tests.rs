@@ -357,3 +357,19 @@ fn usage_warnings_show_once_per_threshold() {
     assert_eq!(warning(&w(93.0), 75, 1_000).unwrap().0, 90);
     assert!(warning(&w(99.0), 90, 1_000).is_none());
 }
+
+#[test]
+fn a_429_naming_a_limit_is_exhausted() {
+    let body = r#"{"error":{"message":"5-hour usage limit reached","resets_in_seconds":1200}}"#;
+    let e = quota_from_429(429, body, None).expect("a named limit is exhausted");
+    let msg = format!("{e}");
+    assert!(msg.contains("usage limit"), "{msg}");
+    assert!(e.resets_at().is_some(), "{msg}");
+}
+
+#[test]
+fn a_429_without_a_limit_phrase_is_still_a_rate_limit() {
+    assert!(quota_from_429(429, r#"{"error":{"message":"too many requests"}}"#, None).is_none());
+    // Only a 429 is a plan limit; a 500 that mentions quota is not.
+    assert!(quota_from_429(500, r#"{"error":{"message":"quota"}}"#, None).is_none());
+}
